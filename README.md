@@ -207,12 +207,13 @@ release work, inspect conventional commit subjects since the latest reachable
 - `fix!:` / `feat!:` / `BREAKING CHANGE:` → major
 - no recognized prefix → patch
 
-Only after every native test and build succeeds does the workflow create the
-tag and publish the Windows ZIP, standalone Linux executable, macOS ZIP, and
-`SHA256SUMS.txt`. If the current commit is already version-tagged, that version
-is reused. Manual runs rebuild without publishing by default; publishing must be
-selected explicitly. Existing tags and releases are verified and updated
-idempotently instead of duplicated.
+After the native build matrix finishes, the workflow creates the tag and
+publishes every platform package whose own tests and build succeeded, together
+with `SHA256SUMS.txt`. A failed platform keeps the workflow marked as failed but
+does not withhold successful Windows, Linux, or macOS downloads. If the current
+commit is already version-tagged, that version is reused. Manual runs rebuild
+without publishing by default; publishing must be selected explicitly. Existing
+tags and releases are verified and updated idempotently instead of duplicated.
 
 ## Citation and copyright
 

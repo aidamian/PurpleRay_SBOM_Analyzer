@@ -76,6 +76,7 @@ jobs:
             os: windows-latest
             widgetset: win32
             package_suffix: windows-x64.zip
+            use_cache: 'true'
             laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus Windows 64 bits/Lazarus 4.2/lazarus-4.2-fpc-3.2.2-win64.exe
             fpc_url: ''
           - name: Linux x64 / GTK3
@@ -83,6 +84,7 @@ jobs:
             os: ubuntu-latest
             widgetset: gtk3
             package_suffix: linux-x64
+            use_cache: 'true'
             laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus Linux amd64 DEB/Lazarus 4.2/lazarus-project_4.2.0-0_amd64.deb
             fpc_url: |-
               https://sourceforge.net/projects/lazarus/files/Lazarus Linux amd64 DEB/Lazarus 4.2/fpc-laz_3.2.2-210709_amd64.deb
@@ -92,6 +94,7 @@ jobs:
             os: macos-15-intel
             widgetset: cocoa
             package_suffix: macos.zip
+            use_cache: 'false'
             laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus macOS x86-64/Lazarus 4.2/lazarus-darwin-x86_64-4.2.zip
             fpc_url: https://sourceforge.net/projects/lazarus/files/Lazarus macOS x86-64/Lazarus 4.2/fpc-3.2.2.intelarm64-macosx.dmg
     runs-on: ${{ matrix.config.os }}
@@ -111,7 +114,7 @@ jobs:
       - name: Install pinned Lazarus and Free Pascal
         uses: ollydev/setup-lazarus@2d902bfe7bf72ac91c6ee21130ed599ccc839bc7 # v4
         with:
-          use-cache: 'true'
+          use-cache: ${{ matrix.config.use_cache }}
           laz-url: ${{ matrix.config.laz_url }}
           fpc-url: ${{ matrix.config.fpc_url }}
 
@@ -189,7 +192,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: needs.prepare.outputs.is_release == 'true'
+    if: ${{ always() && needs.prepare.result == 'success' && needs.prepare.outputs.is_release == 'true' }}
     needs: [prepare, build]
     runs-on: ubuntu-latest
     permissions:
@@ -200,14 +203,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download verified platform artifacts
+      - name: Download successful platform artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: package-*
           path: release-assets
           merge-multiple: true
 
-      - name: Verify final release contents and write checksums
+      - name: Verify available release contents and write checksums
         shell: bash
         run: |
           cd release-assets
@@ -215,19 +218,32 @@ jobs:
           windows="sbom-analyzer-v${version}-windows-x64.zip"
           linux="sbom-analyzer-v${version}-linux-x64"
           macos="sbom-analyzer-v${version}-macos.zip"
-          for asset in "$windows" "$linux" "$macos"; do
-            test -f "$asset"
-          done
-          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 3
-          test "$(unzip -Z1 "$windows" | grep -Evc '/$')" -eq 1
-          test "$(unzip -Z1 "$windows")" = 'sbom-analyzer.exe'
-          unzip -p "$windows" | file - | grep -E 'PE32\+ executable.*x86-64'
-          file "$linux" | grep -E 'ELF 64-bit.*x86-64'
-          test "$(unzip -Z1 "$macos" | grep -Ec '^SBOM Analyzer\.app/Contents/MacOS/[^/]+$')" -eq 1
-          unzip -p "$macos" 'SBOM Analyzer.app/Contents/MacOS/sbom-analyzer' |
-            file - | grep -E 'Mach-O 64-bit.*x86_64'
-          chmod 755 "$linux"
-          sha256sum "$windows" "$linux" "$macos" > SHA256SUMS.txt
+          available=()
+
+          if [[ -f "$windows" ]]; then
+            test "$(unzip -Z1 "$windows" | grep -Evc '/$')" -eq 1
+            test "$(unzip -Z1 "$windows")" = 'sbom-analyzer.exe'
+            unzip -p "$windows" | file - | grep -E 'PE32\+ executable.*x86-64'
+            available+=("$windows")
+          fi
+
+          if [[ -f "$linux" ]]; then
+            file "$linux" | grep -E 'ELF 64-bit.*x86-64'
+            chmod 755 "$linux"
+            available+=("$linux")
+          fi
+
+          if [[ -f "$macos" ]]; then
+            test "$(unzip -Z1 "$macos" | grep -Ec '^SBOM Analyzer\.app/Contents/MacOS/[^/]+$')" -eq 1
+            unzip -p "$macos" 'SBOM Analyzer.app/Contents/MacOS/sbom-analyzer' |
+              file - | grep -E 'Mach-O 64-bit.*x86_64'
+            available+=("$macos")
+          fi
+
+          test "${#available[@]}" -gt 0
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq "${#available[@]}"
+          printf 'Publishing %s\n' "${available[@]}"
+          sha256sum "${available[@]}" > SHA256SUMS.txt
 
       - name: Create or verify version tag
         shell: bash
