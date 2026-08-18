@@ -1,0 +1,215 @@
+unit uSHA256;
+
+{$mode objfpc}{$H+}{$Q-}
+
+interface
+
+uses
+  Classes, SysUtils;
+
+type
+  TCancelCheck = function: Boolean of object;
+  THashProgress = procedure(ABytesRead: Int64) of object;
+
+function SHA256String(const AValue: RawByteString): string;
+function SHA256File(const AFileName: string; out ADigest: string;
+  ACancelCheck: TCancelCheck = nil; AProgress: THashProgress = nil): Boolean;
+
+implementation
+
+type
+  TSHA256Context = record
+    State: array[0..7] of UInt32;
+    Buffer: array[0..63] of Byte;
+    BufferLength: Integer;
+    ProcessedBits: QWord;
+  end;
+
+const
+  K: array[0..63] of UInt32 = (
+    $428A2F98, $71374491, $B5C0FBCF, $E9B5DBA5, $3956C25B, $59F111F1,
+    $923F82A4, $AB1C5ED5, $D807AA98, $12835B01, $243185BE, $550C7DC3,
+    $72BE5D74, $80DEB1FE, $9BDC06A7, $C19BF174, $E49B69C1, $EFBE4786,
+    $0FC19DC6, $240CA1CC, $2DE92C6F, $4A7484AA, $5CB0A9DC, $76F988DA,
+    $983E5152, $A831C66D, $B00327C8, $BF597FC7, $C6E00BF3, $D5A79147,
+    $06CA6351, $14292967, $27B70A85, $2E1B2138, $4D2C6DFC, $53380D13,
+    $650A7354, $766A0ABB, $81C2C92E, $92722C85, $A2BFE8A1, $A81A664B,
+    $C24B8B70, $C76C51A3, $D192E819, $D6990624, $F40E3585, $106AA070,
+    $19A4C116, $1E376C08, $2748774C, $34B0BCB5, $391C0CB3, $4ED8AA4A,
+    $5B9CCA4F, $682E6FF3, $748F82EE, $78A5636F, $84C87814, $8CC70208,
+    $90BEFFFA, $A4506CEB, $BEF9A3F7, $C67178F2);
+
+function RotateRight(AValue: UInt32; ACount: Byte): UInt32; inline;
+begin
+  Result := (AValue shr ACount) or (AValue shl (32 - ACount));
+end;
+
+procedure Initialize(var AContext: TSHA256Context);
+begin
+  FillChar(AContext, SizeOf(AContext), 0);
+  AContext.State[0] := $6A09E667;
+  AContext.State[1] := $BB67AE85;
+  AContext.State[2] := $3C6EF372;
+  AContext.State[3] := $A54FF53A;
+  AContext.State[4] := $510E527F;
+  AContext.State[5] := $9B05688C;
+  AContext.State[6] := $1F83D9AB;
+  AContext.State[7] := $5BE0CD19;
+end;
+
+procedure Transform(var AContext: TSHA256Context);
+var
+  W: array[0..63] of UInt32;
+  A, B, C, D, E, F, G, H, S0, S1, Choice, Majority, T1, T2: UInt32;
+  I: Integer;
+begin
+  for I := 0 to 15 do
+    W[I] := (UInt32(AContext.Buffer[I * 4]) shl 24) or
+      (UInt32(AContext.Buffer[I * 4 + 1]) shl 16) or
+      (UInt32(AContext.Buffer[I * 4 + 2]) shl 8) or
+      UInt32(AContext.Buffer[I * 4 + 3]);
+  for I := 16 to 63 do
+  begin
+    S0 := RotateRight(W[I - 15], 7) xor RotateRight(W[I - 15], 18) xor
+      (W[I - 15] shr 3);
+    S1 := RotateRight(W[I - 2], 17) xor RotateRight(W[I - 2], 19) xor
+      (W[I - 2] shr 10);
+    W[I] := W[I - 16] + S0 + W[I - 7] + S1;
+  end;
+
+  A := AContext.State[0];
+  B := AContext.State[1];
+  C := AContext.State[2];
+  D := AContext.State[3];
+  E := AContext.State[4];
+  F := AContext.State[5];
+  G := AContext.State[6];
+  H := AContext.State[7];
+
+  for I := 0 to 63 do
+  begin
+    S1 := RotateRight(E, 6) xor RotateRight(E, 11) xor RotateRight(E, 25);
+    Choice := (E and F) xor ((not E) and G);
+    T1 := H + S1 + Choice + K[I] + W[I];
+    S0 := RotateRight(A, 2) xor RotateRight(A, 13) xor RotateRight(A, 22);
+    Majority := (A and B) xor (A and C) xor (B and C);
+    T2 := S0 + Majority;
+    H := G;
+    G := F;
+    F := E;
+    E := D + T1;
+    D := C;
+    C := B;
+    B := A;
+    A := T1 + T2;
+  end;
+
+  AContext.State[0] := AContext.State[0] + A;
+  AContext.State[1] := AContext.State[1] + B;
+  AContext.State[2] := AContext.State[2] + C;
+  AContext.State[3] := AContext.State[3] + D;
+  AContext.State[4] := AContext.State[4] + E;
+  AContext.State[5] := AContext.State[5] + F;
+  AContext.State[6] := AContext.State[6] + G;
+  AContext.State[7] := AContext.State[7] + H;
+end;
+
+procedure Update(var AContext: TSHA256Context; const AData; ALength: SizeInt);
+var
+  Source: PByte;
+begin
+  Source := @AData;
+  while ALength > 0 do
+  begin
+    AContext.Buffer[AContext.BufferLength] := Source^;
+    Inc(AContext.BufferLength);
+    Inc(Source);
+    Dec(ALength);
+    if AContext.BufferLength = SizeOf(AContext.Buffer) then
+    begin
+      Transform(AContext);
+      Inc(AContext.ProcessedBits, 512);
+      AContext.BufferLength := 0;
+    end;
+  end;
+end;
+
+function FinalizeDigest(var AContext: TSHA256Context): string;
+var
+  TotalBits: QWord;
+  I: Integer;
+begin
+  TotalBits := AContext.ProcessedBits + QWord(AContext.BufferLength) * 8;
+  AContext.Buffer[AContext.BufferLength] := $80;
+  Inc(AContext.BufferLength);
+  if AContext.BufferLength > 56 then
+  begin
+    while AContext.BufferLength < 64 do
+    begin
+      AContext.Buffer[AContext.BufferLength] := 0;
+      Inc(AContext.BufferLength);
+    end;
+    Transform(AContext);
+    AContext.BufferLength := 0;
+  end;
+  while AContext.BufferLength < 56 do
+  begin
+    AContext.Buffer[AContext.BufferLength] := 0;
+    Inc(AContext.BufferLength);
+  end;
+  for I := 0 to 7 do
+    AContext.Buffer[63 - I] := Byte(TotalBits shr (I * 8));
+  Transform(AContext);
+
+  Result := '';
+  for I := 0 to 7 do
+    Result := Result + LowerCase(IntToHex(AContext.State[I], 8));
+end;
+
+function SHA256String(const AValue: RawByteString): string;
+var
+  Context: TSHA256Context;
+begin
+  Initialize(Context);
+  if Length(AValue) > 0 then
+    Update(Context, AValue[1], Length(AValue));
+  Result := FinalizeDigest(Context);
+end;
+
+function SHA256File(const AFileName: string; out ADigest: string;
+  ACancelCheck: TCancelCheck; AProgress: THashProgress): Boolean;
+const
+  BufferSize = 64 * 1024;
+var
+  Context: TSHA256Context;
+  Stream: TFileStream;
+  Buffer: array[0..BufferSize - 1] of Byte;
+  Count: LongInt;
+  Total: Int64;
+begin
+  Result := False;
+  ADigest := '';
+  Initialize(Context);
+  Stream := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyNone);
+  try
+    Total := 0;
+    repeat
+      if Assigned(ACancelCheck) and ACancelCheck() then
+        Exit;
+      Count := Stream.Read(Buffer, SizeOf(Buffer));
+      if Count > 0 then
+      begin
+        Update(Context, Buffer[0], Count);
+        Inc(Total, Count);
+        if Assigned(AProgress) then
+          AProgress(Total);
+      end;
+    until Count = 0;
+    ADigest := FinalizeDigest(Context);
+    Result := True;
+  finally
+    Stream.Free;
+  end;
+end;
+
+end.

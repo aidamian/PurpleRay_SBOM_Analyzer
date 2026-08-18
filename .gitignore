@@ -80,3 +80,16 @@ __recovery/
 
 # Boss dependency manager vendor folder https://github.com/HashLoad/boss
 modules/
+
+PLAN.md
+
+_TODO_private.md
+
+internal/
+
+# Lazarus/FPC local build output
+build/
+dist/
+src/lib/
+tests/bin/
+src/sbom_analyzer.res
