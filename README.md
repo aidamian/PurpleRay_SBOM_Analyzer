@@ -2,8 +2,10 @@
 
 SBOM Analyzer is a small, native desktop application that inventories local
 software artifacts and produces deterministic CycloneDX 1.6 JSON. It scans
-without network access, never executes files from the selected folder, and does
-not call external scanners or helper processes at runtime.
+without network access and never executes files from the selected folder. Its
+native parsers are supplemented, when applicable, by bounded static-inspection
+facilities already present on the operating system; it never downloads or
+requires a separate scanner.
 
 The application uses one Object Pascal/Lazarus LCL codebase for Windows x64
 (Win32), Linux x64 (GTK3), and macOS x64 (Cocoa).
@@ -17,6 +19,11 @@ The application uses one Object Pascal/Lazarus LCL codebase for Windows x64
   parsing for formats such as TOML, YAML, Gradle, and Ruby lock files.
 - Keeps unsupported and partially parsed artifacts visible instead of silently
   dropping them.
+- Uses applicable built-in OS evidence to enrich native binaries with declared
+  linked libraries, build identifiers, signing metadata, or version resources.
+- Reads ELF dynamic entries, PE normal and delay-load imports, and Mach-O load
+  commands directly, including dependency declarations in universal Mach-O
+  slices.
 - Normalizes and deduplicates components, merges evidence paths, and emits
   stable CycloneDX 1.6 JSON.
 - Persists scan history and settings as recoverable atomic JSON files.
@@ -31,8 +38,15 @@ discovered.
 
 Choose **New Scan** and select a folder, or drop a local folder onto the main
 window. Review the settings, then start the scan. The history pane keeps old
-tasks, while the detail tabs expose the summary, components, artifacts,
-generated JSON, warnings, and parser messages.
+tasks and has its own search box. Drag the vertical splitter to resize it. The
+detail tabs expose the summary, components, artifacts, generated JSON,
+warnings, and parser messages.
+
+**Export SBOM** suggests a filename beginning with the scan timestamp and
+folder name, for example
+`20260818_143205_example_00112233-4455-6677-8899-aabbccddeeff.cdx.json`.
+**Export all** creates one ZIP archive containing the complete persisted task
+history, settings, backups, diagnostic history files, and generated SBOMs.
 
 The default settings calculate SHA-256 hashes, do not follow symbolic links,
 and do not include absolute paths in exported data. Ignore patterns are
@@ -107,16 +121,20 @@ in WSL** command, then run:
 lazarus src/sbom_analyzer.lpi
 ```
 
-Select the GTK3 widgetset for a Linux build. All forms are constructed from
-standard LCL controls at runtime, so no designer files are required.
+Select the GTK3 widgetset for a Linux build. The main window and scan-settings
+dialog are stored as the human-readable `src/uMainForm.lfm` and
+`src/uScanSettingsDialog.lfm` resources and can be edited in the Lazarus form
+designer.
 
 ## Tests
 
 `scripts/run-tests.sh` compiles and runs the non-UI suite. The fixtures cover
 requirements, npm manifests and locks, Maven and MSBuild XML, atomic history
-recovery, SHA-256, native binary headers, component deduplication,
+recovery and location migration, database archive export, export naming,
+SHA-256, native binary headers and dependency tables, OS-evidence parsing,
+component deduplication,
 deterministic/path-safe CycloneDX generation, ignore matching, symbolic-link
-loops, and cancellation. Tests require no network or external scanner.
+loops, and cancellation. Tests require no network or downloaded scanner.
 
 For an explicit local invocation:
 
@@ -129,13 +147,16 @@ tests/bin/test_runner
 
 ## Data and recovery
 
-The program asks FPC for the per-user application configuration directory. The
-usual locations are:
+The application stores all persistent data under the user's home directory:
 
-- Linux and WSL: `$XDG_CONFIG_HOME/sbom-analyzer/`, or
-  `~/.config/sbom-analyzer/` when `XDG_CONFIG_HOME` is unset
-- Windows: `%LOCALAPPDATA%\sbom-analyzer\`
-- macOS: the per-user config location returned by FPC for `sbom-analyzer`
+- Linux, WSL, and macOS: `~/.sbom-analyzer/`
+- Windows: `%USERPROFILE%\.sbom-analyzer\`
+
+On first run after upgrading, the application moves files from the older
+platform-specific FPC configuration directory to this location. If a saved
+SBOM path still points at the old directory, it is repaired when history is
+loaded. A migration problem is reported without silently discarding the old
+data.
 
 Files in that directory are user data:
 
@@ -164,6 +185,26 @@ without guessing; otherwise the artifact is marked unsupported. `LICENSE`,
 `COPYING`, and `NOTICE` variants are recorded only as possible license
 evidence—no license is inferred from a filename.
 
+For native binaries, bounded internal parsing is the portable baseline. It
+reads ELF `DT_NEEDED` entries, PE import and delay-import tables, and Mach-O
+load-dylib commands without loading or executing the target. The scanner then
+uses these safe, locally available OS facilities where they apply:
+
+- Linux: `readelf --dynamic --notes` to corroborate ELF declarations and obtain
+  GNU build IDs, when `readelf` is already installed.
+- macOS: `/usr/bin/codesign --display` for Mach-O signing identifiers and hash
+  metadata.
+- Windows: the native version-resource API for PE file-version evidence.
+
+These facilities are detected at runtime; none is downloaded or installed by
+the application. Each invoked tool is launched directly with an argument
+list—never through a shell—and has a three-second execution limit, a 512 KiB
+output limit, and cooperative cancellation. The scanned binary is provided
+only as input and is never run. `ldd` is deliberately excluded because some
+implementations may execute the program being inspected. SDK utilities that
+would prompt for or require a separate installation are likewise not assumed
+to exist.
+
 ## Project layout
 
 ```text
@@ -188,13 +229,15 @@ scripts/regenerate-icon-resource.sh
 
 ## CI and releases
 
-`.github/workflows/build-release.yml` tests and builds all three native targets
-on `windows-latest`, `ubuntu-latest`, and `macos-15-intel`. It uses FPC 3.2.2 and
-Lazarus 4.2 from the official SourceForge release files. The maintained
+`.github/workflows/build-release.yml` currently tests and builds the Windows and
+Linux targets on `windows-latest` and `ubuntu-latest`. The macOS matrix entry is
+retained as a commented block in the workflow and is temporarily paused to
+conserve GitHub Actions minutes. Builds use FPC 3.2.2 and Lazarus 4.2 from the
+official SourceForge release files. The maintained
 [`ollydev/setup-lazarus`](https://github.com/ollydev/setup-lazarus) setup action
 is pinned to an immutable commit and is used only during builds; it introduces
 no runtime dependency. Official GitHub artifact and checkout actions are pinned
-as well. The macOS job is pinned to GitHub's Intel runner and explicitly
+as well. When re-enabled, the macOS job uses GitHub's Intel runner and explicitly
 compiles and verifies an x86_64 application. Newer runs cancel obsolete runs,
 and preparation, dependency installation, builds, and publishing have bounded
 timeouts so a stalled hosted runner cannot consume minutes indefinitely.
@@ -244,5 +287,8 @@ appropriately using the citation above.
 - The macOS release targets x86_64 and may require Rosetta on Apple Silicon.
 - Lazarus's GTK3 backend can emit non-fatal layout diagnostics with some GTK
   themes or WSLg versions; these do not indicate that scanning has failed.
-- Runtime scanning intentionally does not resolve shared-library dependencies,
-  contact registries, execute package managers, or evaluate build scripts.
+- Shared-library analysis is static. Direct declarations are read from ELF,
+  PE, and Mach-O binaries, but the scanner does not invoke a loader, execute
+  targets, resolve libraries to host-specific absolute paths, or infer every
+  transitive/runtime-loaded dependency. It also does not contact registries,
+  execute package managers, or evaluate build scripts.

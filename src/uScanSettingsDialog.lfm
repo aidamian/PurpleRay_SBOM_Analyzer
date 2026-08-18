@@ -1,0 +1,137 @@
+object ScanSettingsDialog: TScanSettingsDialog
+  Left = 360
+  Height = 450
+  Top = 180
+  Width = 540
+  BorderStyle = bsDialog
+  Caption = 'Scan settings'
+  ClientHeight = 450
+  ClientWidth = 540
+  Constraints.MinHeight = 400
+  Constraints.MinWidth = 470
+  Position = poScreenCenter
+  LCLVersion = '3.0.0.3'
+  object DescriptionLabel: TLabel
+    Left = 12
+    Height = 48
+    Top = 12
+    Width = 516
+    Align = alTop
+    AutoSize = False
+    BorderSpacing.Around = 12
+    Caption = 'Choose how this scan treats paths, symbolic links, hashes, and ignored files. Absolute paths are excluded from exported CycloneDX data by default.'
+    WordWrap = True
+  end
+  object FIncludeAbsolutePaths: TCheckBox
+    Left = 12
+    Height = 23
+    Top = 72
+    Width = 516
+    Align = alTop
+    BorderSpacing.Left = 12
+    BorderSpacing.Right = 12
+    BorderSpacing.Bottom = 6
+    Caption = 'Include absolute paths in exported SBOM'
+    TabOrder = 0
+  end
+  object FFollowSymbolicLinks: TCheckBox
+    Left = 12
+    Height = 23
+    Top = 101
+    Width = 516
+    Align = alTop
+    BorderSpacing.Left = 12
+    BorderSpacing.Right = 12
+    BorderSpacing.Bottom = 6
+    Caption = 'Follow symbolic links'
+    OnChange = FollowLinksChanged
+    TabOrder = 1
+  end
+  object FAllowOutsideRoot: TCheckBox
+    Left = 34
+    Height = 23
+    Top = 130
+    Width = 494
+    Align = alTop
+    BorderSpacing.Left = 34
+    BorderSpacing.Right = 12
+    BorderSpacing.Bottom = 6
+    Caption = 'Allow followed links to leave the selected root'
+    TabOrder = 2
+  end
+  object FCalculateSHA256: TCheckBox
+    Left = 12
+    Height = 23
+    Top = 159
+    Width = 516
+    Align = alTop
+    BorderSpacing.Left = 12
+    BorderSpacing.Right = 12
+    BorderSpacing.Bottom = 8
+    Caption = 'Calculate SHA-256 for manifests and binaries'
+    TabOrder = 3
+  end
+  object IgnorePatternsLabel: TLabel
+    Left = 12
+    Height = 20
+    Top = 190
+    Width = 516
+    Align = alTop
+    BorderSpacing.Left = 12
+    BorderSpacing.Right = 12
+    BorderSpacing.Bottom = 4
+    Caption = 'Ignore patterns (one per line)'
+  end
+  object ButtonsPanel: TPanel
+    Left = 0
+    Height = 46
+    Top = 404
+    Width = 540
+    Align = alBottom
+    BevelOuter = bvNone
+    ClientHeight = 46
+    ClientWidth = 540
+    TabOrder = 5
+    object CancelButton: TButton
+      Left = 436
+      Height = 30
+      Top = 8
+      Width = 92
+      Align = alRight
+      BorderSpacing.Right = 12
+      BorderSpacing.Top = 8
+      BorderSpacing.Bottom = 8
+      Cancel = True
+      Caption = 'Cancel'
+      ModalResult = 2
+      TabOrder = 1
+    end
+    object OKButton: TButton
+      Left = 336
+      Height = 30
+      Top = 8
+      Width = 92
+      Align = alRight
+      BorderSpacing.Right = 8
+      BorderSpacing.Top = 8
+      BorderSpacing.Bottom = 8
+      Caption = 'Start scan'
+      Default = True
+      ModalResult = 1
+      TabOrder = 0
+    end
+  end
+  object FIgnorePatterns: TMemo
+    Left = 12
+    Height = 178
+    Top = 214
+    Width = 516
+    Align = alClient
+    BorderSpacing.Left = 12
+    BorderSpacing.Right = 12
+    BorderSpacing.Bottom = 12
+    ScrollBars = ssAutoVertical
+    TabOrder = 4
+    WordWrap = False
+  end
+end

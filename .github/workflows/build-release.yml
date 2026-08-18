@@ -95,14 +95,16 @@ jobs:
             fpc_url: |-
               https://sourceforge.net/projects/lazarus/files/Lazarus Linux amd64 DEB/Lazarus 4.2/fpc-laz_3.2.2-210709_amd64.deb
               https://sourceforge.net/projects/lazarus/files/Lazarus Linux amd64 DEB/Lazarus 4.2/fpc-src_3.2.2-210709_amd64.deb
-          - name: macOS x64 / Cocoa
-            id: macos
-            os: macos-15-intel
-            widgetset: cocoa
-            package_suffix: macos.zip
-            use_cache: 'true'
-            laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus macOS x86-64/Lazarus 4.2/lazarus-darwin-x86_64-4.2.zip
-            fpc_url: https://sourceforge.net/projects/lazarus/files/Lazarus macOS x86-64/Lazarus 4.2/fpc-3.2.2.intelarm64-macosx.dmg
+          # macOS builds are temporarily paused to conserve GitHub Actions
+          # minutes. Re-enable by uncommenting this complete matrix entry.
+          # - name: macOS x64 / Cocoa
+          #   id: macos
+          #   os: macos-15-intel
+          #   widgetset: cocoa
+          #   package_suffix: macos.zip
+          #   use_cache: 'true'
+          #   laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus macOS x86-64/Lazarus 4.2/lazarus-darwin-x86_64-4.2.zip
+          #   fpc_url: https://sourceforge.net/projects/lazarus/files/Lazarus macOS x86-64/Lazarus 4.2/fpc-3.2.2.intelarm64-macosx.dmg
     runs-on: ${{ matrix.config.os }}
     defaults:
       run:

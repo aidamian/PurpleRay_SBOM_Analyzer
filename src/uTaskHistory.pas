@@ -71,6 +71,7 @@ var
   TasksArray: TJSONArray;
   Loaded: TObjectList;
   Task: TScanTask;
+  RelocatedSBOM: string;
   I: Integer;
 begin
   Result := False;
@@ -97,6 +98,14 @@ begin
           begin
             Task.Free;
             raise Exception.CreateFmt('task %d has no identifier', [I]);
+          end;
+          if (Task.GeneratedSBOMPath <> '') and
+            not FileExists(Task.GeneratedSBOMPath) then
+          begin
+            RelocatedSBOM := IncludeTrailingPathDelimiter(FDataDirectory) +
+              'sboms' + DirectorySeparator + Task.ID + '.cdx.json';
+            if FileExists(RelocatedSBOM) then
+              Task.GeneratedSBOMPath := RelocatedSBOM;
           end;
           if Task.Status in [tsPending, tsRunning] then
           begin

@@ -84,6 +84,7 @@ type
     DurationMS: Int64;
     Warnings: TStringList;
     Errors: TStringList;
+    InspectionTools: TStringList;
     Settings: TScanSettings;
     GeneratedSBOMPath: string;
     GeneratedSBOMSHA256: string;
@@ -392,6 +393,9 @@ begin
   Status := tsPending;
   Warnings := TStringList.Create;
   Errors := TStringList.Create;
+  InspectionTools := TStringList.Create;
+  InspectionTools.Sorted := True;
+  InspectionTools.Duplicates := dupIgnore;
   Settings := TScanSettings.Create;
   Artifacts := TObjectList.Create(True);
   Components := TObjectList.Create(True);
@@ -401,6 +405,7 @@ end;
 
 destructor TScanTask.Destroy;
 begin
+  InspectionTools.Free;
   Components.Free;
   Artifacts.Free;
   Settings.Free;
@@ -433,6 +438,7 @@ begin
   DurationMS := ASource.DurationMS;
   Warnings.Assign(ASource.Warnings);
   Errors.Assign(ASource.Errors);
+  InspectionTools.Assign(ASource.InspectionTools);
   Settings.Assign(ASource.Settings);
   GeneratedSBOMPath := ASource.GeneratedSBOMPath;
   GeneratedSBOMSHA256 := ASource.GeneratedSBOMSHA256;
@@ -480,6 +486,9 @@ begin
   ArrayValue := TJSONArray.Create;
   StringsToJSON(Errors, ArrayValue);
   Result.Add('errors', ArrayValue);
+  ArrayValue := TJSONArray.Create;
+  StringsToJSON(InspectionTools, ArrayValue);
+  Result.Add('inspection_tools', ArrayValue);
   Result.Add('scan_settings', Settings.ToJSON);
   Result.Add('generated_sbom_path', GeneratedSBOMPath);
   Result.Add('generated_sbom_sha256', GeneratedSBOMSHA256);
@@ -519,6 +528,7 @@ begin
   Result.DurationMS := JSONInt64(AObject, 'duration_ms');
   JSONToStrings(JSONArray(AObject, 'warnings'), Result.Warnings);
   JSONToStrings(JSONArray(AObject, 'errors'), Result.Errors);
+  JSONToStrings(JSONArray(AObject, 'inspection_tools'), Result.InspectionTools);
   if JSONObject(AObject, 'scan_settings') <> nil then
   begin
     Result.Settings.Free;

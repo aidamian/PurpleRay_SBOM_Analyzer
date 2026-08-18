@@ -4,10 +4,11 @@ program test_runner;
 
 uses
   {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
-  Classes, SysUtils, Contnrs, fpjson,
+  Classes, SysUtils, Contnrs, fpjson, zipper,
   uModels, uSHA256, uBinaryInspector, uManifestParsers, uArtifactIdentifier,
   uTaskHistory, uJSONUtils, uComponentNormalizer, uCycloneDX, uIgnoreMatcher,
-  uScanEngine;
+  uScanEngine, uPlatform, uSystemInspector, uNativeDependencyInspector,
+  uExportUtils;
 
 type
   TTestMethod = procedure;
@@ -101,6 +102,39 @@ begin
   finally
     Stream.Free;
   end;
+end;
+
+procedure SetUInt16LE(var ABuffer: array of Byte; AOffset: Integer;
+  AValue: Word);
+begin
+  ABuffer[AOffset] := Byte(AValue);
+  ABuffer[AOffset + 1] := Byte(AValue shr 8);
+end;
+
+procedure SetUInt32LE(var ABuffer: array of Byte; AOffset: Integer;
+  AValue: UInt32);
+begin
+  ABuffer[AOffset] := Byte(AValue);
+  ABuffer[AOffset + 1] := Byte(AValue shr 8);
+  ABuffer[AOffset + 2] := Byte(AValue shr 16);
+  ABuffer[AOffset + 3] := Byte(AValue shr 24);
+end;
+
+procedure SetUInt64LE(var ABuffer: array of Byte; AOffset: Integer;
+  AValue: QWord);
+begin
+  SetUInt32LE(ABuffer, AOffset, UInt32(AValue));
+  SetUInt32LE(ABuffer, AOffset + 4, UInt32(AValue shr 32));
+end;
+
+procedure SetBufferString(var ABuffer: array of Byte; AOffset: Integer;
+  const AValue: RawByteString);
+var
+  I: Integer;
+begin
+  for I := 1 to Length(AValue) do
+    ABuffer[AOffset + I - 1] := Byte(AValue[I]);
+  ABuffer[AOffset + Length(AValue)] := 0;
 end;
 
 function FindComponent(AComponents: TObjectList; const AName: string):
@@ -271,7 +305,7 @@ end;
 
 procedure TestHistoryRoundTrip;
 var
-  DirectoryName: string;
+  DirectoryName, RelocatedSBOM: string;
   Store: TTaskHistoryStore;
   Tasks, Loaded: TObjectList;
   Task: TScanTask;
@@ -288,6 +322,11 @@ begin
     Task.Status := tsCompleted;
     Task.FilesInspected := 42;
     Task.Warnings.Add('fixture warning');
+    Task.InspectionTools.Add('readelf');
+    Task.GeneratedSBOMPath := '/old/location/' + Task.ID + '.cdx.json';
+    RelocatedSBOM := IncludeTrailingPathDelimiter(DirectoryName) + 'sboms' +
+      DirectorySeparator + Task.ID + '.cdx.json';
+    WriteText(RelocatedSBOM, '{}');
     Tasks.Add(Task);
     Store.Save(Tasks);
     AssertTrue(Store.Load(Loaded, WarningText), 'history should load');
@@ -297,10 +336,213 @@ begin
       'loaded file count differs');
     AssertEqual('fixture warning', TScanTask(Loaded[0]).Warnings[0],
       'loaded warning differs');
+    AssertEqual('readelf', TScanTask(Loaded[0]).InspectionTools[0],
+      'inspection tool was not persisted');
+    AssertEqual(RelocatedSBOM, TScanTask(Loaded[0]).GeneratedSBOMPath,
+      'SBOM path was not relocated with the application data');
   finally
     Loaded.Free;
     Tasks.Free;
     Store.Free;
+  end;
+end;
+
+procedure TestApplicationDataMigration;
+var
+  SourceDirectory, DestinationDirectory, WarningText: string;
+begin
+  SourceDirectory := NewTemporaryDirectory('legacy-application-data');
+  DestinationDirectory := IncludeTrailingPathDelimiter(TemporaryRoot) +
+    'migrated-application-data';
+  WriteText(IncludeTrailingPathDelimiter(SourceDirectory) + 'history.json',
+    '{"format_version":1,"tasks":[]}');
+  WriteText(IncludeTrailingPathDelimiter(SourceDirectory) + 'sboms' +
+    DirectorySeparator + 'fixture.cdx.json', '{}');
+  AssertTrue(MigrateApplicationDataDirectory(SourceDirectory,
+    DestinationDirectory, WarningText), 'application data migration failed');
+  AssertEqual('', WarningText, 'successful migration produced a warning');
+  AssertTrue(not DirectoryExists(SourceDirectory),
+    'legacy application data directory was retained');
+  AssertTrue(FileExists(IncludeTrailingPathDelimiter(DestinationDirectory) +
+    'history.json'), 'history was not migrated');
+  AssertTrue(FileExists(IncludeTrailingPathDelimiter(DestinationDirectory) +
+    'sboms' + DirectorySeparator + 'fixture.cdx.json'),
+    'saved SBOM was not migrated');
+end;
+
+procedure TestExportNaming;
+var
+  Task: TScanTask;
+begin
+  Task := TScanTask.Create;
+  try
+    Task.ID := '00112233-4455-6677-8899-aabbccddeeff';
+    Task.CreatedUTC := '2025-01-02T03:04:05.000Z';
+    Task.TargetRootName := 'Demo: Folder';
+    AssertEqual('20250102_030405_Demo_Folder_' + Task.ID + '.cdx.json',
+      TaskSBOMExportFileName(Task), 'SBOM export filename differs');
+  finally
+    Task.Free;
+  end;
+end;
+
+function ArchiveContains(AEntries: TFullZipFileEntries;
+  const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to AEntries.Count - 1 do
+    if AEntries[I].ArchiveFileName = AName then
+      Exit(True);
+  Result := False;
+end;
+
+procedure TestDatabaseArchive;
+var
+  DataDirectory, ArchiveName: string;
+  UnZipper: TUnZipper;
+begin
+  DataDirectory := NewTemporaryDirectory('database-archive');
+  WriteText(IncludeTrailingPathDelimiter(DataDirectory) + 'history.json', '{}');
+  WriteText(IncludeTrailingPathDelimiter(DataDirectory) + 'settings.json', '{}');
+  WriteText(IncludeTrailingPathDelimiter(DataDirectory) + 'sboms' +
+    DirectorySeparator + 'fixture.cdx.json', '{}');
+  WriteText(IncludeTrailingPathDelimiter(DataDirectory) + 'ignored.tmp',
+    'temporary');
+  ArchiveName := IncludeTrailingPathDelimiter(TemporaryRoot) +
+    'database-export.zip';
+  ExportDatabaseArchive(DataDirectory, ArchiveName);
+  AssertTrue(FileExists(ArchiveName), 'database archive was not created');
+  UnZipper := TUnZipper.Create;
+  try
+    UnZipper.FileName := ArchiveName;
+    UnZipper.Examine;
+    AssertEqual(3, UnZipper.Entries.Count,
+      'database archive entry count differs');
+    AssertTrue(ArchiveContains(UnZipper.Entries,
+      'sbom-analyzer/history.json'), 'database archive omits history');
+    AssertTrue(ArchiveContains(UnZipper.Entries,
+      'sbom-analyzer/settings.json'), 'database archive omits settings');
+    AssertTrue(ArchiveContains(UnZipper.Entries,
+      'sbom-analyzer/sboms/fixture.cdx.json'),
+      'database archive omits saved SBOMs');
+  finally
+    UnZipper.Free;
+  end;
+end;
+
+procedure TestReadElfParsing;
+var
+  Inspection: TSystemInspection;
+begin
+  Inspection := TSystemInspection.Create;
+  try
+    AssertTrue(ParseReadElfOutput(
+      ' 0x0000000000000001 (NEEDED) Shared library: [libc.so.6]' + LineEnding +
+      ' 0x0000000000000001 (NEEDED) Shared library: [libz.so.1]' + LineEnding +
+      ' Build ID: 0123456789abcdef', Inspection),
+      'readelf evidence was not recognized');
+    AssertEqual(2, Inspection.Dependencies.Count,
+      'readelf dependency count differs');
+    AssertEqual('libc.so.6', Inspection.Dependencies[0],
+      'first readelf dependency differs');
+    AssertEqual('libz.so.1', Inspection.Dependencies[1],
+      'second readelf dependency differs');
+    AssertEqual('build ID: 0123456789abcdef', Inspection.Details[0],
+      'readelf build ID differs');
+  finally
+    Inspection.Free;
+  end;
+end;
+
+procedure TestNativeDependencyTables;
+var
+  DirectoryName, FileName: string;
+  Buffer: array[0..511] of Byte;
+  Dependencies: TStringList;
+begin
+  DirectoryName := NewTemporaryDirectory('native-dependencies');
+  Dependencies := TStringList.Create;
+  try
+    Dependencies.Sorted := True;
+    Dependencies.Duplicates := dupIgnore;
+
+    FillChar(Buffer, SizeOf(Buffer), 0);
+    Buffer[0] := $7F; Buffer[1] := Ord('E'); Buffer[2] := Ord('L');
+    Buffer[3] := Ord('F'); Buffer[4] := 2; Buffer[5] := 1;
+    SetUInt64LE(Buffer, 32, 64);
+    SetUInt16LE(Buffer, 54, 56);
+    SetUInt16LE(Buffer, 56, 2);
+    SetUInt32LE(Buffer, 64, 1);
+    SetUInt64LE(Buffer, 72, 0);
+    SetUInt64LE(Buffer, 80, $400000);
+    SetUInt64LE(Buffer, 96, SizeOf(Buffer));
+    SetUInt32LE(Buffer, 120, 2);
+    SetUInt64LE(Buffer, 128, 256);
+    SetUInt64LE(Buffer, 136, $400100);
+    SetUInt64LE(Buffer, 152, 64);
+    SetUInt64LE(Buffer, 256, 5);
+    SetUInt64LE(Buffer, 264, $400180);
+    SetUInt64LE(Buffer, 272, 10);
+    SetUInt64LE(Buffer, 280, 32);
+    SetUInt64LE(Buffer, 288, 1);
+    SetBufferString(Buffer, 384, 'libfixture.so');
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'fixture.elf';
+    WriteBytes(FileName, Buffer);
+    AssertTrue(InspectNativeDependencies(FileName, 'ELF', Dependencies),
+      'ELF dependency table was not parsed');
+    AssertEqual(1, Dependencies.Count, 'ELF dependency count differs');
+    AssertEqual('libfixture.so', Dependencies[0],
+      'ELF dependency name differs');
+
+    Dependencies.Clear;
+    FillChar(Buffer, SizeOf(Buffer), 0);
+    Buffer[0] := Ord('M'); Buffer[1] := Ord('Z');
+    SetUInt32LE(Buffer, $3C, 64);
+    Buffer[64] := Ord('P'); Buffer[65] := Ord('E');
+    SetUInt16LE(Buffer, 70, 1);
+    SetUInt16LE(Buffer, 84, 224);
+    SetUInt16LE(Buffer, 88, $010B);
+    SetUInt32LE(Buffer, 116, $400000);
+    SetUInt32LE(Buffer, 148, 400);
+    SetUInt32LE(Buffer, 180, 16);
+    SetUInt32LE(Buffer, 192, $1000);
+    SetUInt32LE(Buffer, 196, 40);
+    SetUInt32LE(Buffer, 320, $100);
+    SetUInt32LE(Buffer, 324, $1000);
+    SetUInt32LE(Buffer, 328, $70);
+    SetUInt32LE(Buffer, 332, 400);
+    SetUInt32LE(Buffer, 400, $1060);
+    SetUInt32LE(Buffer, 412, $1050);
+    SetBufferString(Buffer, 480, 'KERNEL32.dll');
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'fixture.exe';
+    WriteBytes(FileName, Buffer);
+    AssertTrue(InspectNativeDependencies(FileName, 'PE', Dependencies),
+      'PE import table was not parsed');
+    AssertEqual(1, Dependencies.Count, 'PE dependency count differs');
+    AssertEqual('KERNEL32.dll', Dependencies[0],
+      'PE dependency name differs');
+
+    Dependencies.Clear;
+    FillChar(Buffer, SizeOf(Buffer), 0);
+    Buffer[0] := $CF; Buffer[1] := $FA; Buffer[2] := $ED; Buffer[3] := $FE;
+    SetUInt32LE(Buffer, 4, $01000007);
+    SetUInt32LE(Buffer, 12, 2);
+    SetUInt32LE(Buffer, 16, 1);
+    SetUInt32LE(Buffer, 20, 64);
+    SetUInt32LE(Buffer, 32, $0C);
+    SetUInt32LE(Buffer, 36, 64);
+    SetUInt32LE(Buffer, 40, 24);
+    SetBufferString(Buffer, 56, '@rpath/libFixture.dylib');
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'fixture.macho';
+    WriteBytes(FileName, Buffer);
+    AssertTrue(InspectNativeDependencies(FileName, 'Mach-O', Dependencies),
+      'Mach-O load commands were not parsed');
+    AssertEqual(1, Dependencies.Count, 'Mach-O dependency count differs');
+    AssertEqual('@rpath/libFixture.dylib', Dependencies[0],
+      'Mach-O dependency name differs');
+  finally
+    Dependencies.Free;
   end;
 end;
 
@@ -564,6 +806,11 @@ begin
   RunTest('XML document type rejection', @TestXMLDocumentTypeRejection);
   RunTest('task-history round trip', @TestHistoryRoundTrip);
   RunTest('atomic-history recovery', @TestAtomicHistoryRecovery);
+  RunTest('application-data migration', @TestApplicationDataMigration);
+  RunTest('SBOM export naming', @TestExportNaming);
+  RunTest('database archive export', @TestDatabaseArchive);
+  RunTest('readelf output parsing', @TestReadElfParsing);
+  RunTest('native dependency tables', @TestNativeDependencyTables);
   RunTest('PE/ELF/Mach-O inspection', @TestBinaryInspection);
   RunTest('component deduplication', @TestComponentDeduplication);
   RunTest('deterministic CycloneDX', @TestDeterministicCycloneDX);

@@ -18,7 +18,7 @@ begin
 end;
 
 begin
-  RequireDerivedFormResource := False;
+  RequireDerivedFormResource := True;
   Application.Scaled := True;
   Application.Initialize;
   Application.Title := AppName;

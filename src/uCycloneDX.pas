@@ -199,7 +199,12 @@ begin
     Metadata.Add('tools', Tools);
     Properties := TJSONArray.Create;
     AddProperty(Properties, 'sbom-analyzer:inspection-method',
-      'local static artifact inspection');
+      'local static artifact and binary dependency-table inspection with ' +
+      'safe operating-system evidence');
+    if ATask.InspectionTools.Count > 0 then
+      AddProperty(Properties, 'sbom-analyzer:system-tools',
+        StringReplace(ATask.InspectionTools.CommaText, ',', ', ',
+          [rfReplaceAll]));
     AddProperty(Properties, 'sbom-analyzer:completeness',
       'best effort; not a guarantee of complete dependency discovery');
     AddProperty(Properties, 'sbom-analyzer:assessment-scope',

@@ -51,7 +51,8 @@ implementation
 
 uses
   uArtifactIdentifier, uBinaryInspector, uManifestParsers, uIgnoreMatcher,
-  uPlatform, uComponentNormalizer, uTimeUtils;
+  uPlatform, uComponentNormalizer, uTimeUtils, uSystemInspector,
+  uNativeDependencyInspector;
 
 constructor TScanEngine.Create(ACancelCheck: TCancelCheck;
   AProgressCallback: TScanProgressCallback);
@@ -68,6 +69,16 @@ begin
   {$ELSE}
   FVisitedDirectories.CaseSensitive := True;
   {$ENDIF}
+end;
+
+function LinkedLibraryComponentName(const ADeclaration: string): string;
+var
+  SeparatorAt: Integer;
+begin
+  Result := Trim(ADeclaration);
+  SeparatorAt := LastDelimiter('/\', Result);
+  if (SeparatorAt > 0) and (SeparatorAt < Length(Result)) then
+    Result := Copy(Result, SeparatorAt + 1, MaxInt);
 end;
 
 destructor TScanEngine.Destroy;
@@ -257,7 +268,11 @@ var
   BinaryInfo: TBinaryInfo;
   Artifact: TArtifact;
   Component: uModels.TComponent;
+  Inspection: TSystemInspection;
+  NativeDependencies: TStringList;
   HashValue: string;
+  InspectionSummary: string;
+  I: Integer;
   IsArtifact, IsBinary: Boolean;
 begin
   Result := False;
@@ -337,6 +352,65 @@ begin
       Component.EvidencePaths.Add(FCurrentRelativePath);
       FRawComponents.Add(Component);
       Artifact.ComponentCount := 1;
+      NativeDependencies := TStringList.Create;
+      try
+        NativeDependencies.Sorted := True;
+        NativeDependencies.Duplicates := dupIgnore;
+        NativeDependencies.CaseSensitive := not SameText(
+          BinaryInfo.FormatName, 'PE');
+        if InspectNativeDependencies(AFileName, BinaryInfo.FormatName,
+          NativeDependencies) then
+        begin
+          Artifact.MessageText := Artifact.MessageText +
+            '; declared linked libraries: ' + StringReplace(
+            NativeDependencies.CommaText, ',', ', ', [rfReplaceAll]);
+          for I := 0 to NativeDependencies.Count - 1 do
+          begin
+            Component := uModels.TComponent.Create;
+            Component.Name := LinkedLibraryComponentName(
+              NativeDependencies[I]);
+            Component.ComponentType := 'library';
+            Component.Ecosystem := 'native';
+            Component.SourceArtifact := FCurrentRelativePath;
+            Component.SourceParser := 'binary-dependency-table';
+            Component.DependencyScope := 'runtime';
+            Component.EvidencePaths.Add(FCurrentRelativePath);
+            FRawComponents.Add(Component);
+            Inc(Artifact.ComponentCount);
+          end;
+        end;
+        Inspection := nil;
+        if InspectWithSystemTools(AFileName, BinaryInfo.FormatName,
+          Inspection, @IsCancelled) then
+        begin
+          try
+            FTask.InspectionTools.Add(Inspection.ToolName);
+            InspectionSummary := Inspection.Summary;
+            if InspectionSummary <> '' then
+              Artifact.MessageText := Artifact.MessageText + '; ' +
+                InspectionSummary;
+            for I := 0 to Inspection.Dependencies.Count - 1 do
+              if NativeDependencies.IndexOf(Inspection.Dependencies[I]) < 0 then
+              begin
+                Component := uModels.TComponent.Create;
+                Component.Name := LinkedLibraryComponentName(
+                  Inspection.Dependencies[I]);
+                Component.ComponentType := 'library';
+                Component.Ecosystem := 'native';
+                Component.SourceArtifact := FCurrentRelativePath;
+                Component.SourceParser := Inspection.ToolName;
+                Component.DependencyScope := 'runtime';
+                Component.EvidencePaths.Add(FCurrentRelativePath);
+                FRawComponents.Add(Component);
+                Inc(Artifact.ComponentCount);
+              end;
+          finally
+            Inspection.Free;
+          end;
+        end;
+      finally
+        NativeDependencies.Free;
+      end;
     end
     else
       ParseArtifact(AFileName, FCurrentRelativePath, Definition.ParserKind,
@@ -368,6 +442,7 @@ begin
   FTask.Components.Clear;
   FTask.Warnings.Clear;
   FTask.Errors.Clear;
+  FTask.InspectionTools.Clear;
   FTask.FilesInspected := 0;
   FTask.BytesInspected := 0;
   FTask.ArtifactsDetected := 0;

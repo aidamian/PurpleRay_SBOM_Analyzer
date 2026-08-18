@@ -11,6 +11,76 @@ uses
 
 type
   TMainForm = class(TForm)
+  published
+    HeaderPanel: TPanel;
+    FAppIconImage: TImage;
+    FTitleLabel: TLabel;
+    FNewButton: TButton;
+    FCancelButton: TButton;
+    FRescanButton: TButton;
+    FRefreshButton: TButton;
+    FExportButton: TButton;
+    FExportDatabaseButton: TButton;
+    ContentPanel: TPanel;
+    TaskPane: TPanel;
+    TaskHeading: TLabel;
+    TaskSearchPanel: TPanel;
+    TaskSearchLabel: TLabel;
+    FTaskSearch: TEdit;
+    FEmptyLabel: TLabel;
+    FTaskList: TListView;
+    MainSplitter: TSplitter;
+    DetailPane: TPanel;
+    FPages: TPageControl;
+    SummaryPage: TTabSheet;
+    FSummaryMemo: TMemo;
+    ComponentsPage: TTabSheet;
+    ComponentFiltersPanel: TPanel;
+    ComponentSearchLabel: TLabel;
+    FComponentSearch: TEdit;
+    ComponentEcosystemLabel: TLabel;
+    FComponentEcosystem: TComboBox;
+    ComponentStatusLabel: TLabel;
+    FComponentStatus: TComboBox;
+    FComponentList: TListView;
+    ArtifactsPage: TTabSheet;
+    ArtifactFiltersPanel: TPanel;
+    ArtifactSearchLabel: TLabel;
+    FArtifactSearch: TEdit;
+    ArtifactTypeLabel: TLabel;
+    FArtifactType: TComboBox;
+    ArtifactStatusLabel: TLabel;
+    FArtifactStatus: TComboBox;
+    FArtifactList: TListView;
+    SBOMPage: TTabSheet;
+    FSBOMMemo: TMemo;
+    MessagesPage: TTabSheet;
+    FMessagesMemo: TMemo;
+    StatusPanel: TPanel;
+    FProgressPath: TLabel;
+    FProgressStats: TLabel;
+    FProgressBar: TProgressBar;
+    FCopyMenu: TPopupMenu;
+    CopySelectedMenuItem: TMenuItem;
+    procedure FormShown(Sender: TObject);
+    procedure FormCloseRequested(Sender: TObject; var CanClose: Boolean);
+    procedure FormDropFiles(Sender: TObject; const FileNames: array of string);
+    procedure FormKeyPressed(Sender: TObject; var Key: Word;
+      Shift: TShiftState);
+    procedure NewScanClicked(Sender: TObject);
+    procedure CancelClicked(Sender: TObject);
+    procedure RescanClicked(Sender: TObject);
+    procedure RefreshClicked(Sender: TObject);
+    procedure ExportClicked(Sender: TObject);
+    procedure ExportDatabaseClicked(Sender: TObject);
+    procedure TaskSelected(Sender: TObject; Item: TListItem; Selected: Boolean);
+    procedure TaskSearchChanged(Sender: TObject);
+    procedure FiltersChanged(Sender: TObject);
+    procedure ComponentColumnClicked(Sender: TObject; Column: TListColumn);
+    procedure ArtifactColumnClicked(Sender: TObject; Column: TListColumn);
+    procedure ListKeyPressed(Sender: TObject; var Key: Word;
+      Shift: TShiftState);
+    procedure CopySelectedClicked(Sender: TObject);
   private
     FTasks: TObjectList;
     FHistoryStore: TTaskHistoryStore;
@@ -26,39 +96,6 @@ type
     FArtifactSortColumn: Integer;
     FArtifactSortAscending: Boolean;
 
-    FNewButton: TButton;
-    FCancelButton: TButton;
-    FRescanButton: TButton;
-    FRefreshButton: TButton;
-    FExportButton: TButton;
-    FTaskList: TListView;
-    FEmptyLabel: TLabel;
-    FPages: TPageControl;
-    FSummaryMemo: TMemo;
-    FComponentSearch: TEdit;
-    FComponentEcosystem: TComboBox;
-    FComponentStatus: TComboBox;
-    FComponentList: TListView;
-    FArtifactSearch: TEdit;
-    FArtifactType: TComboBox;
-    FArtifactStatus: TComboBox;
-    FArtifactList: TListView;
-    FSBOMMemo: TMemo;
-    FMessagesMemo: TMemo;
-    FProgressBar: TProgressBar;
-    FProgressPath: TLabel;
-    FProgressStats: TLabel;
-    FCopyMenu: TPopupMenu;
-
-    procedure BuildUI;
-    procedure BuildHeader(AParent: TWinControl);
-    procedure BuildTaskPane(AParent: TWinControl);
-    procedure BuildDetailPane(AParent: TWinControl);
-    procedure BuildStatusBar(AParent: TWinControl);
-    function AddPage(const ACaption: string): TTabSheet;
-    procedure ConfigureList(AList: TListView);
-    procedure AddColumn(AList: TListView; const ACaption: string;
-      AWidth: Integer);
     procedure LoadState;
     procedure SaveHistory;
     procedure RefreshTaskRows;
@@ -67,6 +104,7 @@ type
     function SelectedTask: TScanTask;
     function FindTask(const AID: string): TScanTask;
     function FindTaskItem(ATask: TScanTask): TListItem;
+    function TaskMatchesSearch(ATask: TScanTask): Boolean;
     procedure UpdateDetails;
     procedure PopulateComponentFilters(ATask: TScanTask);
     procedure PopulateArtifactFilters(ATask: TScanTask);
@@ -83,23 +121,6 @@ type
     procedure ConfigureAndStartScan(const ADirectory: string);
     procedure ShowError(const AMessage: string);
 
-    procedure FormShown(Sender: TObject);
-    procedure FormCloseRequested(Sender: TObject; var CanClose: Boolean);
-    procedure FormDropFiles(Sender: TObject; const FileNames: array of string);
-    procedure FormKeyPressed(Sender: TObject; var Key: Word;
-      Shift: TShiftState);
-    procedure NewScanClicked(Sender: TObject);
-    procedure CancelClicked(Sender: TObject);
-    procedure RescanClicked(Sender: TObject);
-    procedure RefreshClicked(Sender: TObject);
-    procedure ExportClicked(Sender: TObject);
-    procedure TaskSelected(Sender: TObject; Item: TListItem; Selected: Boolean);
-    procedure FiltersChanged(Sender: TObject);
-    procedure ComponentColumnClicked(Sender: TObject; Column: TListColumn);
-    procedure ArtifactColumnClicked(Sender: TObject; Column: TListColumn);
-    procedure ListKeyPressed(Sender: TObject; var Key: Word;
-      Shift: TShiftState);
-    procedure CopySelectedClicked(Sender: TObject);
     procedure WorkerProgress(Sender: TObject; const AProgress: TScanProgress);
     procedure WorkerComplete(Sender: TObject; AResult: TScanTask);
   public
@@ -114,7 +135,9 @@ implementation
 
 uses
   Clipbrd, LCLType, Graphics, uVersionInfo, uTimeUtils, uPlatform,
-  uScanSettingsDialog;
+  uScanSettingsDialog, uExportUtils;
+
+{$R *.lfm}
 
 function DisplayTimestamp(const AValue: string): string;
 begin
@@ -142,7 +165,7 @@ end;
 
 constructor TMainForm.Create(TheOwner: Classes.TComponent);
 begin
-  inherited CreateNew(TheOwner, 1);
+  inherited Create(TheOwner);
   FTasks := TObjectList.Create(True);
   FHistoryStore := TTaskHistoryStore.Create;
   FSettingsStore := TSettingsStore.Create;
@@ -150,7 +173,10 @@ begin
   FComponentSortAscending := True;
   FArtifactSortColumn := 0;
   FArtifactSortAscending := True;
-  BuildUI;
+  Caption := AppName + ' ' + DisplayVersion;
+  FTitleLabel.Caption := AppName + '  ' + DisplayVersion;
+  if Application.Icon <> nil then
+    FAppIconImage.Picture.Icon.Assign(Application.Icon);
   LoadState;
 end;
 
@@ -172,361 +198,26 @@ begin
   inherited Destroy;
 end;
 
-procedure TMainForm.BuildUI;
-var
-  Header, Content, LeftPane, RightPane: TPanel;
-  Splitter: TSplitter;
-begin
-  Caption := AppName + ' ' + DisplayVersion;
-  Position := poScreenCenter;
-  Width := 1240;
-  Height := 780;
-  Constraints.MinWidth := 900;
-  Constraints.MinHeight := 600;
-  KeyPreview := True;
-  AllowDropFiles := True;
-  OnShow := @FormShown;
-  OnCloseQuery := @FormCloseRequested;
-  OnDropFiles := @FormDropFiles;
-  OnKeyDown := @FormKeyPressed;
-
-  Header := TPanel.Create(Self);
-  Header.Parent := Self;
-  Header.Align := alTop;
-  Header.Height := 62;
-  Header.BevelOuter := bvNone;
-  Header.BorderSpacing.Bottom := 1;
-  BuildHeader(Header);
-
-  BuildStatusBar(Self);
-
-  Content := TPanel.Create(Self);
-  Content.Parent := Self;
-  Content.Align := alClient;
-  Content.BevelOuter := bvNone;
-
-  LeftPane := TPanel.Create(Self);
-  LeftPane.Parent := Content;
-  LeftPane.Align := alLeft;
-  LeftPane.Width := 390;
-  LeftPane.Constraints.MinWidth := 280;
-  LeftPane.BevelOuter := bvNone;
-  BuildTaskPane(LeftPane);
-
-  Splitter := TSplitter.Create(Self);
-  Splitter.Parent := Content;
-  Splitter.Align := alLeft;
-  Splitter.Width := 5;
-
-  RightPane := TPanel.Create(Self);
-  RightPane.Parent := Content;
-  RightPane.Align := alClient;
-  RightPane.BevelOuter := bvNone;
-  BuildDetailPane(RightPane);
-end;
-
-procedure TMainForm.BuildHeader(AParent: TWinControl);
-var
-  TitleLabel: TLabel;
-
-  function HeaderButton(const ACaption: string; AHandler: TNotifyEvent;
-    AWidth: Integer): TButton;
-  begin
-    Result := TButton.Create(Self);
-    Result.Parent := AParent;
-    Result.Align := alRight;
-    Result.Width := AWidth;
-    Result.BorderSpacing.Right := 8;
-    Result.BorderSpacing.Top := 13;
-    Result.BorderSpacing.Bottom := 13;
-    Result.Caption := ACaption;
-    Result.OnClick := AHandler;
-  end;
-
-begin
-  FExportButton := HeaderButton('Export SBOM', @ExportClicked, 112);
-  FRefreshButton := HeaderButton('Refresh', @RefreshClicked, 88);
-  FRescanButton := HeaderButton('Rescan', @RescanClicked, 88);
-  FCancelButton := HeaderButton('Cancel', @CancelClicked, 88);
-  FNewButton := HeaderButton('New Scan', @NewScanClicked, 100);
-
-  TitleLabel := TLabel.Create(Self);
-  TitleLabel.Parent := AParent;
-  TitleLabel.Align := alClient;
-  TitleLabel.Layout := tlCenter;
-  TitleLabel.BorderSpacing.Left := 16;
-  TitleLabel.Font.Style := [fsBold];
-  TitleLabel.Font.Size := TitleLabel.Font.Size + 4;
-  TitleLabel.Caption := AppName + '  ' + DisplayVersion;
-end;
-
-procedure TMainForm.ConfigureList(AList: TListView);
-begin
-  AList.ViewStyle := vsReport;
-  AList.ReadOnly := True;
-  AList.RowSelect := True;
-  AList.HideSelection := False;
-  AList.MultiSelect := False;
-  AList.GridLines := True;
-end;
-
-procedure TMainForm.AddColumn(AList: TListView; const ACaption: string;
-  AWidth: Integer);
-var
-  Column: TListColumn;
-begin
-  Column := AList.Columns.Add;
-  Column.Caption := ACaption;
-  Column.Width := AWidth;
-end;
-
-procedure TMainForm.BuildTaskPane(AParent: TWinControl);
-var
-  Heading: TLabel;
-begin
-  Heading := TLabel.Create(Self);
-  Heading.Parent := AParent;
-  Heading.Align := alTop;
-  Heading.AutoSize := False;
-  Heading.Height := 38;
-  Heading.Layout := tlCenter;
-  Heading.BorderSpacing.Left := 10;
-  Heading.Font.Style := [fsBold];
-  Heading.Caption := 'Task history';
-
-  FEmptyLabel := TLabel.Create(Self);
-  FEmptyLabel.Parent := AParent;
-  FEmptyLabel.Align := alTop;
-  FEmptyLabel.AutoSize := False;
-  FEmptyLabel.Height := 48;
-  FEmptyLabel.BorderSpacing.Left := 10;
-  FEmptyLabel.BorderSpacing.Right := 10;
-  FEmptyLabel.WordWrap := True;
-  FEmptyLabel.Caption := 'No scans yet. Choose New Scan or drop a local folder '+
-    'onto this window.';
-
-  FTaskList := TListView.Create(Self);
-  FTaskList.Parent := AParent;
-  FTaskList.Align := alClient;
-  ConfigureList(FTaskList);
-  AddColumn(FTaskList, 'Created (UTC)', 134);
-  AddColumn(FTaskList, 'Folder', 125);
-  AddColumn(FTaskList, 'Status', 82);
-  AddColumn(FTaskList, 'Artifacts', 64);
-  AddColumn(FTaskList, 'Components', 78);
-  AddColumn(FTaskList, 'Duration', 76);
-  FTaskList.OnSelectItem := @TaskSelected;
-end;
-
-function TMainForm.AddPage(const ACaption: string): TTabSheet;
-begin
-  Result := TTabSheet.Create(Self);
-  Result.PageControl := FPages;
-  Result.Caption := ACaption;
-end;
-
-procedure TMainForm.BuildDetailPane(AParent: TWinControl);
-var
-  Page: TTabSheet;
-  Filters: TPanel;
-  LabelValue: TLabel;
-  CopyItem: TMenuItem;
-
-  procedure SetupMemo(AMemo: TMemo; AParentControl: TWinControl;
-    AMonospaced: Boolean);
-  begin
-    AMemo.Parent := AParentControl;
-    AMemo.Align := alClient;
-    AMemo.ReadOnly := True;
-    AMemo.ScrollBars := ssBoth;
-    AMemo.WordWrap := False;
-    AMemo.BorderSpacing.Around := 8;
-    if AMonospaced then
-      AMemo.Font.Name := 'Monospace';
-  end;
-
-  function FilterLabel(const ACaption: string; AWidth: Integer): TLabel;
-  begin
-    Result := TLabel.Create(Self);
-    Result.Parent := Filters;
-    Result.Align := alLeft;
-    Result.AutoSize := False;
-    Result.Width := AWidth;
-    Result.Layout := tlCenter;
-    Result.BorderSpacing.Left := 8;
-    Result.Caption := ACaption;
-  end;
-
-begin
-  FPages := TPageControl.Create(Self);
-  FPages.Parent := AParent;
-  FPages.Align := alClient;
-  FPages.BorderSpacing.Around := 6;
-
-  Page := AddPage('Summary');
-  FSummaryMemo := TMemo.Create(Self);
-  SetupMemo(FSummaryMemo, Page, False);
-
-  Page := AddPage('Components');
-  Filters := TPanel.Create(Self);
-  Filters.Parent := Page;
-  Filters.Align := alTop;
-  Filters.Height := 44;
-  Filters.BevelOuter := bvNone;
-  LabelValue := FilterLabel('Search', 58);
-  FComponentSearch := TEdit.Create(Self);
-  FComponentSearch.Parent := Filters;
-  FComponentSearch.Align := alLeft;
-  FComponentSearch.Width := 200;
-  FComponentSearch.BorderSpacing.Top := 8;
-  FComponentSearch.BorderSpacing.Bottom := 8;
-  FComponentSearch.OnChange := @FiltersChanged;
-  LabelValue := FilterLabel('Ecosystem', 78);
-  FComponentEcosystem := TComboBox.Create(Self);
-  FComponentEcosystem.Parent := Filters;
-  FComponentEcosystem.Align := alLeft;
-  FComponentEcosystem.Width := 150;
-  FComponentEcosystem.Style := csDropDownList;
-  FComponentEcosystem.BorderSpacing.Top := 8;
-  FComponentEcosystem.BorderSpacing.Bottom := 8;
-  FComponentEcosystem.OnChange := @FiltersChanged;
-  LabelValue := FilterLabel('Status', 57);
-  FComponentStatus := TComboBox.Create(Self);
-  FComponentStatus.Parent := Filters;
-  FComponentStatus.Align := alLeft;
-  FComponentStatus.Width := 180;
-  FComponentStatus.Style := csDropDownList;
-  FComponentStatus.BorderSpacing.Top := 8;
-  FComponentStatus.BorderSpacing.Bottom := 8;
-  FComponentStatus.OnChange := @FiltersChanged;
-  FComponentList := TListView.Create(Self);
-  FComponentList.Parent := Page;
-  FComponentList.Align := alClient;
-  ConfigureList(FComponentList);
-  AddColumn(FComponentList, 'Name', 190);
-  AddColumn(FComponentList, 'Version', 110);
-  AddColumn(FComponentList, 'Ecosystem', 90);
-  AddColumn(FComponentList, 'Type', 90);
-  AddColumn(FComponentList, 'Scope', 110);
-  AddColumn(FComponentList, 'Source artifact', 260);
-  FComponentList.OnColumnClick := @ComponentColumnClicked;
-  FComponentList.OnKeyDown := @ListKeyPressed;
-
-  Page := AddPage('Artifacts');
-  Filters := TPanel.Create(Self);
-  Filters.Parent := Page;
-  Filters.Align := alTop;
-  Filters.Height := 44;
-  Filters.BevelOuter := bvNone;
-  LabelValue := FilterLabel('Search', 58);
-  FArtifactSearch := TEdit.Create(Self);
-  FArtifactSearch.Parent := Filters;
-  FArtifactSearch.Align := alLeft;
-  FArtifactSearch.Width := 200;
-  FArtifactSearch.BorderSpacing.Top := 8;
-  FArtifactSearch.BorderSpacing.Bottom := 8;
-  FArtifactSearch.OnChange := @FiltersChanged;
-  LabelValue := FilterLabel('Type', 45);
-  FArtifactType := TComboBox.Create(Self);
-  FArtifactType.Parent := Filters;
-  FArtifactType.Align := alLeft;
-  FArtifactType.Width := 190;
-  FArtifactType.Style := csDropDownList;
-  FArtifactType.BorderSpacing.Top := 8;
-  FArtifactType.BorderSpacing.Bottom := 8;
-  FArtifactType.OnChange := @FiltersChanged;
-  LabelValue := FilterLabel('Status', 57);
-  FArtifactStatus := TComboBox.Create(Self);
-  FArtifactStatus.Parent := Filters;
-  FArtifactStatus.Align := alLeft;
-  FArtifactStatus.Width := 180;
-  FArtifactStatus.Style := csDropDownList;
-  FArtifactStatus.BorderSpacing.Top := 8;
-  FArtifactStatus.BorderSpacing.Bottom := 8;
-  FArtifactStatus.OnChange := @FiltersChanged;
-  FArtifactList := TListView.Create(Self);
-  FArtifactList.Parent := Page;
-  FArtifactList.Align := alClient;
-  ConfigureList(FArtifactList);
-  AddColumn(FArtifactList, 'Relative path', 260);
-  AddColumn(FArtifactList, 'Type', 160);
-  AddColumn(FArtifactList, 'Ecosystem', 90);
-  AddColumn(FArtifactList, 'Status', 150);
-  AddColumn(FArtifactList, 'Size', 90);
-  AddColumn(FArtifactList, 'SHA-256', 220);
-  AddColumn(FArtifactList, 'Message', 280);
-  FArtifactList.OnColumnClick := @ArtifactColumnClicked;
-  FArtifactList.OnKeyDown := @ListKeyPressed;
-
-  FCopyMenu := TPopupMenu.Create(Self);
-  CopyItem := TMenuItem.Create(FCopyMenu);
-  CopyItem.Caption := 'Copy selected value';
-  CopyItem.OnClick := @CopySelectedClicked;
-  FCopyMenu.Items.Add(CopyItem);
-  FComponentList.PopupMenu := FCopyMenu;
-  FArtifactList.PopupMenu := FCopyMenu;
-
-  Page := AddPage('SBOM JSON');
-  FSBOMMemo := TMemo.Create(Self);
-  SetupMemo(FSBOMMemo, Page, True);
-
-  Page := AddPage('Messages');
-  FMessagesMemo := TMemo.Create(Self);
-  SetupMemo(FMessagesMemo, Page, False);
-end;
-
-procedure TMainForm.BuildStatusBar(AParent: TWinControl);
-var
-  StatusPanel: TPanel;
-begin
-  StatusPanel := TPanel.Create(Self);
-  StatusPanel.Parent := AParent;
-  StatusPanel.Align := alBottom;
-  StatusPanel.Height := 68;
-  StatusPanel.BevelOuter := bvNone;
-  StatusPanel.BorderSpacing.Top := 1;
-
-  FProgressPath := TLabel.Create(Self);
-  FProgressPath.Parent := StatusPanel;
-  FProgressPath.Align := alTop;
-  FProgressPath.AutoSize := False;
-  FProgressPath.Height := 22;
-  FProgressPath.BorderSpacing.Left := 10;
-  FProgressPath.BorderSpacing.Right := 10;
-  FProgressPath.Layout := tlCenter;
-  FProgressPath.Caption := 'Ready';
-
-  FProgressStats := TLabel.Create(Self);
-  FProgressStats.Parent := StatusPanel;
-  FProgressStats.Align := alBottom;
-  FProgressStats.AutoSize := False;
-  FProgressStats.Height := 22;
-  FProgressStats.BorderSpacing.Left := 10;
-  FProgressStats.BorderSpacing.Right := 10;
-  FProgressStats.Layout := tlCenter;
-  FProgressStats.Caption := 'Drop a folder here or choose New Scan.';
-
-  FProgressBar := TProgressBar.Create(Self);
-  FProgressBar.Parent := StatusPanel;
-  FProgressBar.Align := alClient;
-  FProgressBar.BorderSpacing.Left := 10;
-  FProgressBar.BorderSpacing.Right := 10;
-  FProgressBar.BorderSpacing.Top := 3;
-  FProgressBar.BorderSpacing.Bottom := 3;
-  FProgressBar.Min := 0;
-  FProgressBar.Max := 100;
-end;
-
 procedure TMainForm.LoadState;
 var
-  HistoryWarning, SettingsWarning: string;
+  HistoryWarning, SettingsWarning, MigrationWarning: string;
 begin
+  MigrationWarning := ApplicationDataMigrationWarning;
   FSettings := FSettingsStore.Load(SettingsWarning);
   FHistoryStore.Load(FTasks, HistoryWarning);
-  if (HistoryWarning <> '') and (SettingsWarning <> '') then
-    FStartupWarning := HistoryWarning + LineEnding + LineEnding + SettingsWarning
-  else
-    FStartupWarning := HistoryWarning + SettingsWarning;
+  FStartupWarning := MigrationWarning;
+  if HistoryWarning <> '' then
+  begin
+    if FStartupWarning <> '' then
+      FStartupWarning := FStartupWarning + LineEnding + LineEnding;
+    FStartupWarning := FStartupWarning + HistoryWarning;
+  end;
+  if SettingsWarning <> '' then
+  begin
+    if FStartupWarning <> '' then
+      FStartupWarning := FStartupWarning + LineEnding + LineEnding;
+    FStartupWarning := FStartupWarning + SettingsWarning;
+  end;
   RefreshTaskRows;
   if FTaskList.Items.Count > 0 then
   begin
@@ -557,6 +248,8 @@ begin
     FTaskList.Items.Clear;
     for I := 0 to FTasks.Count - 1 do
     begin
+      if not TaskMatchesSearch(TScanTask(FTasks[I])) then
+        Continue;
       Item := FTaskList.Items.Add;
       Item.Data := FTasks[I];
       UpdateTaskRow(TScanTask(FTasks[I]));
@@ -564,7 +257,12 @@ begin
   finally
     FTaskList.Items.EndUpdate;
   end;
-  FEmptyLabel.Visible := FTasks.Count = 0;
+  FEmptyLabel.Visible := FTaskList.Items.Count = 0;
+  if FTasks.Count = 0 then
+    FEmptyLabel.Caption := 'No scans yet. Choose New Scan or drop a local ' +
+      'folder onto this window.'
+  else
+    FEmptyLabel.Caption := 'No tasks match the current search.';
 end;
 
 function TMainForm.FindTaskItem(ATask: TScanTask): TListItem;
@@ -626,6 +324,18 @@ begin
   Result := nil;
 end;
 
+function TMainForm.TaskMatchesSearch(ATask: TScanTask): Boolean;
+var
+  Searchable: string;
+begin
+  if ATask = nil then
+    Exit(False);
+  Searchable := ATask.CreatedUTC + ' ' + ATask.TargetRootName + ' ' +
+    ATask.TargetDirectory + ' ' + TaskStatusToString(ATask.Status) + ' ' +
+    ATask.ID;
+  Result := ContainsTextValue(Searchable, Trim(FTaskSearch.Text));
+end;
+
 procedure TMainForm.PopulateSummary(ATask: TScanTask);
 begin
   FSummaryMemo.Lines.BeginUpdate;
@@ -658,15 +368,23 @@ begin
       IntToStr(ATask.FailedArtifacts));
     FSummaryMemo.Lines.Add('Components identified: ' +
       IntToStr(ATask.ComponentsIdentified));
+    if ATask.InspectionTools.Count > 0 then
+      FSummaryMemo.Lines.Add('Operating-system evidence: ' +
+        StringReplace(ATask.InspectionTools.CommaText, ',', ', ',
+          [rfReplaceAll]))
+    else
+      FSummaryMemo.Lines.Add('Operating-system evidence: no approved tool ' +
+        'was available or applicable');
     FSummaryMemo.Lines.Add('Generated SBOM: ' + ATask.GeneratedSBOMPath);
     FSummaryMemo.Lines.Add('Generated SBOM SHA-256: ' +
       ATask.GeneratedSBOMSHA256);
     FSummaryMemo.Lines.Add('Scan settings: ' + ATask.Settings.AsSummary);
     FSummaryMemo.Lines.Add('');
-    FSummaryMemo.Lines.Add('Completeness warning: Results come from local '+
-      'static artifact inspection and are best effort. They are not a guarantee '+
-      'of complete dependency discovery and are not a vulnerability or '+
-      'license-compliance assessment.');
+    FSummaryMemo.Lines.Add('Completeness warning: Results combine internal ' +
+      'static inspection with safe evidence from applicable operating-system ' +
+      'tools. Direct linked-library declarations may be identified, but ' +
+      'runtime-loaded or undeclared dependencies can still be missed. This is ' +
+      'not a vulnerability or license-compliance assessment.');
   finally
     FSummaryMemo.Lines.EndUpdate;
   end;
@@ -942,8 +660,9 @@ begin
     FMessagesMemo.Clear;
     if ATask = nil then
       Exit;
-    FMessagesMemo.Lines.Add('Best-effort completeness notice: local static '+
-      'inspection can miss dynamically resolved or undeclared dependencies.');
+    FMessagesMemo.Lines.Add('Best-effort completeness notice: internal static ' +
+      'inspection is enriched by applicable safe operating-system tools, but ' +
+      'runtime-loaded or undeclared dependencies can still be missed.');
     if ATask.Warnings.Count > 0 then
     begin
       FMessagesMemo.Lines.Add('');
@@ -1012,6 +731,8 @@ begin
     (Task.ID = FActiveTaskID) and (Task.Status = tsRunning);
   FExportButton.Enabled := (Task <> nil) and
     (Task.Status = tsCompleted) and FileExists(Task.GeneratedSBOMPath);
+  FExportDatabaseButton.Enabled := (not ScanActive) and (FTasks.Count > 0) and
+    DirectoryExists(FHistoryStore.DataDirectory);
 end;
 
 procedure TMainForm.FreeFinishedWorker;
@@ -1041,6 +762,7 @@ begin
     Task.TargetRootName := Target;
   Task.Settings.Assign(FSettings);
   Task.Status := tsPending;
+  FTaskSearch.Clear;
   FTasks.Insert(0, Task);
   RefreshTaskRows;
   SelectTask(Task);
@@ -1221,7 +943,7 @@ begin
     Dialog.Title := 'Export CycloneDX SBOM';
     Dialog.Filter := 'CycloneDX JSON (*.cdx.json)|*.cdx.json|JSON files (*.json)|*.json|All files|*';
     Dialog.DefaultExt := 'cdx.json';
-    Dialog.FileName := Task.ID + '.cdx.json';
+    Dialog.FileName := TaskSBOMExportFileName(Task);
     if Dialog.Execute then
     begin
       try
@@ -1239,10 +961,55 @@ begin
   end;
 end;
 
+procedure TMainForm.ExportDatabaseClicked(Sender: TObject);
+var
+  Dialog: TSaveDialog;
+begin
+  if (FActiveTaskID <> '') or (FTasks.Count = 0) then
+    Exit;
+  Dialog := TSaveDialog.Create(Self);
+  try
+    Dialog.Title := 'Export all tasks and results';
+    Dialog.Filter := 'ZIP archives (*.zip)|*.zip|All files|*';
+    Dialog.DefaultExt := 'zip';
+    Dialog.FileName := DatabaseArchiveFileName;
+    if Dialog.Execute then
+    begin
+      try
+        ExportDatabaseArchive(FHistoryStore.DataDirectory, Dialog.FileName);
+        FProgressPath.Caption := 'Database exported to ' + Dialog.FileName;
+      except
+        on E: Exception do
+          ShowError('The task database could not be exported: ' + E.Message);
+      end;
+    end;
+  finally
+    Dialog.Free;
+  end;
+end;
+
 procedure TMainForm.TaskSelected(Sender: TObject; Item: TListItem;
   Selected: Boolean);
 begin
   if Selected then
+    UpdateDetails;
+end;
+
+procedure TMainForm.TaskSearchChanged(Sender: TObject);
+var
+  Task: TScanTask;
+begin
+  Task := SelectedTask;
+  RefreshTaskRows;
+  if (Task <> nil) and (FindTaskItem(Task) <> nil) then
+    SelectTask(Task)
+  else if FTaskList.Items.Count > 0 then
+  begin
+    FTaskList.Items[0].Selected := True;
+    FTaskList.Items[0].Focused := True;
+    UpdateDetails;
+  end
+  else
     UpdateDetails;
 end;
 
@@ -1357,12 +1124,14 @@ begin
   if AResult.Status = tsCompleted then
   begin
     FProgressBar.Position := 100;
-    FProgressPath.Caption := 'Scan completed';
+    FProgressPath.Caption := 'Scan completed: ' + AResult.TargetRootName +
+      ' [' + Copy(AResult.ID, 1, 8) + ']';
   end
   else
   begin
     FProgressBar.Position := 0;
-    FProgressPath.Caption := 'Scan ' + TaskStatusToString(AResult.Status);
+    FProgressPath.Caption := 'Scan ' + TaskStatusToString(AResult.Status) +
+      ': ' + AResult.TargetRootName + ' [' + Copy(AResult.ID, 1, 8) + ']';
   end;
   FProgressStats.Caption := Format('%d files  •  %s  •  %d artifacts  •  '+
     '%d components  •  %s', [AResult.FilesInspected,

@@ -8,6 +8,9 @@ uses
   Classes, SysUtils;
 
 function ApplicationDataDirectory: string;
+function ApplicationDataMigrationWarning: string;
+function MigrateApplicationDataDirectory(const ASource, ADestination: string;
+  out AWarning: string): Boolean;
 function CanonicalPath(const APath: string): string;
 function PathIsWithin(const APath, ARoot: string): Boolean;
 function IsSymbolicLink(const APath: string): Boolean;
@@ -33,9 +36,130 @@ function GetFinalPathNameByHandleW(AHandle: THandle; APath: PWideChar;
   external 'kernel32.dll' name 'GetFinalPathNameByHandleW';
 {$ENDIF}
 
-function ApplicationDataDirectory: string;
+var
+  CachedApplicationDataDirectory: string = '';
+  CachedMigrationWarning: string = '';
+
+function MoveDirectoryContents(const ASource, ADestination: string;
+  out AError: string): Boolean;
+var
+  SearchRecord: TSearchRec;
+  FindResult: Integer;
+  SourceName, DestinationName: string;
 begin
-  Result := ExcludeTrailingPathDelimiter(GetAppConfigDir(False));
+  Result := False;
+  AError := '';
+  if not ForceDirectories(ADestination) then
+  begin
+    AError := 'unable to create ' + ADestination;
+    Exit;
+  end;
+  FindResult := FindFirst(IncludeTrailingPathDelimiter(ASource) + '*',
+    faAnyFile, SearchRecord);
+  try
+    while FindResult = 0 do
+    begin
+      if (SearchRecord.Name <> '.') and (SearchRecord.Name <> '..') then
+      begin
+        SourceName := IncludeTrailingPathDelimiter(ASource) + SearchRecord.Name;
+        DestinationName := IncludeTrailingPathDelimiter(ADestination) +
+          SearchRecord.Name;
+        if (SearchRecord.Attr and faDirectory) <> 0 then
+        begin
+          if not MoveDirectoryContents(SourceName, DestinationName, AError) then
+            Exit;
+          if DirectoryExists(SourceName) and not RemoveDir(SourceName) then
+          begin
+            AError := 'unable to remove migrated directory ' + SourceName;
+            Exit;
+          end;
+        end
+        else
+        begin
+          if FileExists(DestinationName) then
+          begin
+            AError := 'destination already contains ' + DestinationName;
+            Exit;
+          end;
+          try
+            CopyFileContents(SourceName, DestinationName);
+          except
+            on E: Exception do
+            begin
+              AError := E.Message;
+              Exit;
+            end;
+          end;
+          if not DeleteFile(SourceName) then
+          begin
+            AError := 'unable to remove migrated file ' + SourceName;
+            Exit;
+          end;
+        end;
+      end;
+      FindResult := FindNext(SearchRecord);
+    end;
+  finally
+    FindClose(SearchRecord);
+  end;
+  Result := True;
+end;
+
+function MigrateApplicationDataDirectory(const ASource, ADestination: string;
+  out AWarning: string): Boolean;
+var
+  SourceDirectory, DestinationDirectory, ErrorText: string;
+begin
+  AWarning := '';
+  SourceDirectory := ExcludeTrailingPathDelimiter(ExpandFileName(ASource));
+  DestinationDirectory := ExcludeTrailingPathDelimiter(
+    ExpandFileName(ADestination));
+  if SameFileName(SourceDirectory, DestinationDirectory) or
+    not DirectoryExists(SourceDirectory) then
+    Exit(True);
+
+  if not DirectoryExists(DestinationDirectory) and
+    RenameFile(SourceDirectory, DestinationDirectory) then
+    Exit(True);
+
+  if not MoveDirectoryContents(SourceDirectory, DestinationDirectory,
+    ErrorText) then
+  begin
+    AWarning := 'Existing application data could not be fully moved from ' +
+      SourceDirectory + ' to ' + DestinationDirectory + ': ' + ErrorText;
+    Exit(False);
+  end;
+  if DirectoryExists(SourceDirectory) and not RemoveDir(SourceDirectory) then
+  begin
+    AWarning := 'Application data was copied, but the old directory could not ' +
+      'be removed: ' + SourceDirectory;
+    Exit(False);
+  end;
+  Result := True;
+end;
+
+function ApplicationDataDirectory: string;
+var
+  LegacyDirectory: string;
+begin
+  if CachedApplicationDataDirectory <> '' then
+    Exit(CachedApplicationDataDirectory);
+  CachedApplicationDataDirectory := ExcludeTrailingPathDelimiter(
+    IncludeTrailingPathDelimiter(GetUserDir) + '.sbom-analyzer');
+  LegacyDirectory := ExcludeTrailingPathDelimiter(GetAppConfigDir(False));
+  MigrateApplicationDataDirectory(LegacyDirectory,
+    CachedApplicationDataDirectory, CachedMigrationWarning);
+  if not ForceDirectories(CachedApplicationDataDirectory) and
+    (CachedMigrationWarning = '') then
+    CachedMigrationWarning := 'Unable to create application data directory: ' +
+      CachedApplicationDataDirectory;
+  Result := CachedApplicationDataDirectory;
+end;
+
+function ApplicationDataMigrationWarning: string;
+begin
+  ApplicationDataDirectory;
+  Result := CachedMigrationWarning;
 end;
 
 function CanonicalPath(const APath: string): string;
