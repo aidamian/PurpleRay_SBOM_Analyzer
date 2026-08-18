@@ -89,7 +89,7 @@ jobs:
               https://sourceforge.net/projects/lazarus/files/Lazarus Linux amd64 DEB/Lazarus 4.2/fpc-src_3.2.2-210709_amd64.deb
           - name: macOS x64 / Cocoa
             id: macos
-            os: macos-latest
+            os: macos-15-intel
             widgetset: cocoa
             package_suffix: macos.zip
             laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus macOS x86-64/Lazarus 4.2/lazarus-darwin-x86_64-4.2.zip
@@ -108,19 +108,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes libgtk-3-dev
 
-      - name: Enable x86_64 tools on Apple Silicon
-        if: runner.os == 'macOS'
-        run: |
-          if [[ "$(uname -m)" == arm64 ]]; then
-            sudo softwareupdate --install-rosetta --agree-to-license
-          fi
-
       - name: Install pinned Lazarus and Free Pascal
         uses: ollydev/setup-lazarus@2d902bfe7bf72ac91c6ee21130ed599ccc839bc7 # v4
         with:
           use-cache: 'true'
           laz-url: ${{ matrix.config.laz_url }}
           fpc-url: ${{ matrix.config.fpc_url }}
+
+      - name: Add bundled Windows Free Pascal to PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $fpc = Get-ChildItem -Path "$env:RUNNER_TEMP\lazarus\fpc" -Filter fpc.exe -Recurse |
+            Select-Object -First 1
+          if (-not $fpc) {
+            throw 'The Lazarus installation does not contain fpc.exe'
+          }
+          $fpc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Verify toolchain versions
         run: |

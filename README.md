@@ -189,13 +189,13 @@ scripts/regenerate-icon-resource.sh
 ## CI and releases
 
 `.github/workflows/build-release.yml` tests and builds all three native targets
-on `windows-latest`, `ubuntu-latest`, and `macos-latest`. It uses FPC 3.2.2 and
+on `windows-latest`, `ubuntu-latest`, and `macos-15-intel`. It uses FPC 3.2.2 and
 Lazarus 4.2 from the official SourceForge release files. The maintained
 [`ollydev/setup-lazarus`](https://github.com/ollydev/setup-lazarus) setup action
 is pinned to an immutable commit and is used only during builds; it introduces
 no runtime dependency. Official GitHub artifact and checkout actions are pinned
-as well. The macOS job enables Rosetta when the native runner is Apple Silicon,
-then explicitly compiles and verifies an x86_64 application.
+as well. The macOS job is pinned to GitHub's Intel runner and explicitly
+compiles and verifies an x86_64 application.
 
 Pull requests get a `MAJOR.MINOR.PATCH-dev.<commit>` version, run all tests, and
 upload temporary packages without tags or releases. Pushes to `main` serialize
@@ -213,6 +213,25 @@ tag and publish the Windows ZIP, standalone Linux executable, macOS ZIP, and
 is reused. Manual runs rebuild without publishing by default; publishing must be
 selected explicitly. Existing tags and releases are verified and updated
 idempotently instead of duplicated.
+
+## Citation and copyright
+
+If you use SBOM Analyzer in research, publications, reports, or derivative
+software, please cite the original project:
+
+```bibtex
+@misc{damian2026sbomanalyzer,
+  author = {Andrei Ionut Damian},
+  title  = {{SBOM Analyzer}},
+  year   = {2026},
+  url    = {https://github.com/aidamian/SBOM_Analyzer}
+}
+```
+
+Copyright (c) 2026 Andrei Ionut Damian. SBOM Analyzer is an open-source
+project, but copyright and authorship rights remain with the author. Derivative
+works should retain this copyright notice and cite the original project
+appropriately using the citation above.
 
 ## Platform limitations
 
