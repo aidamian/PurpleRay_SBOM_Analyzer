@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer deterministic regression-test program.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Exercises non-visual parsing, hashing, persistence, migration, export,
+  dependency inspection, normalization, traversal, and cancellation behavior.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 program test_runner;
 
 {$mode objfpc}{$H+}
@@ -148,6 +170,29 @@ begin
   Result := nil;
 end;
 
+{**
+  Parses one named fixture through the production manifest dispatcher.
+
+  Parameters
+  ----------
+  AName
+    Fixture filename relative to the test fixture directory.
+  AKind
+    Parser kind to exercise.
+  AComponents
+    Owned list receiving parsed components.
+  AArtifact
+    Newly allocated artifact record returned to the caller.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated when the artifact cannot be allocated.
+}
 procedure ParseFixture(const AName: string; AKind: TParserKind;
   AComponents: TObjectList; out AArtifact: TArtifact);
 begin
@@ -440,6 +485,7 @@ begin
     AssertTrue(ParseReadElfOutput(
       ' 0x0000000000000001 (NEEDED) Shared library: [libc.so.6]' + LineEnding +
       ' 0x0000000000000001 (NEEDED) Shared library: [libz.so.1]' + LineEnding +
+      ' 0x000000000000000e (SONAME) Library soname: [libdemo.so.4.2]' + LineEnding +
       ' Build ID: 0123456789abcdef', Inspection),
       'readelf evidence was not recognized');
     AssertEqual(2, Inspection.Dependencies.Count,
@@ -448,10 +494,66 @@ begin
       'first readelf dependency differs');
     AssertEqual('libz.so.1', Inspection.Dependencies[1],
       'second readelf dependency differs');
+    AssertEqual('4.2', Inspection.ComponentVersion,
+      'readelf SONAME version differs');
     AssertEqual('build ID: 0123456789abcdef', Inspection.Details[0],
       'readelf build ID differs');
   finally
     Inspection.Free;
+  end;
+end;
+
+procedure TestNativeDependencyVersions;
+begin
+  AssertEqual('6', NativeDependencyVersion('libc.so.6'),
+    'ELF SONAME major version differs');
+  AssertEqual('1.2.3', NativeDependencyVersion('/opt/lib/libdemo.so.1.2.3'),
+    'ELF SONAME dotted version differs');
+  AssertEqual('3', NativeDependencyVersion('/usr/lib/libcrypto.3.dylib'),
+    'Mach-O install-name version differs');
+  AssertEqual('', NativeDependencyVersion('kernel32.dll'),
+    'unversioned PE import must not invent a version');
+  AssertEqual('', NativeDependencyVersion('api-ms-win-core-file-l1-1-0.dll'),
+    'Windows API-set tokens must not become a version');
+  AssertEqual('', NativeDependencyVersion('libSystem.B.dylib'),
+    'non-numeric Mach-O suffix must not become a version');
+end;
+
+procedure TestNativeVersionScanAndSBOM;
+var
+  DirectoryName, FileName: string;
+  Buffer: array[0..63] of Byte;
+  Task: TScanTask;
+  Engine: TScanEngine;
+  Component: uModels.TComponent;
+  SBOM: UTF8String;
+begin
+  DirectoryName := NewTemporaryDirectory('native-version-scan');
+  FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'libdemo.so.4.2';
+  FillChar(Buffer, SizeOf(Buffer), 0);
+  Buffer[0] := $7F; Buffer[1] := Ord('E'); Buffer[2] := Ord('L');
+  Buffer[3] := Ord('F'); Buffer[4] := 2; Buffer[5] := 1;
+  SetUInt16LE(Buffer, 16, 3);
+  SetUInt16LE(Buffer, 18, 62);
+  WriteBytes(FileName, Buffer);
+
+  Task := TScanTask.Create;
+  Engine := TScanEngine.Create(nil, nil);
+  try
+    Task.TargetDirectory := DirectoryName;
+    Task.TargetRootName := 'native-version-scan';
+    Task.Settings.CalculateSHA256 := False;
+    AssertTrue(Engine.Scan(Task), 'native version fixture scan failed');
+    Component := FindComponent(Task.Components, 'libdemo.so.4.2');
+    AssertTrue(Component <> nil, 'versioned native component is missing');
+    AssertEqual('4.2', Component.Version,
+      'versioned native component lost filename evidence');
+    SBOM := GenerateCycloneDX(Task);
+    AssertTrue(Pos('"version" : "4.2"', string(SBOM)) > 0,
+      'native version evidence is missing from CycloneDX output');
+  finally
+    Engine.Free;
+    Task.Free;
   end;
 end;
 
@@ -686,6 +788,8 @@ begin
       'default CycloneDX output leaked the absolute target path');
     AssertTrue(Pos('"specVersion" : "1.6"', string(First)) > 0,
       'CycloneDX version is missing');
+    AssertTrue(Pos('"version" : "1.0.0"', string(First)) > 0,
+      'known component version is missing from CycloneDX output');
   finally
     Task.Free;
   end;
@@ -777,6 +881,25 @@ begin
   end;
 end;
 
+{**
+  Executes one test case and records a pass or failure without aborting the run.
+
+  Parameters
+  ----------
+  AName
+    Human-readable test name written to the console.
+  AMethod
+    Test procedure to invoke.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+    Test exceptions are caught and counted as failures.
+}
 procedure RunTest(const AName: string; AMethod: TTestMethod);
 begin
   Inc(TestCount);
@@ -810,6 +933,8 @@ begin
   RunTest('SBOM export naming', @TestExportNaming);
   RunTest('database archive export', @TestDatabaseArchive);
   RunTest('readelf output parsing', @TestReadElfParsing);
+  RunTest('native dependency versions', @TestNativeDependencyVersions);
+  RunTest('native version scan and SBOM', @TestNativeVersionScanAndSBOM);
   RunTest('native dependency tables', @TestNativeDependencyTables);
   RunTest('PE/ELF/Mach-O inspection', @TestBinaryInspection);
   RunTest('component deduplication', @TestComponentDeduplication);

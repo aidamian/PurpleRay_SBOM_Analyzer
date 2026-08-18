@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer component-normalization unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Produces a stable, deduplicated component inventory while merging evidence,
+  parser provenance, dependency scopes, and hashes.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uComponentNormalizer;
 
 {$mode objfpc}{$H+}
@@ -7,7 +29,43 @@ interface
 uses
   Contnrs, uModels;
 
+{**
+  Deduplicates components and merges their evidence into owned output clones.
+
+  Parameters
+  ----------
+  AInput
+    Source list containing TComponent instances; ownership is unchanged.
+  AOutput
+    Destination list to clear and populate with normalized owned clones.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EStringListError
+    May be raised if an internal normalized key invariant is violated.
+}
 procedure NormalizeComponents(AInput, AOutput: TObjectList);
+
+{**
+  Sorts a component list into deterministic ecosystem/name/version order.
+
+  Parameters
+  ----------
+  AComponents
+    List of TComponent instances to sort in place; nil is accepted.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+}
 procedure SortComponents(AComponents: TObjectList);
 
 implementation

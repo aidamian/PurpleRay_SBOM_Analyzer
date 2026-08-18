@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer task-history persistence unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Persists scan tasks atomically, repairs migrated SBOM paths, recovers from a
+  valid backup, and preserves malformed history for diagnosis.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uTaskHistory;
 
 {$mode objfpc}{$H+}
@@ -12,12 +34,114 @@ type
   private
     FDataDirectory: string;
     function GetHistoryFileName: string;
+
+    {**
+      Validates and reconstructs tasks from one candidate history file.
+
+      Parameters
+      ----------
+      AFileName
+        Active or backup history filename.
+      ATasks
+        Temporary owned destination list.
+      AError
+        Receives a concise parse, schema, or reconstruction diagnostic.
+
+      Returns
+      -------
+      Boolean
+        True only when the complete file was valid and loaded.
+
+      Raises
+      ------
+      EOutOfMemory
+        May propagate while allocating reconstructed tasks.
+    }
     function TryLoadFile(const AFileName: string; ATasks: TObjectList;
       out AError: string): Boolean;
+
+    {**
+      Renames malformed active history to a timestamped diagnostic filename.
+
+      Parameters
+      ----------
+      AFileName
+        Malformed file to preserve.
+
+      Returns
+      -------
+      string
+        Preserved filename, or an empty string when preservation failed.
+
+      Raises
+      ------
+      None
+    }
     function PreserveMalformedFile(const AFileName: string): string;
   public
+    {**
+      Creates a history store rooted at an explicit or default data directory.
+
+      Parameters
+      ----------
+      ADataDirectory
+        Override directory; an empty value selects ApplicationDataDirectory.
+
+      Returns
+      -------
+      TTaskHistoryStore
+        Newly configured store.
+
+      Raises
+      ------
+      None
+    }
     constructor Create(const ADataDirectory: string = '');
+
+    {**
+      Atomically persists the complete owned task list as versioned JSON.
+
+      Parameters
+      ----------
+      ATasks
+        List containing TScanTask instances to serialize.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      EAccessViolation
+        Raised when ATasks is nil or contains incompatible objects.
+      EFCreateError, EWriteError, EInOutError
+        Propagated by JSON serialization and atomic persistence.
+    }
     procedure Save(ATasks: TObjectList);
+
+    {**
+      Loads history with backup recovery and interrupted-task repair.
+
+      Parameters
+      ----------
+      ATasks
+        Owned destination list cleared and populated only after valid loading.
+      AWarning
+        Receives backup-recovery, malformed-file, or path-repair information.
+
+      Returns
+      -------
+      Boolean
+        True when active or backup history was loaded; False when no valid
+        history could be recovered.
+
+      Raises
+      ------
+      EAccessViolation
+        Raised when ATasks is nil.
+      EOutOfMemory
+        May propagate while reconstructing task objects.
+    }
     function Load(ATasks: TObjectList; out AWarning: string): Boolean;
     property DataDirectory: string read FDataDirectory;
     property HistoryFileName: string read GetHistoryFileName;

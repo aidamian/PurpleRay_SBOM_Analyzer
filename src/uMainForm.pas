@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer main-window unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Coordinates task history, scan lifecycle, filtering, result presentation,
+  exports, drag-and-drop, keyboard commands, and worker-thread notifications.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uMainForm;
 
 {$mode objfpc}{$H+}
@@ -71,9 +93,62 @@ type
     procedure CancelClicked(Sender: TObject);
     procedure RescanClicked(Sender: TObject);
     procedure RefreshClicked(Sender: TObject);
+
+    {**
+      Opens a save dialog and copies the selected task's generated SBOM.
+
+      Parameters
+      ----------
+      Sender
+        LCL action source; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+        Copy errors are shown to the user and do not escape the event handler.
+    }
     procedure ExportClicked(Sender: TObject);
+
+    {**
+      Exports all persisted tasks, settings, diagnostics, and SBOMs as one ZIP.
+
+      Parameters
+      ----------
+      Sender
+        LCL action source; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+        Archive errors are shown to the user and do not escape the handler.
+    }
     procedure ExportDatabaseClicked(Sender: TObject);
     procedure TaskSelected(Sender: TObject; Item: TListItem; Selected: Boolean);
+
+    {**
+      Rebuilds the history list for the current folder/status/date query.
+
+      Parameters
+      ----------
+      Sender
+        Search edit that raised the event; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
     procedure TaskSearchChanged(Sender: TObject);
     procedure FiltersChanged(Sender: TObject);
     procedure ComponentColumnClicked(Sender: TObject; Column: TListColumn);
@@ -96,8 +171,57 @@ type
     FArtifactSortColumn: Integer;
     FArtifactSortAscending: Boolean;
 
+    {**
+      Loads settings and history, combines startup warnings, and selects a task.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      EOutOfMemory
+        May propagate if initial UI or model collections cannot be populated.
+    }
     procedure LoadState;
+
+    {**
+      Persists the current task collection and converts errors to UI messages.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
     procedure SaveHistory;
+
+    {**
+      Recreates visible history rows while preserving model ownership.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      EOutOfMemory
+        May propagate if LCL list items cannot be allocated.
+    }
     procedure RefreshTaskRows;
     procedure UpdateTaskRow(ATask: TScanTask);
     procedure SelectTask(ATask: TScanTask);
@@ -105,6 +229,22 @@ type
     function FindTask(const AID: string): TScanTask;
     function FindTaskItem(ATask: TScanTask): TListItem;
     function TaskMatchesSearch(ATask: TScanTask): Boolean;
+    {**
+      Rebuilds all detail tabs and action states for the selected task.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+        Missing SBOM files and display failures are rendered as messages.
+    }
     procedure UpdateDetails;
     procedure PopulateComponentFilters(ATask: TScanTask);
     procedure PopulateArtifactFilters(ATask: TScanTask);
@@ -117,13 +257,106 @@ type
       AComponent: uModels.TComponent): string;
     procedure UpdateButtons;
     procedure FreeFinishedWorker;
+    {**
+      Creates, persists, selects, and starts a new worker-backed scan task.
+
+      Parameters
+      ----------
+      ADirectory
+        Existing target directory selected by the user.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      EOutOfMemory
+        May propagate if the task or worker cannot be allocated.
+    }
     procedure StartScan(const ADirectory: string);
+
+    {**
+      Collects modal settings, persists them, and starts the requested scan.
+
+      Parameters
+      ----------
+      ADirectory
+        Target directory awaiting user confirmation.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+        Settings-save errors are shown to the user.
+    }
     procedure ConfigureAndStartScan(const ADirectory: string);
     procedure ShowError(const AMessage: string);
 
+    {**
+      Applies a queued worker progress snapshot to counters and status controls.
+
+      Parameters
+      ----------
+      Sender
+        Worker that produced the update.
+      AProgress
+        Latest path, counts, byte total, and elapsed time.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
     procedure WorkerProgress(Sender: TObject; const AProgress: TScanProgress);
+
+    {**
+      Replaces live task state with the completed worker result and persists it.
+
+      Parameters
+      ----------
+      Sender
+        Worker that completed.
+      AResult
+        Worker-owned task result valid for the duration of the callback.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+        Persistence errors are presented through the main form.
+    }
     procedure WorkerComplete(Sender: TObject; AResult: TScanTask);
   public
+    {**
+      Creates the LFM-backed main form and loads persistent application state.
+
+      Parameters
+      ----------
+      TheOwner
+        Optional LCL component owner.
+
+      Returns
+      -------
+      TMainForm
+        Initialized application window.
+
+      Raises
+      ------
+      EResNotFound, EReadError
+        May propagate when the embedded LFM resource cannot be loaded.
+      EOutOfMemory
+        May propagate while allocating models and stores.
+    }
     constructor Create(TheOwner: Classes.TComponent); override;
     destructor Destroy; override;
   end;

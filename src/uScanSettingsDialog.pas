@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer scan-settings dialog unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Presents and validates the user-editable path, symlink, hashing, and ignore
+  options before a scan begins.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uScanSettingsDialog;
 
 {$mode objfpc}{$H+}
@@ -20,9 +42,64 @@ type
     ButtonsPanel: TPanel;
     OKButton: TButton;
     CancelButton: TButton;
+    {**
+      Keeps the outside-root option consistent with the follow-links checkbox.
+
+      Parameters
+      ----------
+      Sender
+        LCL control that raised the event; the value is not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
     procedure FollowLinksChanged(Sender: TObject);
   public
+    {**
+      Creates the LFM-backed modal settings dialog.
+
+      Parameters
+      ----------
+      TheOwner
+        Optional component owner.
+
+      Returns
+      -------
+      TScanSettingsDialog
+        Initialized form instance.
+
+      Raises
+      ------
+      EResNotFound, EReadError
+        May propagate if the embedded LFM resource cannot be loaded.
+    }
     constructor Create(TheOwner: Classes.TComponent); override;
+
+    {**
+      Edits scan settings modally and applies them only after confirmation.
+
+      Parameters
+      ----------
+      ASettings
+        Existing settings displayed and updated when the user selects Start.
+
+      Returns
+      -------
+      Boolean
+        True when the user confirms and ASettings was updated.
+
+      Raises
+      ------
+      EAccessViolation
+        Raised when ASettings is nil.
+      EResNotFound, EReadError
+        May propagate if form creation fails.
+    }
     class function Execute(ASettings: TScanSettings): Boolean;
   end;
 

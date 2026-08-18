@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer atomic-file persistence unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Writes UTF-8 application data through a flushed temporary file and activates
+  it atomically while optionally retaining the previous valid file.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uAtomicFiles;
 
 {$mode objfpc}{$H+}
@@ -7,6 +29,28 @@ interface
 uses
   SysUtils;
 
+{**
+  Durably writes UTF-8 content and atomically activates the completed file.
+
+  Parameters
+  ----------
+  AFileName
+    Final destination filename.
+  AContent
+    Exact UTF-8 byte content to persist.
+  APreserveBackup
+    When True, retains the previous destination as a .bak file.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EFCreateError, EWriteError, EInOutError
+    Propagated when a directory, temporary file, flush, backup, or rename
+    operation cannot be completed safely.
+}
 procedure WriteAtomicUTF8(const AFileName: string; const AContent: UTF8String;
   APreserveBackup: Boolean = True);
 

@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer scanning-engine unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Traverses a target tree, applies ignore and symlink policy, hashes and parses
+  artifacts, inspects binaries, and normalizes the resulting component set.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uScanEngine;
 
 {$mode objfpc}{$H+}
@@ -31,19 +53,157 @@ type
     FLastProgressTicks: QWord;
     FCurrentRelativePath: string;
     function IsCancelled: Boolean;
+
+    {**
+      Emits throttled or forced progress snapshots to the worker callback.
+
+      Parameters
+      ----------
+      AForce
+        Bypasses the normal 100 ms notification throttle when True.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
     procedure ReportProgress(AForce: Boolean = False);
     procedure HashProgress(ABytesRead: Int64);
     procedure AddWarning(const AMessage: string);
+
+    {**
+      Validates a directory against root boundaries and loop detection.
+
+      Parameters
+      ----------
+      ADirectory
+        Directory reached directly or through a symbolic link.
+
+      Returns
+      -------
+      Boolean
+        True when traversal may enter the directory for the first time.
+
+      Raises
+      ------
+      None
+        Boundary and loop failures become task warnings.
+    }
     function EnterDirectory(const ADirectory: string): Boolean;
+
+    {**
+      Recursively scans one directory in deterministic filename order.
+
+      Parameters
+      ----------
+      ADirectory
+        Absolute directory currently being enumerated.
+      ARelativeDirectory
+        Root-relative directory used for evidence and ignore matching.
+
+      Returns
+      -------
+      Boolean
+        True when traversal completed normally; False after cancellation.
+
+      Raises
+      ------
+      None
+        Enumeration and per-entry failures are recorded as warnings.
+    }
     function ScanDirectory(const ADirectory, ARelativeDirectory: string): Boolean;
+
+    {**
+      Identifies, hashes, parses, and records one regular file.
+
+      Parameters
+      ----------
+      AFileName
+        Absolute input filename.
+      ARelativePath
+        Root-relative evidence path.
+      AFileSize
+        Size reported during directory enumeration.
+
+      Returns
+      -------
+      Boolean
+        True while scanning should continue; False after cancellation.
+
+      Raises
+      ------
+      None
+        Parser and inspection exceptions become failed artifact diagnostics.
+    }
     function ProcessFile(const AFileName, ARelativePath: string;
       AFileSize: Int64): Boolean;
     procedure CountArtifactStatus(AArtifact: TArtifact);
+
+    {**
+      Deduplicates and deterministically sorts all collected components.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if normalized result allocation fails.
+    }
     procedure FinalizeComponents;
   public
+    {**
+      Creates a reusable scanner with optional cancellation and progress hooks.
+
+      Parameters
+      ----------
+      ACancelCheck
+        Optional callback polled throughout traversal, hashing, and OS tools.
+      AProgressCallback
+        Optional callback receiving throttled scan snapshots.
+
+      Returns
+      -------
+      TScanEngine
+        Initialized scanner owned by the caller.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if working collections cannot be allocated.
+    }
     constructor Create(ACancelCheck: TCancelCheck;
       AProgressCallback: TScanProgressCallback);
     destructor Destroy; override;
+
+    {**
+      Executes a complete static scan and updates the supplied task in place.
+
+      Parameters
+      ----------
+      ATask
+        Task carrying the target directory and settings and receiving results.
+
+      Returns
+      -------
+      Boolean
+        True only for normal completion; False for cancellation or failure.
+
+      Raises
+      ------
+      EAccessViolation
+        Raised when ATask is nil.
+      EOutOfMemory
+        May propagate if result allocation fails.
+    }
     function Scan(ATask: TScanTask): Boolean;
   end;
 
@@ -71,6 +231,23 @@ begin
   {$ENDIF}
 end;
 
+{**
+  Reduces a native loader declaration to its library filename component.
+
+  Parameters
+  ----------
+  ADeclaration
+    Loader declaration, optionally including an absolute or tokenized path.
+
+  Returns
+  -------
+  string
+    Trimmed final path component used as the native component name.
+
+  Raises
+  ------
+  None
+}
 function LinkedLibraryComponentName(const ADeclaration: string): string;
 var
   SeparatorAt: Integer;
@@ -267,7 +444,7 @@ var
   Definition: TArtifactDefinition;
   BinaryInfo: TBinaryInfo;
   Artifact: TArtifact;
-  Component: uModels.TComponent;
+  Component, BinaryComponent: uModels.TComponent;
   Inspection: TSystemInspection;
   NativeDependencies: TStringList;
   HashValue: string;
@@ -276,6 +453,7 @@ var
   IsArtifact, IsBinary: Boolean;
 begin
   Result := False;
+  BinaryComponent := nil;
   if IsCancelled then
     Exit;
   FCurrentRelativePath := NormalizeRelativePath(ARelativePath);
@@ -339,6 +517,7 @@ begin
     begin
       Component := uModels.TComponent.Create;
       Component.Name := ExtractFileName(AFileName);
+      Component.Version := NativeDependencyVersion(Component.Name);
       Component.Ecosystem := 'native';
       if BinaryInfo.Classification = 'executable' then
         Component.ComponentType := 'application'
@@ -351,6 +530,7 @@ begin
       Component.SHA256 := Artifact.SHA256;
       Component.EvidencePaths.Add(FCurrentRelativePath);
       FRawComponents.Add(Component);
+      BinaryComponent := Component;
       Artifact.ComponentCount := 1;
       NativeDependencies := TStringList.Create;
       try
@@ -368,6 +548,8 @@ begin
           begin
             Component := uModels.TComponent.Create;
             Component.Name := LinkedLibraryComponentName(
+              NativeDependencies[I]);
+            Component.Version := NativeDependencyVersion(
               NativeDependencies[I]);
             Component.ComponentType := 'library';
             Component.Ecosystem := 'native';
@@ -389,11 +571,17 @@ begin
             if InspectionSummary <> '' then
               Artifact.MessageText := Artifact.MessageText + '; ' +
                 InspectionSummary;
+            if (BinaryComponent <> nil) and
+              (BinaryComponent.Version = '') and
+              (Inspection.ComponentVersion <> '') then
+              BinaryComponent.Version := Inspection.ComponentVersion;
             for I := 0 to Inspection.Dependencies.Count - 1 do
               if NativeDependencies.IndexOf(Inspection.Dependencies[I]) < 0 then
               begin
                 Component := uModels.TComponent.Create;
                 Component.Name := LinkedLibraryComponentName(
+                  Inspection.Dependencies[I]);
+                Component.Version := NativeDependencyVersion(
                   Inspection.Dependencies[I]);
                 Component.ComponentType := 'library';
                 Component.Ecosystem := 'native';

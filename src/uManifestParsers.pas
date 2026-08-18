@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer manifest-parser unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Parses supported package manifests and lock files into conservative component
+  evidence without running package managers or evaluating build scripts.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uManifestParsers;
 
 {$mode objfpc}{$H+}
@@ -7,9 +29,77 @@ interface
 uses
   Classes, SysUtils, Contnrs, uModels, uArtifactIdentifier;
 
+{**
+  Dispatches one recognized artifact to its conservative format parser.
+
+  Parameters
+  ----------
+  AFileName
+    Local file to read.
+  ARelativePath
+    Root-relative evidence path recorded on produced components.
+  AParserKind
+    Parser selected by the artifact-identification unit.
+  AArtifact
+    Artifact record updated with parser status, messages, hash-independent
+    evidence, and component count.
+  AComponents
+    Owned list receiving newly allocated TComponent instances.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+    Format and I/O exceptions are converted into failed artifact status and a
+    diagnostic message.
+}
 procedure ParseArtifact(const AFileName, ARelativePath: string;
   AParserKind: TParserKind; AArtifact: TArtifact; AComponents: TObjectList);
+
+{**
+  Builds a Package URL only when ecosystem, name, and exact version are valid.
+
+  Parameters
+  ----------
+  AEcosystem
+    Package ecosystem such as npm, pypi, maven, or nuget.
+  AName
+    Ecosystem-native package name.
+  AVersion
+    Candidate exact version.
+
+  Returns
+  -------
+  string
+    Percent-encoded purl, or an empty string for unsupported or inexact input.
+
+  Raises
+  ------
+  None
+}
 function BuildPackageURL(const AEcosystem, AName, AVersion: string): string;
+
+{**
+  Determines whether version text denotes one exact resolved version.
+
+  Parameters
+  ----------
+  AVersion
+    Version or constraint text.
+
+  Returns
+  -------
+  Boolean
+    True only when no range, wildcard, variable, URL, or compound constraint is
+    present.
+
+  Raises
+  ------
+  None
+}
 function IsExactVersion(const AVersion: string): Boolean;
 
 implementation
@@ -17,6 +107,25 @@ implementation
 uses
   fpjson, DOM, XMLRead, uJSONUtils;
 
+{**
+  Rejects XML files containing document-type declarations before DOM parsing.
+
+  Parameters
+  ----------
+  AFileName
+    XML manifest to inspect in bounded chunks.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EFOpenError, EReadError
+    Propagated when the manifest cannot be read.
+  Exception
+    Raised when a DOCTYPE declaration is found.
+}
 procedure RejectXMLDocumentTypes(const AFileName: string);
 const
   Marker = '<!DOCTYPE';
@@ -121,6 +230,39 @@ begin
     PercentEncode(AVersion, False);
 end;
 
+{**
+  Creates one component record from parser evidence and appends it to a list.
+
+  Parameters
+  ----------
+  AComponents
+    Owned list that receives the new component.
+  AName
+    Package name; blank names are ignored.
+  AVersion
+    Exact version or unresolved constraint text.
+  AEcosystem
+    Package ecosystem label.
+  ARelativePath
+    Root-relative evidence path.
+  AParser
+    Parser identifier that produced the evidence.
+  AScope
+    Dependency scope such as runtime, development, or resolved.
+  AComponentType
+    CycloneDX component type; defaults to library.
+  APURL
+    Explicit Package URL, or blank to derive one conservatively.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated when the component or its evidence storage cannot be allocated.
+}
 procedure AddComponent(AComponents: TObjectList; const AName, AVersion,
   AEcosystem, ARelativePath, AParser, AScope: string;
   const AComponentType: string = 'library'; const APURL: string = '');
@@ -168,6 +310,27 @@ begin
       AScope);
 end;
 
+{**
+  Parses an npm package.json manifest and its declared dependency sections.
+
+  Parameters
+  ----------
+  AFileName
+    JSON manifest to read.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving parsed project and dependency components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for invalid JSON, an invalid root type, or file I/O failure.
+}
 procedure ParsePackageJSON(const AFileName, ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -232,6 +395,27 @@ begin
   end;
 end;
 
+{**
+  Parses modern and legacy npm package-lock.json dependency layouts.
+
+  Parameters
+  ----------
+  AFileName
+    Lock file to read.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving resolved npm components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for invalid JSON, an invalid root type, or file I/O failure.
+}
 procedure ParsePackageLock(const AFileName, ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -347,6 +531,27 @@ begin
     'requirements-text', 'runtime');
 end;
 
+{**
+  Parses Python requirements text without resolving ranges or direct URLs.
+
+  Parameters
+  ----------
+  AFileName
+    Requirements file to read.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving declared Python components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated when the file cannot be read or a component cannot be allocated.
+}
 procedure ParseRequirements(const AFileName, ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -363,6 +568,27 @@ begin
   end;
 end;
 
+{**
+  Parses direct and block-form Go module requirements.
+
+  Parameters
+  ----------
+  AFileName
+    go.mod file to read.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving Go modules.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated when the file cannot be read or results cannot be allocated.
+}
 procedure ParseGoMod(const AFileName, ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -490,6 +716,27 @@ begin
   end;
 end;
 
+{**
+  Parses dependency elements from a Maven POM after the XML safety check.
+
+  Parameters
+  ----------
+  AFileName
+    Maven XML manifest to read.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving Maven dependencies.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for unsafe or malformed XML and file I/O failures.
+}
 procedure ParseMavenPOM(const AFileName, ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -537,6 +784,31 @@ begin
   end;
 end;
 
+{**
+  Parses NuGet references from MSBuild or central package-management XML.
+
+  Parameters
+  ----------
+  AFileName
+    XML project or package-properties file to read.
+  ARelativePath
+    Root-relative evidence path.
+  AParser
+    Parser identifier stored as component evidence.
+  AComponents
+    Owned list receiving NuGet references.
+  ACentral
+    True for PackageVersion elements; False for PackageReference elements.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for unsafe or malformed XML and file I/O failures.
+}
 procedure ParseMSBuild(const AFileName, ARelativePath, AParser: string;
   AComponents: TObjectList; ACentral: Boolean);
 var

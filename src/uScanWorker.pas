@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer scan-worker unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Runs the scanner away from the LCL thread, queues coalesced progress safely,
+  generates the SBOM, and delivers an owned result to the main window.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uScanWorker;
 
 {$mode objfpc}{$H+}
@@ -21,16 +43,154 @@ type
     FProgressLock: TRTLCriticalSection;
     FOnProgress: TWorkerProgressEvent;
     FOnComplete: TWorkerCompleteEvent;
+    {**
+      Reports whether TThread termination has been requested.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      Boolean
+        True after Cancel or thread termination.
+
+      Raises
+      ------
+      None
+    }
     function CancellationRequested: Boolean;
+
+    {**
+      Captures scanner progress under a lock and queues one UI delivery.
+
+      Parameters
+      ----------
+      AProgress
+        Latest scanner counters and current relative path.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
     procedure EngineProgress(const AProgress: TScanProgress);
+
+    {**
+      Delivers the most recent coalesced progress snapshot on the UI thread.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      Exception
+        Exceptions raised by the assigned OnProgress handler may propagate.
+    }
     procedure DeliverProgress;
+
+    {**
+      Delivers the completed task to the assigned UI-thread callback.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      Exception
+        Exceptions raised by the assigned OnComplete handler may propagate.
+    }
     procedure DeliverCompletion;
+
+    {**
+      Generates, hashes, and atomically persists CycloneDX for FTask.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      EFCreateError, EWriteError, EInOutError
+        Propagated when SBOM generation or atomic persistence fails.
+    }
     procedure GenerateSBOM;
   protected
+    {**
+      Owns the complete background scan/SBOM lifecycle and queues completion.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+        Internal exceptions are converted into failed task state and messages.
+    }
     procedure Execute; override;
   public
+    {**
+      Creates a suspended worker with a private clone of the requested task.
+
+      Parameters
+      ----------
+      ATask
+        Task definition to clone before the caller starts the thread.
+      ADataDirectory
+        Directory in which generated SBOM files are persisted.
+
+      Returns
+      -------
+      TScanWorker
+        Suspended worker owned by the caller.
+
+      Raises
+      ------
+      EAccessViolation
+        Raised when ATask is nil.
+      EOutOfMemory
+        Propagated if the thread, task clone, or lock cannot be initialized.
+    }
     constructor Create(ATask: TScanTask; const ADataDirectory: string);
     destructor Destroy; override;
+
+    {**
+      Requests cooperative cancellation without blocking the caller.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
     procedure Cancel;
     property OnProgress: TWorkerProgressEvent read FOnProgress write FOnProgress;
     property OnComplete: TWorkerCompleteEvent read FOnComplete write FOnComplete;

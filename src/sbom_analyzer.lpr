@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer desktop-application entry point.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Initializes the LCL application, loads the embedded icon and form resources,
+  creates the main window, and enters the native event loop.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 program sbom_analyzer;
 
 {$mode objfpc}{$H+}
@@ -8,6 +30,23 @@ uses
 
 {$R app_icon.res}
 
+{**
+  Loads the embedded MAINICON resource into the LCL application object.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+    A missing or incompatible icon is intentionally ignored so startup can
+    continue on every widgetset.
+}
 procedure LoadApplicationIcon;
 begin
   try

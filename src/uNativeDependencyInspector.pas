@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer native-dependency inspection unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Reads bounded ELF dynamic entries, PE import tables, and Mach-O load commands
+  directly from untrusted binaries without loading or executing them.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uNativeDependencyInspector;
 
 {$mode objfpc}{$H+}
@@ -7,8 +29,52 @@ interface
 uses
   Classes, SysUtils;
 
+{**
+  Extracts direct native-library declarations using bounded static parsing.
+
+  Parameters
+  ----------
+  AFileName
+    PE, ELF, thin Mach-O, or universal Mach-O file to inspect.
+  AFormatName
+    Format previously established by TBinaryInfo.
+  ADependencies
+    Caller-owned list augmented with unique import or load declarations.
+
+  Returns
+  -------
+  Boolean
+    True when at least one new dependency declaration is added.
+
+  Raises
+  ------
+  EFOpenError, EReadError
+    Propagated when the target file cannot be opened or read. Malformed binary
+    structures otherwise return False without executing the target.
+}
 function InspectNativeDependencies(const AFileName, AFormatName: string;
   ADependencies: TStrings): Boolean;
+
+{**
+  Extracts a version only when a native library declaration explicitly uses a
+  recognized versioned-filename convention.
+
+  Parameters
+  ----------
+  ADeclaration
+    Native loader declaration, such as an ELF SONAME or Mach-O install name.
+
+  Returns
+  -------
+  string
+    Numeric dotted version, or an empty string when no unambiguous version is
+    present.
+
+  Raises
+  ------
+  None
+}
+function NativeDependencyVersion(const ADeclaration: string): string;
 
 implementation
 
@@ -20,20 +86,195 @@ const
   MaximumDynamicEntries = 16384;
 
 type
+  {**
+    Random-access reader that range-checks every request against file size.
+
+    Notes
+    -----
+    Scalar methods return False for truncated or out-of-range structures rather
+    than raising parser-specific exceptions. File-open/read exceptions from the
+    underlying TFileStream may still propagate.
+  }
   TBinaryReader = class
   private
     FStream: TFileStream;
   public
+    {**
+      Opens a binary for bounded random-access inspection.
+
+      Parameters
+      ----------
+      AFileName
+        Binary file to open read-only.
+
+      Returns
+      -------
+      TBinaryReader
+        Initialized reader owned by the caller.
+
+      Raises
+      ------
+      EFOpenError
+        Raised when the file cannot be opened.
+    }
     constructor Create(const AFileName: string);
+
+    {**
+      Releases the underlying file stream.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
     destructor Destroy; override;
+
+    {**
+      Returns the opened file size.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      QWord
+        File length in bytes.
+
+      Raises
+      ------
+      None
+    }
     function Size: QWord;
+
+    {**
+      Reads an exact byte range after validating it against the file length.
+
+      Parameters
+      ----------
+      AOffset
+        Zero-based file offset.
+      ABuffer
+        Caller-provided destination buffer.
+      ACount
+        Number of bytes requested.
+
+      Returns
+      -------
+      Boolean
+        True only when the complete in-range request is read.
+
+      Raises
+      ------
+      EStreamError
+        May propagate from an underlying seek or read failure.
+    }
     function ReadBuffer(AOffset: QWord; var ABuffer; ACount: Integer): Boolean;
+
+    {**
+      Reads one endian-aware 16-bit unsigned integer.
+
+      Parameters
+      ----------
+      AOffset
+        Zero-based file offset.
+      ABigEndian
+        Selects big-endian decoding when True.
+      AValue
+        Receives the decoded value on success.
+
+      Returns
+      -------
+      Boolean
+        True when two bytes were available.
+
+      Raises
+      ------
+      EStreamError
+        May propagate from an underlying seek or read failure.
+    }
     function ReadUInt16(AOffset: QWord; ABigEndian: Boolean;
       out AValue: Word): Boolean;
+
+    {**
+      Reads one endian-aware 32-bit unsigned integer.
+
+      Parameters
+      ----------
+      AOffset
+        Zero-based file offset.
+      ABigEndian
+        Selects big-endian decoding when True.
+      AValue
+        Receives the decoded value on success.
+
+      Returns
+      -------
+      Boolean
+        True when four bytes were available.
+
+      Raises
+      ------
+      EStreamError
+        May propagate from an underlying seek or read failure.
+    }
     function ReadUInt32(AOffset: QWord; ABigEndian: Boolean;
       out AValue: UInt32): Boolean;
+
+    {**
+      Reads one endian-aware 64-bit unsigned integer.
+
+      Parameters
+      ----------
+      AOffset
+        Zero-based file offset.
+      ABigEndian
+        Selects big-endian decoding when True.
+      AValue
+        Receives the decoded value on success.
+
+      Returns
+      -------
+      Boolean
+        True when eight bytes were available.
+
+      Raises
+      ------
+      EStreamError
+        May propagate from an underlying seek or read failure.
+    }
     function ReadUInt64(AOffset: QWord; ABigEndian: Boolean;
       out AValue: QWord): Boolean;
+
+    {**
+      Reads a bounded null-terminated dependency name.
+
+      Parameters
+      ----------
+      AOffset
+        Zero-based file offset at the first string byte.
+      AMaximumLength
+        Hard upper bound for the decoded byte string.
+      AValue
+        Receives the decoded string on success.
+
+      Returns
+      -------
+      Boolean
+        True when a terminator is found within the permitted range.
+
+      Raises
+      ------
+      EStreamError
+        May propagate from an underlying seek or read failure.
+    }
     function ReadCString(AOffset: QWord; AMaximumLength: Integer;
       out AValue: string): Boolean;
   end;
@@ -53,6 +294,60 @@ type
   end;
   TLoadSegments = array of TLoadSegment;
   TQWordValues = array of QWord;
+
+function IsNumericDottedVersion(const AValue: string): Boolean;
+var
+  I: Integer;
+  PreviousWasDot: Boolean;
+begin
+  Result := AValue <> '';
+  PreviousWasDot := True;
+  for I := 1 to Length(AValue) do
+  begin
+    if AValue[I] = '.' then
+    begin
+      if PreviousWasDot then
+        Exit(False);
+      PreviousWasDot := True;
+    end
+    else if AValue[I] in ['0'..'9'] then
+      PreviousWasDot := False
+    else
+      Exit(False);
+  end;
+  Result := Result and not PreviousWasDot;
+end;
+
+function NativeDependencyVersion(const ADeclaration: string): string;
+var
+  FileNameValue, LowerName, Stem, Candidate: string;
+  Marker, SeparatorAt: SizeInt;
+begin
+  Result := '';
+  FileNameValue := ExtractFileName(StringReplace(Trim(ADeclaration), '\',
+    DirectorySeparator, [rfReplaceAll]));
+  LowerName := LowerCase(FileNameValue);
+  Candidate := '';
+
+  Marker := Pos('.so.', LowerName);
+  if Marker > 0 then
+    Candidate := Copy(FileNameValue, Marker + Length('.so.'), MaxInt)
+  else if (Length(LowerName) > Length('.dylib')) and
+    (Copy(LowerName, Length(LowerName) - Length('.dylib') + 1,
+      MaxInt) = '.dylib') then
+  begin
+    Stem := Copy(FileNameValue, 1, Length(FileNameValue) - Length('.dylib'));
+    SeparatorAt := LastDelimiter('.', Stem);
+    if SeparatorAt > 0 then
+      Candidate := Copy(Stem, SeparatorAt + 1, MaxInt);
+  end;
+  { DLL suffixes are deliberately not interpreted. Names such as
+    api-ms-win-core-file-l1-1-0.dll contain numeric tokens that are not a
+    component version; the Windows version-resource API is authoritative. }
+
+  if IsNumericDottedVersion(Candidate) then
+    Result := Candidate;
+end;
 
 constructor TBinaryReader.Create(const AFileName: string);
 begin
@@ -255,6 +550,26 @@ begin
   end;
 end;
 
+{**
+  Reads PE normal and delay-load import descriptors.
+
+  Parameters
+  ----------
+  AReader
+    Range-checking reader positioned logically at the complete PE file.
+  ADependencies
+    List augmented with unique DLL declarations.
+
+  Returns
+  -------
+  Boolean
+    True when at least one dependency is added.
+
+  Raises
+  ------
+  None
+    Malformed offsets, headers, and descriptors return False.
+}
 function InspectPEDependencies(AReader: TBinaryReader;
   ADependencies: TStrings): Boolean;
 var
@@ -346,6 +661,30 @@ begin
   Result := ADependencies.Count > InitialCount;
 end;
 
+{**
+  Reads load-dylib commands from one bounded thin Mach-O slice.
+
+  Parameters
+  ----------
+  AReader
+    Reader for the containing file.
+  ABaseOffset
+    Slice start offset.
+  ASliceSize
+    Maximum bytes belonging to the slice.
+  ADependencies
+    List augmented with unique dylib install names.
+
+  Returns
+  -------
+  Boolean
+    True when at least one load declaration is added.
+
+  Raises
+  ------
+  None
+    Invalid command tables return False.
+}
 function ParseMachSlice(AReader: TBinaryReader; ABaseOffset, ASliceSize: QWord;
   ADependencies: TStrings): Boolean;
 const
@@ -412,6 +751,26 @@ begin
   Result := ADependencies.Count > InitialCount;
 end;
 
+{**
+  Dispatches thin or universal Mach-O dependency-table parsing.
+
+  Parameters
+  ----------
+  AReader
+    Reader for the complete Mach-O file.
+  ADependencies
+    List augmented across all valid architecture slices.
+
+  Returns
+  -------
+  Boolean
+    True when at least one dylib declaration is added.
+
+  Raises
+  ------
+  None
+    Malformed fat headers or slices return False.
+}
 function InspectMachDependencies(AReader: TBinaryReader;
   ADependencies: TStrings): Boolean;
 var
@@ -463,6 +822,26 @@ begin
   Result := ADependencies.Count > InitialCount;
 end;
 
+{**
+  Maps an ELF dynamic string table and reads bounded DT_NEEDED entries.
+
+  Parameters
+  ----------
+  AReader
+    Reader for a 32-bit or 64-bit, little- or big-endian ELF file.
+  ADependencies
+    List augmented with unique shared-object declarations.
+
+  Returns
+  -------
+  Boolean
+    True when at least one dependency is added.
+
+  Raises
+  ------
+  None
+    Unsupported, truncated, extended, or malformed structures return False.
+}
 function InspectELFDependencies(AReader: TBinaryReader;
   ADependencies: TStrings): Boolean;
 var

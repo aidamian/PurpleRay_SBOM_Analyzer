@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer platform-services unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Supplies the application-data location and migration, canonical path checks,
+  symbolic-link detection, durable flushing, and portable file copying.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uPlatform;
 
 {$mode objfpc}{$H+}
@@ -7,14 +29,165 @@ interface
 uses
   Classes, SysUtils;
 
+{**
+  Returns the canonical per-user application-data directory, creating it once.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  string
+    The ~/.sbom-analyzer path without a trailing separator.
+
+  Raises
+  ------
+  None
+    Creation or migration problems are retained as a startup warning.
+}
 function ApplicationDataDirectory: string;
+
+{**
+  Returns the cached warning produced while locating or migrating app data.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  string
+    Empty on success, otherwise a user-facing diagnostic.
+
+  Raises
+  ------
+  None
+}
 function ApplicationDataMigrationWarning: string;
+
+{**
+  Moves an older application-data tree into the requested destination.
+
+  Parameters
+  ----------
+  ASource
+    Existing legacy directory; a missing directory is treated as success.
+  ADestination
+    New application-data directory.
+  AWarning
+    Receives a detailed partial-migration or cleanup warning.
+
+  Returns
+  -------
+  Boolean
+    True when no legacy data remains to be migrated.
+
+  Raises
+  ------
+  None
+    File-operation failures are converted to False and AWarning.
+}
 function MigrateApplicationDataDirectory(const ASource, ADestination: string;
   out AWarning: string): Boolean;
+
+{**
+  Resolves a filesystem path as far as the host OS permits.
+
+  Parameters
+  ----------
+  APath
+    Existing or prospective filesystem path.
+
+  Returns
+  -------
+  string
+    Canonical absolute path, or an expanded fallback when resolution fails.
+
+  Raises
+  ------
+  None
+}
 function CanonicalPath(const APath: string): string;
+
+{**
+  Tests whether a canonical path is equal to or beneath a canonical root.
+
+  Parameters
+  ----------
+  APath
+    Candidate path.
+  ARoot
+    Permitted root directory.
+
+  Returns
+  -------
+  Boolean
+    True for the root itself or one of its descendants.
+
+  Raises
+  ------
+  None
+}
 function PathIsWithin(const APath, ARoot: string): Boolean;
+
+{**
+  Detects Unix symbolic links or Windows reparse points.
+
+  Parameters
+  ----------
+  APath
+    Filesystem entry to inspect without following it.
+
+  Returns
+  -------
+  Boolean
+    True when the entry is link-like on the current platform.
+
+  Raises
+  ------
+  None
+}
 function IsSymbolicLink(const APath: string): Boolean;
+
+{**
+  Forces buffered file data to stable operating-system storage.
+
+  Parameters
+  ----------
+  AStream
+    Open TFileStream to flush; nil is accepted.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EWriteError, EOSError
+    Raised when fsync or FlushFileBuffers reports failure.
+}
 procedure FlushFileStream(AStream: TFileStream);
+
+{**
+  Copies a file byte-for-byte and flushes the destination before returning.
+
+  Parameters
+  ----------
+  ASource
+    Existing source filename.
+  ADestination
+    Destination filename to create or replace.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EFOpenError, EFCreateError, EReadError, EWriteError
+    Propagated from source access, copying, destination creation, or flushing.
+}
 procedure CopyFileContents(const ASource, ADestination: string);
 
 implementation
@@ -40,6 +213,28 @@ var
   CachedApplicationDataDirectory: string = '';
   CachedMigrationWarning: string = '';
 
+{**
+  Recursively moves application-data contents without overwriting collisions.
+
+  Parameters
+  ----------
+  ASource
+    Existing directory whose contents should be migrated.
+  ADestination
+    New application-data directory.
+  AError
+    Receives a human-readable failure reason.
+
+  Returns
+  -------
+  Boolean
+    True only when every entry is copied and removed from its source.
+
+  Raises
+  ------
+  None
+    Copy and deletion failures are converted into False and AError.
+}
 function MoveDirectoryContents(const ASource, ADestination: string;
   out AError: string): Boolean;
 var
@@ -90,7 +285,9 @@ begin
               Exit;
             end;
           end;
-          if not DeleteFile(SourceName) then
+          { Windows.pas declares a PChar DeleteFile which otherwise shadows
+            the cross-platform SysUtils overload on Win64. }
+          if not SysUtils.DeleteFile(SourceName) then
           begin
             AError := 'unable to remove migrated file ' + SourceName;
             Exit;
@@ -100,7 +297,9 @@ begin
       FindResult := FindNext(SearchRecord);
     end;
   finally
-    FindClose(SearchRecord);
+    { Qualify this call because Windows.pas also exports FindClose for search
+      handles, with an incompatible parameter type. }
+    SysUtils.FindClose(SearchRecord);
   end;
   Result := True;
 end;

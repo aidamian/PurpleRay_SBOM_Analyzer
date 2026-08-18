@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer ignore-pattern unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Normalizes relative paths and evaluates exact-name, wildcard, and relative
+  path ignore rules used during recursive scanning.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uIgnoreMatcher;
 
 {$mode objfpc}{$H+}
@@ -7,9 +29,70 @@ interface
 uses
   Classes, SysUtils;
 
+{**
+  Normalizes separators and removes leading relative-path decoration.
+
+  Parameters
+  ----------
+  APath
+    Relative path in platform or portable notation.
+
+  Returns
+  -------
+  string
+    Slash-separated path without leading ./ or / characters.
+
+  Raises
+  ------
+  None
+}
 function NormalizeRelativePath(const APath: string): string;
+
+{**
+  Matches a string against a simple asterisk/question-mark wildcard pattern.
+
+  Parameters
+  ----------
+  APattern
+    Pattern containing literal characters, * and ? wildcards.
+  AValue
+    Candidate value.
+  ACaseSensitive
+    Controls whether character comparisons preserve case.
+
+  Returns
+  -------
+  Boolean
+    True when the complete value matches the complete pattern.
+
+  Raises
+  ------
+  None
+}
 function WildcardMatches(const APattern, AValue: string;
   ACaseSensitive: Boolean = True): Boolean;
+
+{**
+  Applies configured ignore rules to a root-relative filesystem entry.
+
+  Parameters
+  ----------
+  ARelativePath
+    Root-relative path to test.
+  AIsDirectory
+    True when the entry is a directory, enabling directory-name rules.
+  APatterns
+    Editable exact, wildcard, or relative-path patterns.
+
+  Returns
+  -------
+  Boolean
+    True when any pattern excludes the entry.
+
+  Raises
+  ------
+  None
+}
 function ShouldIgnorePath(const ARelativePath: string; AIsDirectory: Boolean;
   APatterns: TStrings): Boolean;
 

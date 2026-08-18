@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer time-and-size formatting unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Creates UTC timestamps, calculates elapsed milliseconds, and formats elapsed
+  time and byte counts for stable persistence and readable UI output.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uTimeUtils;
 
 {$mode objfpc}{$H+}
@@ -7,9 +29,82 @@ interface
 uses
   SysUtils;
 
+{**
+  Produces the current UTC time in millisecond ISO-8601 notation.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  string
+    Timestamp such as 2026-08-18T14:32:05.123Z.
+
+  Raises
+  ------
+  None
+}
 function UTCNowISO8601: string;
+
+{**
+  Calculates elapsed milliseconds between two persisted UTC timestamps.
+
+  Parameters
+  ----------
+  AStartUTC
+    ISO-8601 start time.
+  AEndUTC
+    ISO-8601 end time.
+
+  Returns
+  -------
+  Int64
+    Non-negative elapsed milliseconds, or zero for invalid input.
+
+  Raises
+  ------
+  None
+    Parse failures are converted to zero.
+}
 function DurationMilliseconds(const AStartUTC, AEndUTC: string): Int64;
+
+{**
+  Formats a millisecond duration for compact UI display.
+
+  Parameters
+  ----------
+  AMilliseconds
+    Duration to format.
+
+  Returns
+  -------
+  string
+    Human-readable milliseconds, seconds, or minutes/seconds text.
+
+  Raises
+  ------
+  None
+}
 function FormatDuration(AMilliseconds: Int64): string;
+
+{**
+  Formats a byte count using binary KiB, MiB, and GiB units.
+
+  Parameters
+  ----------
+  ABytes
+    Byte count to format.
+
+  Returns
+  -------
+  string
+    Compact human-readable size.
+
+  Raises
+  ------
+  None
+}
 function FormatByteSize(ABytes: Int64): string;
 
 implementation

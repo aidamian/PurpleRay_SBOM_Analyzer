@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer export-support unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Builds portable export filenames and packages the complete persisted task
+  database and generated results into a single ZIP archive.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uExportUtils;
 
 {$mode objfpc}{$H+}
@@ -7,9 +29,84 @@ interface
 uses
   SysUtils, uModels;
 
+{**
+  Converts arbitrary display text into a portable filename component.
+
+  Parameters
+  ----------
+  AValue
+    Folder name or label to sanitize.
+
+  Returns
+  -------
+  string
+    A non-empty component with reserved characters and repeated separators
+    replaced; the fallback value is "scan".
+
+  Raises
+  ------
+  None
+}
 function SafeFileNamePart(const AValue: string): string;
+
+{**
+  Builds the suggested timestamp/folder/task filename for one SBOM export.
+
+  Parameters
+  ----------
+  ATask
+    Task supplying creation time, target-root name, and identifier; nil is
+    accepted for the generic fallback.
+
+  Returns
+  -------
+  string
+    Suggested .cdx.json filename.
+
+  Raises
+  ------
+  None
+}
 function TaskSBOMExportFileName(ATask: TScanTask): string;
+
+{**
+  Builds a timestamped filename for a complete database backup archive.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  string
+    Suggested ZIP filename using local export time.
+
+  Raises
+  ------
+  None
+}
 function DatabaseArchiveFileName: string;
+
+{**
+  Archives all stable persisted application data beneath one portable ZIP root.
+
+  Parameters
+  ----------
+  ADataDirectory
+    Application-data directory to traverse recursively.
+  ADestination
+    Final ZIP filename; a temporary sibling is used during creation.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EInOutError, EZipError
+    Raised for missing data, unsafe replacement failures, or ZIP creation
+    errors. Temporary output is removed before the exception propagates.
+}
 procedure ExportDatabaseArchive(const ADataDirectory, ADestination: string);
 
 implementation
@@ -73,6 +170,30 @@ begin
     FormatDateTime('yyyymmdd_hhnnss', Now) + '.zip';
 end;
 
+{**
+  Recursively collects stable database files for deterministic ZIP creation.
+
+  Parameters
+  ----------
+  ARoot
+    Application-data root used to derive portable archive entry names.
+  ADirectory
+    Directory currently being enumerated.
+  ASkipFile
+    Absolute destination archive path, which must not include itself.
+  AFiles
+    String list receiving archive-name and disk-name pairs.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+    Unreadable directories simply contribute no entries; allocation failures
+    may propagate from the supplied string list.
+}
 procedure CollectDatabaseFiles(const ARoot, ADirectory, ASkipFile: string;
   AFiles: TStrings);
 var

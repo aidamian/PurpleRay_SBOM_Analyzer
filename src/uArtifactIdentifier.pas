@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer artifact-identification unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Classifies filenames as supported manifests, locks, binaries, or license
+  evidence and selects the parser responsible for each artifact.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uArtifactIdentifier;
 
 {$mode objfpc}{$H+}
@@ -45,8 +67,48 @@ type
     PartialParser: Boolean;
   end;
 
+{**
+  Identifies the parser and evidence type applicable to a filesystem entry.
+
+  Parameters
+  ----------
+  AFileName
+    Absolute or local filename used for content and extension checks.
+  ARelativePath
+    Root-relative path used for path-sensitive manifest recognition.
+  ADefinition
+    Receives the detected artifact type, ecosystem, parser, and parser mode.
+
+  Returns
+  -------
+  Boolean
+    True when the file is recognized as a supported or reportable artifact.
+
+  Raises
+  ------
+  None
+    Recognition failures are represented by False.
+}
 function IdentifyArtifact(const AFileName, ARelativePath: string;
   out ADefinition: TArtifactDefinition): Boolean;
+
+{**
+  Tests whether a filename is a conventional license-evidence filename.
+
+  Parameters
+  ----------
+  AFileName
+    Filename or path whose final component is inspected case-insensitively.
+
+  Returns
+  -------
+  Boolean
+    True for LICENSE, COPYING, NOTICE, and their supported variants.
+
+  Raises
+  ------
+  None
+}
 function IsLicenseEvidenceFile(const AFileName: string): Boolean;
 
 implementation

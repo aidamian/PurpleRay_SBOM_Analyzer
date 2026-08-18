@@ -185,6 +185,13 @@ without guessing; otherwise the artifact is marked unsupported. `LICENSE`,
 `COPYING`, and `NOTICE` variants are recorded only as possible license
 evidence—no license is inferred from a filename.
 
+Component versions are written to CycloneDX whenever the scanned evidence
+actually supplies one: resolved lock-file versions, declared manifest versions,
+numeric ELF SONAME or Mach-O library-name versions, ELF SONAME evidence, and
+Windows PE version resources. An unversioned import such as `kernel32.dll` has
+no defensible component version, so its `version` member is intentionally
+omitted rather than filled with a guessed or misleading value.
+
 For native binaries, bounded internal parsing is the portable baseline. It
 reads ELF `DT_NEEDED` entries, PE import and delay-import tables, and Mach-O
 load-dylib commands without loading or executing the target. The scanner then

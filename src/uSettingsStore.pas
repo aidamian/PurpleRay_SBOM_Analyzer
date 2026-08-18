@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer settings-persistence unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Loads and atomically saves the user's last scan settings with safe defaults
+  and non-fatal recovery from malformed JSON.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uSettingsStore;
 
 {$mode objfpc}{$H+}
@@ -13,8 +35,64 @@ type
     FDataDirectory: string;
     function GetFileName: string;
   public
+    {**
+      Creates a settings store rooted at an explicit or default data directory.
+
+      Parameters
+      ----------
+      ADataDirectory
+        Override directory; an empty value selects ApplicationDataDirectory.
+
+      Returns
+      -------
+      TSettingsStore
+        Newly configured store.
+
+      Raises
+      ------
+      None
+    }
     constructor Create(const ADataDirectory: string = '');
+
+    {**
+      Atomically persists scan settings as versioned JSON.
+
+      Parameters
+      ----------
+      ASettings
+        Settings instance to serialize.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      EAccessViolation
+        Raised when ASettings is nil.
+      EFCreateError, EWriteError, EInOutError
+        Propagated by atomic persistence.
+    }
     procedure Save(ASettings: TScanSettings);
+
+    {**
+      Loads persisted settings or returns safe defaults with a warning.
+
+      Parameters
+      ----------
+      AWarning
+        Receives a non-fatal parse or file-access diagnostic.
+
+      Returns
+      -------
+      TScanSettings
+        Newly allocated loaded or default settings owned by the caller.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if a settings object cannot be allocated.
+    }
     function Load(out AWarning: string): TScanSettings;
     property FileName: string read GetFileName;
   end;

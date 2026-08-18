@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer SHA-256 unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Implements incremental SHA-256 hashing for memory strings and files with
+  cooperative cancellation and progress reporting.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uSHA256;
 
 {$mode objfpc}{$H+}{$Q-}
@@ -11,7 +33,49 @@ type
   TCancelCheck = function: Boolean of object;
   THashProgress = procedure(ABytesRead: Int64) of object;
 
+{**
+  Calculates SHA-256 over the exact bytes of a raw string.
+
+  Parameters
+  ----------
+  AValue
+    Byte string to hash; text encoding is not altered.
+
+  Returns
+  -------
+  string
+    Lowercase 64-character hexadecimal digest.
+
+  Raises
+  ------
+  None
+}
 function SHA256String(const AValue: RawByteString): string;
+
+{**
+  Calculates SHA-256 for a file with cancellation and progress callbacks.
+
+  Parameters
+  ----------
+  AFileName
+    File to open and hash sequentially.
+  ADigest
+    Receives the lowercase digest on success, or an empty string on cancel.
+  ACancelCheck
+    Optional callback polled between input chunks.
+  AProgress
+    Optional callback receiving cumulative bytes read.
+
+  Returns
+  -------
+  Boolean
+    True when the entire file was hashed; False when cancellation was requested.
+
+  Raises
+  ------
+  EFOpenError, EReadError
+    Propagated when the file cannot be opened or read.
+}
 function SHA256File(const AFileName: string; out ADigest: string;
   ACancelCheck: TCancelCheck = nil; AProgress: THashProgress = nil): Boolean;
 

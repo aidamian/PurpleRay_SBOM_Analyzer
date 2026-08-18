@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer domain-model unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Defines scan settings, artifacts, components, task state, status conversions,
+  cloning rules, and their persistent JSON representation.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uModels;
 
 {$mode objfpc}{$H+}
@@ -18,13 +40,135 @@ type
     AllowOutsideRoot: Boolean;
     CalculateSHA256: Boolean;
     IgnorePatterns: TStringList;
+    {**
+      Creates settings and installs the safe default ignore policy.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      TScanSettings
+        Newly initialized settings object.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if the ignore-pattern list cannot be allocated.
+    }
     constructor Create;
     destructor Destroy; override;
+
+    {**
+      Restores all Boolean options and ignore patterns to product defaults.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
     procedure ResetDefaults;
+
+    {**
+      Copies all scan options and ignore patterns from another instance.
+
+      Parameters
+      ----------
+      ASource
+        Settings to copy; nil leaves the receiver unchanged.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
     procedure Assign(ASource: TScanSettings);
+
+    {**
+      Creates an independent deep copy of these settings.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      TScanSettings
+        Newly allocated clone owned by the caller.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if the clone cannot be allocated.
+    }
     function Clone: TScanSettings;
+
+    {**
+      Serializes scan options and ignore patterns.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      TJSONObject
+        Newly allocated JSON object owned by the caller.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if JSON nodes cannot be allocated.
+    }
     function ToJSON: TJSONObject;
+
+    {**
+      Constructs settings from JSON while retaining defaults for absent fields.
+
+      Parameters
+      ----------
+      AObject
+        Source JSON object; nil produces default settings.
+
+      Returns
+      -------
+      TScanSettings
+        Newly allocated settings owned by the caller.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if the settings object cannot be allocated.
+    }
     class function FromJSON(AObject: TJSONObject): TScanSettings; static;
+
+    {**
+      Formats all active settings into one readable summary line.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      string
+        Human-readable settings summary.
+
+      Raises
+      ------
+      None
+    }
     function AsSummary: string;
   end;
 
@@ -40,8 +184,63 @@ type
     SHA256: string;
     MessageText: string;
     ComponentCount: Integer;
+    {**
+      Creates an independent copy of this artifact record.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      TArtifact
+        Newly allocated clone owned by the caller.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if allocation fails.
+    }
     function Clone: TArtifact;
+
+    {**
+      Serializes artifact evidence, optionally including its absolute path.
+
+      Parameters
+      ----------
+      AIncludeAbsolutePath
+        Controls whether local absolute-path data is persisted in this object.
+
+      Returns
+      -------
+      TJSONObject
+        Newly allocated JSON object owned by the caller.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if JSON allocation fails.
+    }
     function ToJSON(AIncludeAbsolutePath: Boolean): TJSONObject;
+
+    {**
+      Constructs an artifact record from persisted JSON.
+
+      Parameters
+      ----------
+      AObject
+        Source JSON object.
+
+      Returns
+      -------
+      TArtifact
+        Newly allocated artifact owned by the caller.
+
+      Raises
+      ------
+      EAccessViolation
+        Raised when AObject is nil; callers must pass a valid object.
+    }
     class function FromJSON(AObject: TJSONObject): TArtifact; static;
   end;
 
@@ -57,10 +256,82 @@ type
     DependencyScope: string;
     SHA256: string;
     EvidencePaths: TStringList;
+    {**
+      Creates a component with an owned, sorted evidence-path collection.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      TComponent
+        Newly initialized component.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if allocation fails.
+    }
     constructor Create;
     destructor Destroy; override;
+
+    {**
+      Creates a deep copy including all evidence paths.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      TComponent
+        Newly allocated clone owned by the caller.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if allocation fails.
+    }
     function Clone: TComponent;
+
+    {**
+      Serializes component identity, provenance, scope, and evidence paths.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      TJSONObject
+        Newly allocated JSON object owned by the caller.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if JSON allocation fails.
+    }
     function ToJSON: TJSONObject;
+
+    {**
+      Constructs a component and its evidence collection from JSON.
+
+      Parameters
+      ----------
+      AObject
+        Source JSON object.
+
+      Returns
+      -------
+      TComponent
+        Newly allocated component owned by the caller.
+
+      Raises
+      ------
+      EAccessViolation
+        Raised when AObject is nil.
+    }
     class function FromJSON(AObject: TJSONObject): TComponent; static;
   end;
 
@@ -92,18 +363,201 @@ type
     ScannerCommit: string;
     Artifacts: TObjectList;
     Components: TObjectList;
+    {**
+      Creates a pending scan task with a fresh UUID and owned child collections.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      TScanTask
+        Newly initialized task.
+
+      Raises
+      ------
+      Exception
+        Raised when a unique task identifier cannot be generated.
+      EOutOfMemory
+        Propagated when child collections cannot be allocated.
+    }
     constructor Create;
     destructor Destroy; override;
+
+    {**
+      Deep-copies task state, settings, messages, artifacts, and components.
+
+      Parameters
+      ----------
+      ASource
+        Source task; nil leaves the receiver unchanged.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if a child clone cannot be allocated.
+    }
     procedure Assign(ASource: TScanTask);
+
+    {**
+      Creates an independent deep copy of the complete task.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      TScanTask
+        Newly allocated clone owned by the caller.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if allocation fails.
+    }
     function Clone: TScanTask;
+
+    {**
+      Serializes the complete persistent task-history representation.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      TJSONObject
+        Newly allocated JSON object owned by the caller.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if JSON or child-node allocation fails.
+    }
     function ToJSON: TJSONObject;
+
+    {**
+      Reconstructs a task and all owned children from persisted JSON.
+
+      Parameters
+      ----------
+      AObject
+        Source task object.
+
+      Returns
+      -------
+      TScanTask
+        Newly allocated task owned by the caller.
+
+      Raises
+      ------
+      EAccessViolation
+        Raised when AObject is nil.
+      EOutOfMemory
+        Propagated if task or child allocation fails.
+    }
     class function FromJSON(AObject: TJSONObject): TScanTask; static;
   end;
 
+{**
+  Converts a task-status enumeration to its stable persisted spelling.
+
+  Parameters
+  ----------
+  AStatus
+    Status value to convert.
+
+  Returns
+  -------
+  string
+    Lowercase persisted status name.
+
+  Raises
+  ------
+  None
+}
 function TaskStatusToString(AStatus: TTaskStatus): string;
+
+{**
+  Parses a persisted task-status spelling, defaulting to pending.
+
+  Parameters
+  ----------
+  AValue
+    Status text.
+
+  Returns
+  -------
+  TTaskStatus
+    Matching status or tsPending for unknown input.
+
+  Raises
+  ------
+  None
+}
 function StringToTaskStatus(const AValue: string): TTaskStatus;
+
+{**
+  Converts an artifact-status enumeration to its user-facing spelling.
+
+  Parameters
+  ----------
+  AStatus
+    Artifact status to convert.
+
+  Returns
+  -------
+  string
+    Stable human-readable status.
+
+  Raises
+  ------
+  None
+}
 function ArtifactStatusToString(AStatus: TArtifactStatus): string;
+
+{**
+  Parses artifact-status text, defaulting to unsupported evidence.
+
+  Parameters
+  ----------
+  AValue
+    Status text.
+
+  Returns
+  -------
+  TArtifactStatus
+    Matching status or arsUnsupported for unknown input.
+
+  Raises
+  ------
+  None
+}
 function StringToArtifactStatus(const AValue: string): TArtifactStatus;
+
+{**
+  Creates a lowercase UUID suitable for task identity and CycloneDX serials.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  string
+    UUID without surrounding braces.
+
+  Raises
+  ------
+  Exception
+    Raised when the operating system cannot create a GUID.
+}
 function NewTaskID: string;
 
 implementation

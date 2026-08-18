@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer CycloneDX serialization unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Converts a completed scan task into deterministic, path-conscious CycloneDX
+  1.6 JSON with scanner and evidence metadata.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uCycloneDX;
 
 {$mode objfpc}{$H+}
@@ -7,6 +29,26 @@ interface
 uses
   SysUtils, uModels;
 
+{**
+  Serializes a scan task as deterministic CycloneDX 1.6 JSON.
+
+  Parameters
+  ----------
+  ATask
+    Completed or partial task whose metadata and components are serialized.
+
+  Returns
+  -------
+  UTF8String
+    Pretty-printed CycloneDX JSON with normalized line endings.
+
+  Raises
+  ------
+  EAccessViolation
+    Raised if ATask is nil; callers must supply a valid task.
+  EJSON
+    May propagate if JSON object construction fails.
+}
 function GenerateCycloneDX(ATask: TScanTask): UTF8String;
 
 implementation
@@ -98,6 +140,28 @@ begin
   end;
 end;
 
+{**
+  Converts one normalized component into a CycloneDX component object.
+
+  Parameters
+  ----------
+  ATask
+    Task supplying path-export policy.
+  AComponent
+    Normalized component to serialize.
+
+  Returns
+  -------
+  TJSONObject
+    Newly allocated CycloneDX component owned by the caller JSON tree.
+
+  Raises
+  ------
+  EAccessViolation
+    Raised when ATask or AComponent is nil.
+  EOutOfMemory
+    Propagated if JSON allocation fails.
+}
 function BuildCycloneComponent(ATask: TScanTask;
   AComponent: uModels.TComponent): TJSONObject;
 var
@@ -145,6 +209,25 @@ begin
   end;
 end;
 
+{**
+  Adds deterministic, path-policy-aware artifact evidence to SBOM metadata.
+
+  Parameters
+  ----------
+  ATask
+    Task containing artifacts and export settings.
+  AProperties
+    Metadata property array to augment.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EAccessViolation
+    Raised when arguments are nil or contain incompatible objects.
+}
 procedure AddArtifactProperties(ATask: TScanTask; AProperties: TJSONArray);
 var
   Sorted: TArtifactReferenceList;

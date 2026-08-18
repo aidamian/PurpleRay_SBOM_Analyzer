@@ -1,3 +1,25 @@
+(**
+  SBOM Analyzer native-binary header unit.
+
+  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
+  author's copyright and attribution rights are retained.
+
+  Description
+  -----------
+  Detects PE, ELF, thin Mach-O, and universal Mach-O files and reports their
+  architecture and broad binary classification without executing them.
+
+  Citation requirement
+  --------------------
+  Derivative works must retain this notice and cite the project as follows:
+
+  @misc{damian2026sbomanalyzer,
+    author = {Andrei Ionut Damian},
+    title  = {{SBOM Analyzer}},
+    year   = {2026},
+    url    = {https://github.com/aidamian/SBOM_Analyzer}
+  }
+*)
 unit uBinaryInspector;
 
 {$mode objfpc}{$H+}
@@ -14,6 +36,26 @@ type
     Classification: string;
   end;
 
+{**
+  Inspects a binary header without loading or executing the target.
+
+  Parameters
+  ----------
+  AFileName
+    File to open and inspect.
+  AInfo
+    Receives the format, architecture, and binary classification.
+
+  Returns
+  -------
+  Boolean
+    True when a PE, ELF, Mach-O, or universal Mach-O header is recognized.
+
+  Raises
+  ------
+  EFOpenError, EReadError
+    Propagated when the file cannot be opened or its header cannot be read.
+}
 function InspectBinary(const AFileName: string; out AInfo: TBinaryInfo): Boolean;
 
 implementation
@@ -89,6 +131,27 @@ begin
   end;
 end;
 
+{**
+  Recognizes a PE header and maps its machine and DLL characteristics.
+
+  Parameters
+  ----------
+  Buffer
+    Initial file bytes.
+  Count
+    Number of valid bytes in Buffer.
+  AInfo
+    Receives PE metadata on success.
+
+  Returns
+  -------
+  Boolean
+    True for a structurally recognizable PE header.
+
+  Raises
+  ------
+  None
+}
 function InspectPE(const Buffer: array of Byte; Count: Integer;
   out AInfo: TBinaryInfo): Boolean;
 var
@@ -114,6 +177,29 @@ begin
   Result := True;
 end;
 
+{**
+  Recognizes an ELF header and maps machine, type, and filename hints.
+
+  Parameters
+  ----------
+  Buffer
+    Initial file bytes.
+  Count
+    Number of valid bytes in Buffer.
+  AFileName
+    Filename used only to distinguish shared-object naming.
+  AInfo
+    Receives ELF metadata on success.
+
+  Returns
+  -------
+  Boolean
+    True for a recognizable ELF header.
+
+  Raises
+  ------
+  None
+}
 function InspectELF(const Buffer: array of Byte; Count: Integer;
   const AFileName: string; out AInfo: TBinaryInfo): Boolean;
 var
@@ -149,6 +235,27 @@ begin
   Result := True;
 end;
 
+{**
+  Recognizes thin and universal Mach-O headers without parsing load commands.
+
+  Parameters
+  ----------
+  Buffer
+    Initial file bytes.
+  Count
+    Number of valid bytes in Buffer.
+  AInfo
+    Receives Mach-O metadata on success.
+
+  Returns
+  -------
+  Boolean
+    True for a recognizable Mach-O magic and header.
+
+  Raises
+  ------
+  None
+}
 function InspectMachO(const Buffer: array of Byte; Count: Integer;
   out AInfo: TBinaryInfo): Boolean;
 var
