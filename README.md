@@ -237,18 +237,20 @@ scripts/regenerate-icon-resource.sh
 ## CI and releases
 
 `.github/workflows/build-release.yml` currently tests and builds the Windows and
-Linux targets on `windows-latest` and `ubuntu-latest`. The macOS matrix entry is
+Linux targets on `windows-latest` and pinned `ubuntu-24.04`. The macOS matrix entry is
 retained as a commented block in the workflow and is temporarily paused to
 conserve GitHub Actions minutes. Builds use FPC 3.2.2 and Lazarus 4.2 from the
 official SourceForge release files. The maintained
 [`ollydev/setup-lazarus`](https://github.com/ollydev/setup-lazarus) setup action
-is pinned to an immutable commit and is used only during builds; it introduces
-no runtime dependency. Official GitHub artifact and checkout actions are pinned
-as well. When re-enabled, the macOS job uses GitHub's Intel runner and explicitly
-compiles and verifies an x86_64 application. Newer runs cancel obsolete runs,
-and preparation, dependency installation, builds, and publishing have bounded
-timeouts so a stalled hosted runner cannot consume minutes indefinitely.
-Markdown-only changes do not start the native build matrix.
+is pinned to an immutable commit and currently provisions Windows only; it
+introduces no runtime dependency. Linux restores checksum-verified official
+installers from the GitHub Actions cache and uses one bounded APT setup with a
+signed fallback mirror. Official GitHub cache, artifact, and checkout actions
+are pinned as well. When re-enabled, the macOS job uses GitHub's Intel runner and
+explicitly compiles and verifies an x86_64 application. Newer runs cancel
+obsolete runs, and preparation, dependency installation, builds, and publishing
+have bounded timeouts so a stalled hosted runner cannot consume minutes
+indefinitely. Markdown-only changes do not start the native build matrix.
 
 Pull requests get a `MAJOR.MINOR.PATCH-dev.<commit>` version, run all tests, and
 upload temporary packages without tags or releases. Pushes to `main` serialize
@@ -260,13 +262,13 @@ release work, inspect conventional commit subjects since the latest reachable
 - `fix!:` / `feat!:` / `BREAKING CHANGE:` → major
 - no recognized prefix → patch
 
-After the native build matrix finishes, the workflow creates the tag and
-publishes every platform package whose own tests and build succeeded, together
-with `SHA256SUMS.txt`. A failed platform keeps the workflow marked as failed but
-does not withhold successful Windows, Linux, or macOS downloads. If the current
-commit is already version-tagged, that version is reused. Manual runs rebuild
-without publishing by default; publishing must be selected explicitly. Existing
-tags and releases are verified and updated idempotently instead of duplicated.
+After every active native build succeeds, the workflow creates the tag and
+publishes the complete platform set together with `SHA256SUMS.txt`. Any failed
+platform keeps the workflow marked as failed and prevents a partial release. If
+the current commit is already version-tagged, that version is reused. Manual
+runs rebuild without publishing by default; publishing must be selected
+explicitly. Existing tags and releases are verified and updated idempotently
+instead of duplicated.
 
 ## Citation and copyright
 

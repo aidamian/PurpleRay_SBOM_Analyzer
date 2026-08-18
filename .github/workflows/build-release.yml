@@ -87,7 +87,7 @@ jobs:
             fpc_url: ''
           - name: Linux x64 / GTK3
             id: linux
-            os: ubuntu-latest
+            os: ubuntu-24.04
             widgetset: gtk3
             package_suffix: linux-x64
             use_cache: 'true'
@@ -113,18 +113,132 @@ jobs:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - name: Install Linux GTK3 headers
+      - name: Install Linux GTK build dependencies
         if: runner.os == 'Linux'
-        timeout-minutes: 4
+        timeout-minutes: 5
         run: |
-          sudo apt-get update \
-            -o Acquire::Retries=3 \
-            -o Acquire::http::Timeout=30 \
-            -o Acquire::https::Timeout=30
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install \
-            --yes --no-install-recommends libgtk-3-dev
+          sources_file="$RUNNER_TEMP/sbom-analyzer-ubuntu.sources"
+          write_sources() {
+            local mirror="$1"
+            printf '%s\n' \
+              'Types: deb' \
+              "URIs: $mirror" \
+              'Suites: noble noble-updates noble-security' \
+              'Components: main universe' \
+              'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+              > "$sources_file"
+          }
+
+          apt_options=(
+            -o "Dir::Etc::sourcelist=$sources_file"
+            -o 'Dir::Etc::sourceparts=-'
+            -o 'Acquire::Languages=none'
+            -o 'Acquire::Retries=0'
+            -o 'Acquire::http::Timeout=20'
+            -o 'Acquire::https::Timeout=20'
+            -o 'Dpkg::Use-Pty=0'
+          )
+
+          write_sources 'https://archive.ubuntu.com/ubuntu'
+          if ! sudo timeout --signal=TERM --kill-after=10s 60s \
+            apt-get update "${apt_options[@]}"; then
+            echo 'Primary Ubuntu mirror failed; trying the signed kernel.org mirror.' >&2
+            write_sources 'https://mirrors.edge.kernel.org/ubuntu'
+            sudo timeout --signal=TERM --kill-after=10s 90s \
+              apt-get update "${apt_options[@]}"
+          fi
+
+          sudo env DEBIAN_FRONTEND=noninteractive \
+            timeout --signal=TERM --kill-after=10s 120s \
+            apt-get install "${apt_options[@]}" \
+              --yes --no-install-recommends libgtk-3-dev libgtk2.0-dev
+
+      - name: Cache pinned Linux toolchain installers
+        if: runner.os == 'Linux'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/installers
+          key: lazarus-linux-x64-${{ env.LAZARUS_VERSION }}-fpc-${{ env.FPC_VERSION }}-sourceforge-debs-v1
+          # Migrate the valid cache created by the former setup action instead
+          # of spending another run downloading the same 216 MB toolchain.
+          restore-keys: |
+            aHR0cHM6Ly9zb3VyY2Vmb3JnZS5uZXQvcHJvamVjdHMvbGF6YXJ1cy9maWxlcy9MYXphcnVzIExpbnV4IGFtZDY0IERFQi9MYXphcnVzIDQuMi9sYXphcnVzLXByb2plY3RfNC4yLjAtMF9hbWQ2NC5kZWItaHR0cHM6Ly9zb3VyY2Vmb3JnZS5uZXQvcHJvamVjdHMvbGF6YXJ1cy9maWxlcy9MYXphcnVzIExpbnV4IGFtZDY0IERFQi9MYXphcnVzIDQuMi9mcGMtbGF6XzMuMi4yLTIxMDcwOV9hbWQ2NC5kZWIKaHR0cHM6Ly9zb3VyY2Vmb3JnZS5uZXQvcHJvamVjdHMvbGF6YXJ1cy9maWxlcy9MYXphcnVzIExpbnV4IGFtZDY0IERFQi9MYXphcnVzIDQuMi9mcGMtc3JjXzMuMi4yLTIxMDcwOV9hbWQ2NC5kZWI=
+
+      # Digests: https://www.lazarus-ide.org/index.php?page=checksums
+      - name: Download pinned Linux toolchain installers
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: |
+          installer_dir="$RUNNER_TEMP/installers"
+          mkdir -p "$installer_dir"
+
+          download_installer() {
+            local filename="$1"
+            local url="$2"
+            local expected_sha256="$3"
+            local target
+            target="$installer_dir/$filename"
+            if [[ -f "$target" ]] && \
+              echo "$expected_sha256  $target" | sha256sum --check --status -; then
+              return
+            fi
+            curl --fail --show-error --silent --location \
+              --retry 4 --retry-all-errors --retry-max-time 240 \
+              --connect-timeout 15 --max-time 240 \
+              --output "$target.partial" "$url"
+            echo "$expected_sha256  $target.partial" | sha256sum --check --status -
+            mv "$target.partial" "$target"
+          }
+
+          download_pids=()
+          download_installer \
+            'fpc-laz_3.2.2-210709_amd64.deb' \
+            'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.2/fpc-laz_3.2.2-210709_amd64.deb/download' \
+            '92000f2b831184e153aab0c910f8ae9240450e5c6d76dc189cf53116ee501d83' &
+          download_pids+=("$!")
+          download_installer \
+            'fpc-src_3.2.2-210709_amd64.deb' \
+            'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.2/fpc-src_3.2.2-210709_amd64.deb/download' \
+            '8c9e145d8056754a9ca39ce3e52e982b8e4816124984c5f542f2a874e721ad53' &
+          download_pids+=("$!")
+          download_installer \
+            'lazarus-project_4.2.0-0_amd64.deb' \
+            'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.2/lazarus-project_4.2.0-0_amd64.deb/download' \
+            '3afe81579ef71a782f891e27ce51477b436f84213678d3f3c42c321054ce1285' &
+          download_pids+=("$!")
+
+          download_status=0
+          for download_pid in "${download_pids[@]}"; do
+            wait "$download_pid" || download_status=1
+          done
+          test "$download_status" -eq 0
+
+      - name: Install pinned Linux Lazarus and Free Pascal
+        if: runner.os == 'Linux'
+        timeout-minutes: 3
+        run: |
+          installer_dir="$RUNNER_TEMP/installers"
+          (
+            cd "$installer_dir"
+            printf '%s\n' \
+              '92000f2b831184e153aab0c910f8ae9240450e5c6d76dc189cf53116ee501d83  fpc-laz_3.2.2-210709_amd64.deb' \
+              '8c9e145d8056754a9ca39ce3e52e982b8e4816124984c5f542f2a874e721ad53  fpc-src_3.2.2-210709_amd64.deb' \
+              '3afe81579ef71a782f891e27ce51477b436f84213678d3f3c42c321054ce1285  lazarus-project_4.2.0-0_amd64.deb' \
+              | sha256sum --check --strict -
+          )
+          test "$(dpkg-deb --field "$installer_dir/fpc-laz_3.2.2-210709_amd64.deb" Package)" = 'fpc-laz'
+          test "$(dpkg-deb --field "$installer_dir/fpc-laz_3.2.2-210709_amd64.deb" Version)" = "$FPC_VERSION"
+          test "$(dpkg-deb --field "$installer_dir/fpc-src_3.2.2-210709_amd64.deb" Package)" = 'fpc-src'
+          test "$(dpkg-deb --field "$installer_dir/fpc-src_3.2.2-210709_amd64.deb" Version)" = "$FPC_VERSION"
+          test "$(dpkg-deb --field "$installer_dir/lazarus-project_4.2.0-0_amd64.deb" Package)" = 'lazarus-project'
+          test "$(dpkg-deb --field "$installer_dir/lazarus-project_4.2.0-0_amd64.deb" Version)" = '4.2.0'
+          sudo dpkg --install \
+            "$installer_dir/fpc-laz_3.2.2-210709_amd64.deb" \
+            "$installer_dir/fpc-src_3.2.2-210709_amd64.deb" \
+            "$installer_dir/lazarus-project_4.2.0-0_amd64.deb"
 
       - name: Install pinned Lazarus and Free Pascal
+        if: runner.os != 'Linux'
         timeout-minutes: 7
         uses: ollydev/setup-lazarus@2d902bfe7bf72ac91c6ee21130ed599ccc839bc7 # v4
         with:
