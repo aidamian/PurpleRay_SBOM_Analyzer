@@ -195,7 +195,10 @@ Lazarus 4.2 from the official SourceForge release files. The maintained
 is pinned to an immutable commit and is used only during builds; it introduces
 no runtime dependency. Official GitHub artifact and checkout actions are pinned
 as well. The macOS job is pinned to GitHub's Intel runner and explicitly
-compiles and verifies an x86_64 application.
+compiles and verifies an x86_64 application. Newer runs cancel obsolete runs,
+and preparation, dependency installation, builds, and publishing have bounded
+timeouts so a stalled hosted runner cannot consume minutes indefinitely.
+Markdown-only changes do not start the native build matrix.
 
 Pull requests get a `MAJOR.MINOR.PATCH-dev.<commit>` version, run all tests, and
 upload temporary packages without tags or releases. Pushes to `main` serialize
