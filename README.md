@@ -126,6 +126,21 @@ the current working directory. Every version uses the shared
 `~/.sbom-analyzer/` data directory, so releases can be switched without losing
 task history or settings. The script never requires root access.
 
+Native Linux users can use the equivalent launcher:
+
+```bash
+./start-linux.sh
+```
+
+From Windows PowerShell, use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-windows.ps1
+```
+
+Both launchers use the same versioned-directory layout and shared per-user
+`.sbom-analyzer` data directory.
+
 To use the Lazarus IDE, open the repository through VS Code's **WSL: Open Folder
 in WSL** command, then run:
 
