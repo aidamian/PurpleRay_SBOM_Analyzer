@@ -1,5 +1,5 @@
 (**
-  SBOM Analyzer deterministic regression-test program.
+  PurpleRay SBOM Analyzer deterministic regression-test program.
 
   Copyright (c) 2026 Andrei Ionut Damian. This source is licensed under
   the Apache License, Version 2.0; see LICENSE.
@@ -13,9 +13,9 @@
   ----------------
   Please retain this notice and cite the project as follows:
 
-  @misc{damian2026sbomanalyzer,
+  @misc{damian2026purpleraysbomanalyzer,
     author = {Andrei Ionut Damian},
-    title  = {{SBOM Analyzer}},
+    title  = {{PurpleRay SBOM Analyzer}},
     year   = {2026},
     url    = {https://github.com/aidamian/SBOM_Analyzer}
   }
@@ -396,9 +396,11 @@ procedure TestApplicationDataMigration;
 var
   SourceDirectory, DestinationDirectory, WarningText: string;
 begin
-  SourceDirectory := NewTemporaryDirectory('legacy-application-data');
+  SourceDirectory := IncludeTrailingPathDelimiter(TemporaryRoot) +
+    '.sbom-analyzer';
   DestinationDirectory := IncludeTrailingPathDelimiter(TemporaryRoot) +
-    'migrated-application-data';
+    '.purpleray' + DirectorySeparator + 'sbom-analyzer';
+  ForceDirectories(SourceDirectory);
   WriteText(IncludeTrailingPathDelimiter(SourceDirectory) + 'history.json',
     '{"format_version":1,"tasks":[]}');
   WriteText(IncludeTrailingPathDelimiter(SourceDirectory) + 'sboms' +
@@ -407,12 +409,29 @@ begin
     DestinationDirectory, WarningText), 'application data migration failed');
   AssertEqual('', WarningText, 'successful migration produced a warning');
   AssertTrue(not DirectoryExists(SourceDirectory),
-    'legacy application data directory was retained');
+    '~/.sbom-analyzer was retained after successful migration');
+  AssertTrue(DirectoryExists(DestinationDirectory),
+    '~/.purpleray/sbom-analyzer was not created');
   AssertTrue(FileExists(IncludeTrailingPathDelimiter(DestinationDirectory) +
     'history.json'), 'history was not migrated');
   AssertTrue(FileExists(IncludeTrailingPathDelimiter(DestinationDirectory) +
     'sboms' + DirectorySeparator + 'fixture.cdx.json'),
     'saved SBOM was not migrated');
+
+  { A later partial migration must preserve the legacy directory when a file
+    would overwrite data already present at the destination. }
+  ForceDirectories(SourceDirectory);
+  WriteText(IncludeTrailingPathDelimiter(SourceDirectory) + 'history.json',
+    '{"format_version":1,"tasks":[{"legacy":true}]}');
+  AssertTrue(not MigrateApplicationDataDirectory(SourceDirectory,
+    DestinationDirectory, WarningText),
+    'colliding application data migration unexpectedly succeeded');
+  AssertTrue(WarningText <> '',
+    'colliding application data migration produced no warning');
+  AssertTrue(DirectoryExists(SourceDirectory),
+    'legacy directory was removed after a partial migration');
+  AssertTrue(FileExists(IncludeTrailingPathDelimiter(SourceDirectory) +
+    'history.json'), 'unmigrated legacy data was deleted');
 end;
 
 procedure TestExportNaming;
@@ -465,11 +484,11 @@ begin
     AssertEqual(3, UnZipper.Entries.Count,
       'database archive entry count differs');
     AssertTrue(ArchiveContains(UnZipper.Entries,
-      'sbom-analyzer/history.json'), 'database archive omits history');
+      'purpleray-sbom-analyzer/history.json'), 'database archive omits history');
     AssertTrue(ArchiveContains(UnZipper.Entries,
-      'sbom-analyzer/settings.json'), 'database archive omits settings');
+      'purpleray-sbom-analyzer/settings.json'), 'database archive omits settings');
     AssertTrue(ArchiveContains(UnZipper.Entries,
-      'sbom-analyzer/sboms/fixture.cdx.json'),
+      'purpleray-sbom-analyzer/sboms/fixture.cdx.json'),
       'database archive omits saved SBOMs');
   finally
     UnZipper.Free;
@@ -788,6 +807,11 @@ begin
       'default CycloneDX output leaked the absolute target path');
     AssertTrue(Pos('"specVersion" : "1.6"', string(First)) > 0,
       'CycloneDX version is missing');
+    AssertTrue(Pos('"name" : "PurpleRay SBOM Analyzer"', string(First)) > 0,
+      'renamed scanner identity is missing from CycloneDX output');
+    AssertTrue(Pos('purpleray-sbom-analyzer:inspection-method',
+      string(First)) > 0,
+      'renamed scanner property namespace is missing from CycloneDX output');
     AssertTrue(Pos('"version" : "1.0.0"', string(First)) > 0,
       'known component version is missing from CycloneDX output');
   finally
@@ -919,7 +943,7 @@ begin
   ProjectRoot := ExpandFileName(ExtractFilePath(ParamStr(0)) + '..' +
     DirectorySeparator + '..');
   TemporaryRoot := IncludeTrailingPathDelimiter(GetTempDir(False)) +
-    'sbom-analyzer-tests-' + NewTaskID;
+    'purpleray-sbom-analyzer-tests-' + NewTaskID;
   ForceDirectories(TemporaryRoot);
   RunTest('SHA-256 vectors', @TestSHA256);
   RunTest('requirements parser', @TestRequirementsParser);

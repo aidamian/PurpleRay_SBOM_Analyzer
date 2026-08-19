@@ -1,5 +1,5 @@
 (**
-  SBOM Analyzer CycloneDX serialization unit.
+  PurpleRay SBOM Analyzer CycloneDX serialization unit.
 
   Copyright (c) 2026 Andrei Ionut Damian. This source is licensed under
   the Apache License, Version 2.0; see LICENSE.
@@ -13,9 +13,9 @@
   ----------------
   Please retain this notice and cite the project as follows:
 
-  @misc{damian2026sbomanalyzer,
+  @misc{damian2026purpleraysbomanalyzer,
     author = {Andrei Ionut Damian},
-    title  = {{SBOM Analyzer}},
+    title  = {{PurpleRay SBOM Analyzer}},
     year   = {2026},
     url    = {https://github.com/aidamian/SBOM_Analyzer}
   }
@@ -101,7 +101,7 @@ begin
   KeyValue := UTF8Encode(LowerCase(AComponent.Ecosystem) + #1 +
     LowerCase(AComponent.Name) + #1 + AComponent.Version + #1 +
     LowerCase(AComponent.ComponentType));
-  Result := 'urn:sbom-analyzer:component:' + Copy(SHA256String(KeyValue), 1, 32);
+  Result := 'urn:purpleray-sbom-analyzer:component:' + Copy(SHA256String(KeyValue), 1, 32);
 end;
 
 procedure AddSortedComponentProperties(ATask: TScanTask;
@@ -116,17 +116,17 @@ begin
     Values.Sorted := True;
     Values.Duplicates := dupIgnore;
     if AComponent.Ecosystem <> '' then
-      Values.Add('sbom-analyzer:ecosystem' + #1 + AComponent.Ecosystem);
+      Values.Add('purpleray-sbom-analyzer:ecosystem' + #1 + AComponent.Ecosystem);
     if AComponent.SourceArtifact <> '' then
-      Values.Add('sbom-analyzer:source-artifact' + #1 +
+      Values.Add('purpleray-sbom-analyzer:source-artifact' + #1 +
         OutputPath(ATask, AComponent.SourceArtifact));
     if AComponent.SourceParser <> '' then
-      Values.Add('sbom-analyzer:source-parser' + #1 + AComponent.SourceParser);
+      Values.Add('purpleray-sbom-analyzer:source-parser' + #1 + AComponent.SourceParser);
     if AComponent.DependencyScope <> '' then
-      Values.Add('sbom-analyzer:dependency-scope' + #1 +
+      Values.Add('purpleray-sbom-analyzer:dependency-scope' + #1 +
         AComponent.DependencyScope);
     for I := 0 to AComponent.EvidencePaths.Count - 1 do
-      Values.Add('sbom-analyzer:evidence-path' + #1 +
+      Values.Add('purpleray-sbom-analyzer:evidence-path' + #1 +
         OutputPath(ATask, AComponent.EvidencePaths[I]));
     for I := 0 to Values.Count - 1 do
     begin
@@ -204,7 +204,7 @@ begin
   if (ATask.ScannerCommit <> '') and (ATask.ScannerCommit <> 'unknown') then
   begin
     Properties := TJSONArray.Create;
-    AddProperty(Properties, 'sbom-analyzer:commit', ATask.ScannerCommit);
+    AddProperty(Properties, 'purpleray-sbom-analyzer:commit', ATask.ScannerCommit);
     Result.Add('properties', Properties);
   end;
 end;
@@ -247,7 +247,7 @@ begin
         Artifact.ArtifactType + ' | ' + ArtifactStatusToString(Artifact.Status);
       if Artifact.ParserName <> '' then
         ValueValue := ValueValue + ' | ' + Artifact.ParserName;
-      AddProperty(AProperties, 'sbom-analyzer:artifact', ValueValue);
+      AddProperty(AProperties, 'purpleray-sbom-analyzer:artifact', ValueValue);
     end;
   finally
     Sorted.Free;
@@ -281,20 +281,20 @@ begin
     Tools.Add('components', ToolComponents);
     Metadata.Add('tools', Tools);
     Properties := TJSONArray.Create;
-    AddProperty(Properties, 'sbom-analyzer:inspection-method',
+    AddProperty(Properties, 'purpleray-sbom-analyzer:inspection-method',
       'local static artifact and binary dependency-table inspection with ' +
       'safe operating-system evidence');
     if ATask.InspectionTools.Count > 0 then
-      AddProperty(Properties, 'sbom-analyzer:system-tools',
+      AddProperty(Properties, 'purpleray-sbom-analyzer:system-tools',
         StringReplace(ATask.InspectionTools.CommaText, ',', ', ',
           [rfReplaceAll]));
-    AddProperty(Properties, 'sbom-analyzer:completeness',
+    AddProperty(Properties, 'purpleray-sbom-analyzer:completeness',
       'best effort; not a guarantee of complete dependency discovery');
-    AddProperty(Properties, 'sbom-analyzer:assessment-scope',
+    AddProperty(Properties, 'purpleray-sbom-analyzer:assessment-scope',
       'not a vulnerability or license-compliance assessment');
-    AddProperty(Properties, 'sbom-analyzer:files-inspected',
+    AddProperty(Properties, 'purpleray-sbom-analyzer:files-inspected',
       IntToStr(ATask.FilesInspected));
-    AddProperty(Properties, 'sbom-analyzer:artifacts-detected',
+    AddProperty(Properties, 'purpleray-sbom-analyzer:artifacts-detected',
       IntToStr(ATask.ArtifactsDetected));
     AddArtifactProperties(ATask, Properties);
     Metadata.Add('properties', Properties);

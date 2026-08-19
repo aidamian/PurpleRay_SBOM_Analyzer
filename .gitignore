@@ -85,7 +85,7 @@ PLAN.md
 
 _TODO_private.md
 
-internal/
+purpleray-sbom-analyzer-internal/
 
 # Lazarus/FPC local build output
 build/
@@ -93,3 +93,4 @@ dist/
 src/lib/
 tests/bin/
 src/sbom_analyzer.res
+src/purpleray_sbom_analyzer.res

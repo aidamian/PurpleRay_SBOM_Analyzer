@@ -4,4 +4,4 @@ set -euo pipefail
 repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repository_root"
 
-lazbuild -B --build-mode=Release --widgetset=gtk3 src/sbom_analyzer.lpi
+lazbuild -B --build-mode=Release --widgetset=gtk3 src/purpleray_sbom_analyzer.lpi

@@ -5,17 +5,17 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>SBOM Analyzer</string>
+  <string>PurpleRay SBOM Analyzer</string>
   <key>CFBundleExecutable</key>
-  <string>sbom-analyzer</string>
+  <string>purpleray-sbom-analyzer</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
-  <string>com.sbom-analyzer.desktop</string>
+  <string>io.github.aidamian.purpleraysbomanalyzer</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>SBOM Analyzer</string>
+  <string>PurpleRay SBOM Analyzer</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

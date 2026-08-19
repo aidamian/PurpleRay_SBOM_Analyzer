@@ -10,17 +10,17 @@ version=$1
 repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repository_root"
 
-app_directory='dist/SBOM Analyzer.app'
+app_directory='dist/PurpleRay SBOM Analyzer.app'
 macos_directory="$app_directory/Contents/MacOS"
 resources_directory="$app_directory/Contents/Resources"
 iconset_directory=build/macos/AppIcon.iconset
-package="dist/sbom-analyzer-v${version}-macos.zip"
+package="dist/purpleray-sbom-analyzer-v${version}-macos.zip"
 
 rm -rf -- "$app_directory" "$iconset_directory"
 rm -f -- "$package"
 mkdir -p "$macos_directory" "$resources_directory" "$iconset_directory"
-cp build/release/sbom-analyzer "$macos_directory/sbom-analyzer"
-chmod 755 "$macos_directory/sbom-analyzer"
+cp build/release/purpleray-sbom-analyzer "$macos_directory/purpleray-sbom-analyzer"
+chmod 755 "$macos_directory/purpleray-sbom-analyzer"
 
 for size in 16 32 128 256 512; do
   sips -z "$size" "$size" assets/app-icon.png \
@@ -40,14 +40,14 @@ if [[ $executable_count != 1 ]]; then
   echo "the application bundle must contain exactly one application executable" >&2
   exit 1
 fi
-if ! file "$macos_directory/sbom-analyzer" | grep -q 'Mach-O 64-bit'; then
+if ! file "$macos_directory/purpleray-sbom-analyzer" | grep -q 'Mach-O 64-bit'; then
   echo "the application executable is not a 64-bit Mach-O binary" >&2
   exit 1
 fi
 
 ditto -c -k --keepParent "$app_directory" "$package"
 archive_executable_count=$(unzip -Z1 "$package" |
-  grep -Ec '^SBOM Analyzer\.app/Contents/MacOS/[^/]+$' || true)
+  grep -Ec '^PurpleRay SBOM Analyzer\.app/Contents/MacOS/[^/]+$' || true)
 if [[ $archive_executable_count != 1 ]]; then
   echo "the macOS archive does not contain exactly one application executable" >&2
   exit 1

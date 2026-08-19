@@ -4,7 +4,7 @@ object MainForm: TMainForm
   Top = 90
   Width = 1080
   AllowDropFiles = True
-  Caption = 'SBOM Analyzer'
+  Caption = 'PurpleRay SBOM Analyzer'
   ClientHeight = 680
   ClientWidth = 1080
   Constraints.MinHeight = 520
@@ -45,7 +45,7 @@ object MainForm: TMainForm
       Width = 422
       Align = alClient
       BorderSpacing.Left = 10
-      Caption = 'SBOM Analyzer'
+      Caption = 'PurpleRay SBOM Analyzer'
       Font.Height = -19
       Font.Style = [fsBold]
       Layout = tlCenter

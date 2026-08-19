@@ -1,5 +1,5 @@
 (**
-  SBOM Analyzer ignore-pattern unit.
+  PurpleRay SBOM Analyzer ignore-pattern unit.
 
   Copyright (c) 2026 Andrei Ionut Damian. This source is licensed under
   the Apache License, Version 2.0; see LICENSE.
@@ -13,9 +13,9 @@
   ----------------
   Please retain this notice and cite the project as follows:
 
-  @misc{damian2026sbomanalyzer,
+  @misc{damian2026purpleraysbomanalyzer,
     author = {Andrei Ionut Damian},
-    title  = {{SBOM Analyzer}},
+    title  = {{PurpleRay SBOM Analyzer}},
     year   = {2026},
     url    = {https://github.com/aidamian/SBOM_Analyzer}
   }

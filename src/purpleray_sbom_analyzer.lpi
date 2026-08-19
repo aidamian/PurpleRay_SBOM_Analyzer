@@ -9,7 +9,7 @@
       </Flags>
       <SessionStorage Value="InIDEConfig"/>
       <MainUnit Value="0"/>
-      <Title Value="SBOM Analyzer"/>
+      <Title Value="PurpleRay SBOM Analyzer"/>
       <Scaled Value="True"/>
       <ResourceType Value="res"/>
       <UseXPManifest Value="True"/>
@@ -25,7 +25,7 @@
       <BuildNr Value="0"/>
       <Language Value="0409"/>
       <CharSet Value="04E4"/>
-      <StringTable Comments="Native static SBOM inventory and CycloneDX export" CompanyName="Andrei Ionut Damian" FileDescription="SBOM Analyzer" FileVersion="0.1.0.0" InternalName="sbom-analyzer" LegalCopyright="Copyright (c) 2026 Andrei Ionut Damian" LegalTrademarks="" OriginalFilename="sbom-analyzer.exe" ProductName="SBOM Analyzer" ProductVersion="0.1.0-dev"/>
+      <StringTable Comments="Native static SBOM inventory and CycloneDX export" CompanyName="Andrei Ionut Damian" FileDescription="PurpleRay SBOM Analyzer" FileVersion="0.1.0.0" InternalName="purpleray-sbom-analyzer" LegalCopyright="Copyright (c) 2026 Andrei Ionut Damian" LegalTrademarks="" OriginalFilename="purpleray-sbom-analyzer.exe" ProductName="PurpleRay SBOM Analyzer" ProductVersion="0.1.0-dev"/>
     </VersionInfo>
     <BuildModes Count="2">
       <Item1 Name="Debug" Default="True"/>
@@ -33,7 +33,7 @@
         <CompilerOptions>
           <Version Value="11"/>
           <Target>
-            <Filename Value="../build/release/sbom-analyzer"/>
+            <Filename Value="../build/release/purpleray-sbom-analyzer"/>
           </Target>
           <SearchPaths>
             <IncludeFiles Value="$(ProjOutDir)"/>
@@ -73,7 +73,7 @@
     </RequiredPackages>
     <Units Count="3">
       <Unit0>
-        <Filename Value="sbom_analyzer.lpr"/>
+        <Filename Value="purpleray_sbom_analyzer.lpr"/>
         <IsPartOfProject Value="True"/>
       </Unit0>
       <Unit1>
@@ -95,7 +95,7 @@
   <CompilerOptions>
     <Version Value="11"/>
     <Target>
-      <Filename Value="../build/debug/sbom-analyzer"/>
+      <Filename Value="../build/debug/purpleray-sbom-analyzer"/>
     </Target>
     <SearchPaths>
       <IncludeFiles Value="$(ProjOutDir)"/>

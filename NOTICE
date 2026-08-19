@@ -1,14 +1,14 @@
-SBOM Analyzer
+PurpleRay SBOM Analyzer
 Copyright 2026 Andrei Ionut Damian
 
 This product is developed and maintained by Andrei Ionut Damian.
 
-If you use SBOM Analyzer in research, publications, reports, or derivative
+If you use PurpleRay SBOM Analyzer in research, publications, reports, or derivative
 software, please cite the original project using the following BibTeX entry:
 
-@misc{damian2026sbomanalyzer,
+@misc{damian2026purpleraysbomanalyzer,
   author = {Andrei Ionut Damian},
-  title  = {{SBOM Analyzer}},
+  title  = {{PurpleRay SBOM Analyzer}},
   year   = {2026},
   url    = {https://github.com/aidamian/SBOM_Analyzer}
 }

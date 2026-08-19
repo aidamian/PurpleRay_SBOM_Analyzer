@@ -62,20 +62,20 @@ main() {
   [[ "$tag_name" == v+([0-9]).+([0-9]).+([0-9]) ]] ||
     fail "GitHub returned an invalid release tag: $tag_name"
 
-  asset_name="sbom-analyzer-${tag_name}-linux-x64"
+  asset_name="purpleray-sbom-analyzer-${tag_name}-linux-x64"
   asset_url="$PROJECT_URL/releases/download/$tag_name/$asset_name"
   checksum_url="$PROJECT_URL/releases/download/$tag_name/SHA256SUMS.txt"
-  install_directory="$PWD/SBOM_Analyzer_${tag_name}"
-  data_directory="${HOME:?HOME is not set}/.sbom-analyzer"
-  binary_path="$install_directory/sbom-analyzer"
+  install_directory="$PWD/PurpleRay_SBOM_Analyzer_${tag_name}"
+  data_directory="${HOME:?HOME is not set}/.purpleray/sbom-analyzer"
+  binary_path="$install_directory/purpleray-sbom-analyzer"
   download_path="$install_directory/.$asset_name.download"
   checksum_path="$install_directory/.SHA256SUMS.txt.download"
-  staged_path="$install_directory/.sbom-analyzer.staged"
+  staged_path="$install_directory/.purpleray-sbom-analyzer.staged"
 
   mkdir -p "$install_directory" "$data_directory"
   trap 'rm -f -- "$download_path" "$checksum_path" "$staged_path"' EXIT
 
-  printf 'Downloading SBOM Analyzer %s into %s\n' "$tag_name" "$install_directory"
+  printf 'Downloading PurpleRay SBOM Analyzer %s into %s\n' "$tag_name" "$install_directory"
   curl --fail --show-error --silent --location \
     --retry 3 --retry-all-errors --connect-timeout 15 --max-time 300 \
     --output "$download_path" "$asset_url" || fail 'release download failed'

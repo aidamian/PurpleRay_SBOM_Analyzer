@@ -12,7 +12,7 @@ fi
 version=$1
 commit=$2
 unit_destination=${3:-src/uVersionInfo.pas}
-project_file=${4:-src/sbom_analyzer.lpi}
+project_file=${4:-src/purpleray_sbom_analyzer.lpi}
 
 if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
   echo "invalid application version: $version" >&2
@@ -48,7 +48,7 @@ trap 'rm -f -- "$unit_temporary" "$project_temporary"' EXIT
 pascal_mode_directive='{$mode objfpc}{$H+}'
 printf '%s\n' \
   '(**' \
-  '  SBOM Analyzer build-version unit.' \
+  '  PurpleRay SBOM Analyzer build-version unit.' \
   '' \
   '  Copyright (c) 2026 Andrei Ionut Damian. This source is licensed under' \
   '  the Apache License, Version 2.0; see LICENSE.' \
@@ -62,9 +62,9 @@ printf '%s\n' \
   '  ----------------' \
   '  Please retain this notice and cite the project as follows:' \
   '' \
-  '  @misc{damian2026sbomanalyzer,' \
+  '  @misc{damian2026purpleraysbomanalyzer,' \
   '    author = {Andrei Ionut Damian},' \
-  '    title  = {{SBOM Analyzer}},' \
+  '    title  = {{PurpleRay SBOM Analyzer}},' \
   '    year   = {2026},' \
   '    url    = {https://github.com/aidamian/SBOM_Analyzer}' \
   '  }' \
@@ -76,8 +76,8 @@ printf '%s\n' \
   'interface' \
   '' \
   'const' \
-  "  AppName = 'SBOM Analyzer';" \
-  "  AppExecutableName = 'sbom-analyzer';" \
+  "  AppName = 'PurpleRay SBOM Analyzer';" \
+  "  AppExecutableName = 'purpleray-sbom-analyzer';" \
   "  AppVersion = '${version}';" \
   "  AppCommit = '${commit}';" \
   '' \

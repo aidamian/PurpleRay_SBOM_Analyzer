@@ -1,5 +1,5 @@
 (**
-  SBOM Analyzer build-version unit.
+  PurpleRay SBOM Analyzer build-version unit.
 
   Copyright (c) 2026 Andrei Ionut Damian. This source is licensed under
   the Apache License, Version 2.0; see LICENSE.
@@ -13,9 +13,9 @@
   ----------------
   Please retain this notice and cite the project as follows:
 
-  @misc{damian2026sbomanalyzer,
+  @misc{damian2026purpleraysbomanalyzer,
     author = {Andrei Ionut Damian},
-    title  = {{SBOM Analyzer}},
+    title  = {{PurpleRay SBOM Analyzer}},
     year   = {2026},
     url    = {https://github.com/aidamian/SBOM_Analyzer}
   }
@@ -27,8 +27,8 @@ unit uVersionInfo;
 interface
 
 const
-  AppName = 'SBOM Analyzer';
-  AppExecutableName = 'sbom-analyzer';
+  AppName = 'PurpleRay SBOM Analyzer';
+  AppExecutableName = 'purpleray-sbom-analyzer';
   AppVersion = '0.1.0-dev';
   AppCommit = 'unknown';
 

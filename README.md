@@ -1,6 +1,6 @@
-# SBOM Analyzer
+# PurpleRay SBOM Analyzer
 
-SBOM Analyzer is a small, native desktop application that inventories local
+PurpleRay SBOM Analyzer is a small, native desktop application that inventories local
 software artifacts and produces deterministic CycloneDX 1.6 JSON. It scans
 without network access and never executes files from the selected folder. Its
 native parsers are supplemented, when applicable, by bounded static-inspection
@@ -100,14 +100,14 @@ The explicit equivalent build command is:
 lazbuild -B \
   --build-mode=Release \
   --widgetset=gtk3 \
-  src/sbom_analyzer.lpi
+  src/purpleray_sbom_analyzer.lpi
 ```
 
-The executable is written to `build/release/sbom-analyzer`. Launch it under
+The executable is written to `build/release/purpleray-sbom-analyzer`. Launch it under
 WSLg with:
 
 ```bash
-build/release/sbom-analyzer
+build/release/purpleray-sbom-analyzer
 ```
 
 WSLg normally sets `WAYLAND_DISPLAY` and `DISPLAY` automatically. If neither is
@@ -121,10 +121,12 @@ and launch it in one command, run:
 ./start-wsl2.sh
 ```
 
-The script creates a versioned directory such as `./SBOM_Analyzer_v0.3.0/` in
+The script creates a versioned directory such as
+`./PurpleRay_SBOM_Analyzer_v0.3.0/` in
 the current working directory. Every version uses the shared
-`~/.sbom-analyzer/` data directory, so releases can be switched without losing
-task history or settings. The script never requires root access.
+`~/.purpleray/sbom-analyzer/` data directory, so releases can be switched
+without losing task history or settings. The script never requires root
+access.
 
 Native Linux users can use the equivalent launcher:
 
@@ -144,7 +146,7 @@ powershell -ExecutionPolicy Bypass -File .\start-windows.ps1
 ```
 
 Both launchers use the same versioned-directory layout and shared per-user
-`.sbom-analyzer` data directory.
+`.purpleray/sbom-analyzer` data directory.
 
 The current Windows release is not Authenticode-signed. Windows 11 Smart App
 Control can therefore block it, and Windows does not provide a per-application
@@ -158,7 +160,7 @@ To use the Lazarus IDE, open the repository through VS Code's **WSL: Open Folder
 in WSL** command, then run:
 
 ```bash
-lazarus src/sbom_analyzer.lpi
+lazarus src/purpleray_sbom_analyzer.lpi
 ```
 
 Select the GTK3 widgetset for a Linux build. The main window and scan-settings
@@ -189,14 +191,16 @@ tests/bin/test_runner
 
 The application stores all persistent data under the user's home directory:
 
-- Linux, WSL, and macOS: `~/.sbom-analyzer/`
-- Windows: `%USERPROFILE%\.sbom-analyzer\`
+- Linux, WSL, and macOS: `~/.purpleray/sbom-analyzer/`
+- Windows: `%USERPROFILE%\.purpleray\sbom-analyzer\`
 
-On first run after upgrading, the application moves files from the older
-platform-specific FPC configuration directory to this location. If a saved
-SBOM path still points at the old directory, it is repaired when history is
-loaded. A migration problem is reported without silently discarding the old
-data.
+On first run after upgrading, the application moves files from
+`~/.sbom-analyzer/` (or `%USERPROFILE%\.sbom-analyzer\` on Windows) into the
+new location and removes the old directory only after every entry was moved
+successfully. It also imports the older platform-specific FPC configuration
+directory for direct upgrades from early builds. If a saved SBOM path still
+points at an old directory, it is repaired when history is loaded. A migration
+problem is reported without silently discarding the old data.
 
 Files in that directory are user data:
 
@@ -311,6 +315,30 @@ runs rebuild without publishing by default; publishing must be selected
 explicitly. Existing tags and releases are verified and updated idempotently
 instead of duplicated.
 
+### Verifying release provenance
+
+Every newly published release artifact receives a free GitHub build-provenance
+attestation. After downloading an artifact, verify that GitHub associates its
+exact SHA-256 digest with a build from this repository:
+
+```bash
+gh attestation verify purpleray-sbom-analyzer-vX.Y.Z-linux-x64 \
+  --repo aidamian/SBOM_Analyzer
+```
+
+For Windows, pass the downloaded ZIP instead:
+
+```powershell
+gh attestation verify .\purpleray-sbom-analyzer-vX.Y.Z-windows-x64.zip `
+  --repo aidamian/SBOM_Analyzer
+```
+
+The command requires the GitHub CLI and network access only for explicit
+verification; the application itself remains offline. Attestations establish
+which repository, commit, and workflow produced a file. They complement the
+published checksums but are not Authenticode signatures and do not cause
+Windows to trust an otherwise unsigned executable.
+
 ## Code signing policy
 
 Planned release signing: Free code signing provided by
@@ -336,7 +364,7 @@ request and download a release.
 
 ## License
 
-SBOM Analyzer is licensed under the
+PurpleRay SBOM Analyzer is licensed under the
 [Apache License, Version 2.0](LICENSE). Copyright and authorship remain with
 Andrei Ionut Damian. Distributions and derivative works must comply with the
 license and retain the applicable attribution notices from [NOTICE](NOTICE).
@@ -345,13 +373,13 @@ does not add restrictions to the Apache-2.0 license.
 
 ## Citation and copyright
 
-If you use SBOM Analyzer in research, publications, reports, or derivative
+If you use PurpleRay SBOM Analyzer in research, publications, reports, or derivative
 software, please cite the original project:
 
 ```bibtex
-@misc{damian2026sbomanalyzer,
+@misc{damian2026purpleraysbomanalyzer,
   author = {Andrei Ionut Damian},
-  title  = {{SBOM Analyzer}},
+  title  = {{PurpleRay SBOM Analyzer}},
   year   = {2026},
   url    = {https://github.com/aidamian/SBOM_Analyzer}
 }

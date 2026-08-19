@@ -1,5 +1,5 @@
 (**
-  SBOM Analyzer platform-services unit.
+  PurpleRay SBOM Analyzer platform-services unit.
 
   Copyright (c) 2026 Andrei Ionut Damian. This source is licensed under
   the Apache License, Version 2.0; see LICENSE.
@@ -13,9 +13,9 @@
   ----------------
   Please retain this notice and cite the project as follows:
 
-  @misc{damian2026sbomanalyzer,
+  @misc{damian2026purpleraysbomanalyzer,
     author = {Andrei Ionut Damian},
-    title  = {{SBOM Analyzer}},
+    title  = {{PurpleRay SBOM Analyzer}},
     year   = {2026},
     url    = {https://github.com/aidamian/SBOM_Analyzer}
   }
@@ -39,7 +39,7 @@ uses
   Returns
   -------
   string
-    The ~/.sbom-analyzer path without a trailing separator.
+    The ~/.purpleray/sbom-analyzer path without a trailing separator.
 
   Raises
   ------
@@ -339,15 +339,59 @@ end;
 
 function ApplicationDataDirectory: string;
 var
-  LegacyDirectory: string;
+  LegacyConfigDirectory, PreviousDataDirectory, WarningText: string;
+
+  {**
+    Adds one migration diagnostic to the cached startup warning.
+
+    Parameters
+    ----------
+    AText
+      Warning text to append; an empty value is ignored.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    None
+  }
+  procedure AppendMigrationWarning(const AText: string);
+  begin
+    if AText = '' then
+      Exit;
+    if CachedMigrationWarning <> '' then
+      CachedMigrationWarning := CachedMigrationWarning + LineEnding;
+    CachedMigrationWarning := CachedMigrationWarning + AText;
+  end;
+
 begin
   if CachedApplicationDataDirectory <> '' then
     Exit(CachedApplicationDataDirectory);
+
   CachedApplicationDataDirectory := ExcludeTrailingPathDelimiter(
+    IncludeTrailingPathDelimiter(GetUserDir) + '.purpleray' +
+    DirectorySeparator + 'sbom-analyzer');
+
+  { PurpleRay releases before this location change stored all persistent data
+    directly beneath the user's home directory. Migrate that directory first
+    so its newer data wins any collision with the older FPC-specific path. A
+    successful migration removes the now-empty source directory. }
+  PreviousDataDirectory := ExcludeTrailingPathDelimiter(
     IncludeTrailingPathDelimiter(GetUserDir) + '.sbom-analyzer');
-  LegacyDirectory := ExcludeTrailingPathDelimiter(GetAppConfigDir(False));
-  MigrateApplicationDataDirectory(LegacyDirectory,
-    CachedApplicationDataDirectory, CachedMigrationWarning);
+  MigrateApplicationDataDirectory(PreviousDataDirectory,
+    CachedApplicationDataDirectory, WarningText);
+  AppendMigrationWarning(WarningText);
+
+  { Early builds used FPC's executable-specific configuration directory. Keep
+    this migration for users upgrading directly from those builds. }
+  LegacyConfigDirectory := ExcludeTrailingPathDelimiter(
+    GetAppConfigDir(False));
+  MigrateApplicationDataDirectory(LegacyConfigDirectory,
+    CachedApplicationDataDirectory, WarningText);
+  AppendMigrationWarning(WarningText);
+
   if not ForceDirectories(CachedApplicationDataDirectory) and
     (CachedMigrationWarning = '') then
     CachedMigrationWarning := 'Unable to create application data directory: ' +

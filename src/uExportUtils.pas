@@ -1,5 +1,5 @@
 (**
-  SBOM Analyzer export-support unit.
+  PurpleRay SBOM Analyzer export-support unit.
 
   Copyright (c) 2026 Andrei Ionut Damian. This source is licensed under
   the Apache License, Version 2.0; see LICENSE.
@@ -13,9 +13,9 @@
   ----------------
   Please retain this notice and cite the project as follows:
 
-  @misc{damian2026sbomanalyzer,
+  @misc{damian2026purpleraysbomanalyzer,
     author = {Andrei Ionut Damian},
-    title  = {{SBOM Analyzer}},
+    title  = {{PurpleRay SBOM Analyzer}},
     year   = {2026},
     url    = {https://github.com/aidamian/SBOM_Analyzer}
   }
@@ -166,7 +166,7 @@ end;
 
 function DatabaseArchiveFileName: string;
 begin
-  Result := 'sbom-analyzer-database-' +
+  Result := 'purpleray-sbom-analyzer-database-' +
     FormatDateTime('yyyymmdd_hhnnss', Now) + '.zip';
 end;
 
@@ -260,7 +260,7 @@ begin
     begin
       SplitAt := Pos(#1, Files[I]);
       Zipper.Entries.AddFileEntry(Copy(Files[I], SplitAt + 1, MaxInt),
-        'sbom-analyzer/' + Copy(Files[I], 1, SplitAt - 1));
+        'purpleray-sbom-analyzer/' + Copy(Files[I], 1, SplitAt - 1));
     end;
     Zipper.ZipAllFiles;
     if FileExists(DestinationName) and not DeleteFile(DestinationName) then
