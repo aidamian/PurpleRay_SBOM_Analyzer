@@ -114,6 +114,18 @@ WSLg normally sets `WAYLAND_DISPLAY` and `DISPLAY` automatically. If neither is
 present, update WSL from Windows with `wsl --update`, restart it with
 `wsl --shutdown`, and open the WSL workspace again.
 
+To check WSL2/WSLg support, download the latest checksum-verified Linux release,
+and launch it in one command, run:
+
+```bash
+./start-wsl2.sh
+```
+
+The script creates a versioned directory such as `./SBOM_Analyzer_v0.3.0/` in
+the current working directory. Every version uses the shared
+`~/.sbom-analyzer/` data directory, so releases can be switched without losing
+task history or settings. The script never requires root access.
+
 To use the Lazarus IDE, open the repository through VS Code's **WSL: Open Folder
 in WSL** command, then run:
 
