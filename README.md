@@ -263,9 +263,10 @@ tests/                     deterministic non-UI test runner and fixtures
 .github/workflows/         native three-platform CI and release automation
 ```
 
-`src/uVersionInfo.pas` is a development fallback. CI generates that unit in its
-ephemeral workspace from the selected semantic version and full commit SHA; it
-never commits generated version changes back to `main`.
+`src/uVersionInfo.pas` is a development fallback. CI generates that unit and
+updates the Lazarus PE version-resource fields in its ephemeral workspace from
+the selected semantic version and full commit SHA; it never commits generated
+version changes back to `main`.
 
 The checked-in `src/app_icon.res` embeds the Windows/LCL icon. After changing
 `assets/app-icon.ico`, regenerate it with:
@@ -310,6 +311,38 @@ runs rebuild without publishing by default; publishing must be selected
 explicitly. Existing tags and releases are verified and updated idempotently
 instead of duplicated.
 
+## Code signing policy
+
+Planned release signing: Free code signing provided by
+[SignPath.io](https://signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/). Signing will be activated after
+the Foundation approves the project and supplies its project identifiers.
+
+- Committers and reviewers: [Andrei Ionut Damian](https://github.com/aidamian)
+- Approvers: [Andrei Ionut Damian](https://github.com/aidamian)
+- Source repository: <https://github.com/aidamian/SBOM_Analyzer>
+- Release artifacts are built exclusively from this repository by GitHub
+  Actions on GitHub-hosted runners.
+- Every release signing request requires manual approval by the signing
+  approver. Build automation may submit a request but cannot approve it.
+
+### Privacy
+
+This program will not transfer any information to other networked systems
+unless specifically requested by the user or the person installing or
+operating it. The application performs scans locally without network access.
+The optional launcher scripts contact GitHub only when the user runs them to
+request and download a release.
+
+## License
+
+SBOM Analyzer is licensed under the
+[Apache License, Version 2.0](LICENSE). Copyright and authorship remain with
+Andrei Ionut Damian. Distributions and derivative works must comply with the
+license and retain the applicable attribution notices from [NOTICE](NOTICE).
+The citation below is requested for academic and professional attribution; it
+does not add restrictions to the Apache-2.0 license.
+
 ## Citation and copyright
 
 If you use SBOM Analyzer in research, publications, reports, or derivative
@@ -324,9 +357,9 @@ software, please cite the original project:
 }
 ```
 
-Copyright (c) 2026 Andrei Ionut Damian. SBOM Analyzer is an open-source
-project, but copyright and authorship rights remain with the author. Derivative
-works should retain this copyright notice and cite the original project
+Copyright (c) 2026 Andrei Ionut Damian. Copyright and authorship rights remain
+with the author under the Apache License, Version 2.0. Please retain the
+applicable copyright and attribution notices and cite the original project
 appropriately using the citation above.
 
 ## Platform limitations

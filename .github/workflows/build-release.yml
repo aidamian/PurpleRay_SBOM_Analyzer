@@ -279,6 +279,23 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $expectedVersion = '${{ needs.prepare.outputs.version }}'
+          $expectedFileVersion = "$expectedVersion.0"
+          $executable = Get-Item 'build/release/sbom-analyzer.exe'
+          $versionInfo = $executable.VersionInfo
+          $expectedMetadata = @{
+            ProductName = 'SBOM Analyzer'
+            ProductVersion = $expectedVersion
+            FileVersion = $expectedFileVersion
+            CompanyName = 'Andrei Ionut Damian'
+            LegalCopyright = 'Copyright (c) 2026 Andrei Ionut Damian'
+            OriginalFilename = 'sbom-analyzer.exe'
+          }
+          foreach ($field in $expectedMetadata.Keys) {
+            if ($versionInfo.$field -ne $expectedMetadata[$field]) {
+              throw "Invalid Windows $field metadata: '$($versionInfo.$field)'"
+            }
+          }
           $stage = 'build/package-windows'
           $package = 'dist/sbom-analyzer-v${{ needs.prepare.outputs.version }}-windows-x64.zip'
           New-Item -ItemType Directory -Force -Path $stage, 'dist' | Out-Null

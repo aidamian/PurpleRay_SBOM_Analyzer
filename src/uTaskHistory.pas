@@ -1,17 +1,17 @@
 (**
   SBOM Analyzer task-history persistence unit.
 
-  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
-  author's copyright and attribution rights are retained.
+  Copyright (c) 2026 Andrei Ionut Damian. This source is licensed under
+  the Apache License, Version 2.0; see LICENSE.
 
   Description
   -----------
   Persists scan tasks atomically, repairs migrated SBOM paths, recovers from a
   valid backup, and preserves malformed history for diagnosis.
 
-  Citation requirement
-  --------------------
-  Derivative works must retain this notice and cite the project as follows:
+  Citation request
+  ----------------
+  Please retain this notice and cite the project as follows:
 
   @misc{damian2026sbomanalyzer,
     author = {Andrei Ionut Damian},

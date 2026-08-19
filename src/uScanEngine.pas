@@ -1,17 +1,17 @@
 (**
   SBOM Analyzer scanning-engine unit.
 
-  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
-  author's copyright and attribution rights are retained.
+  Copyright (c) 2026 Andrei Ionut Damian. This source is licensed under
+  the Apache License, Version 2.0; see LICENSE.
 
   Description
   -----------
   Traverses a target tree, applies ignore and symlink policy, hashes and parses
   artifacts, inspects binaries, and normalizes the resulting component set.
 
-  Citation requirement
-  --------------------
-  Derivative works must retain this notice and cite the project as follows:
+  Citation request
+  ----------------
+  Please retain this notice and cite the project as follows:
 
   @misc{damian2026sbomanalyzer,
     author = {Andrei Ionut Damian},

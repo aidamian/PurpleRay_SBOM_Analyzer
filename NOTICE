@@ -1,0 +1,17 @@
+SBOM Analyzer
+Copyright 2026 Andrei Ionut Damian
+
+This product is developed and maintained by Andrei Ionut Damian.
+
+If you use SBOM Analyzer in research, publications, reports, or derivative
+software, please cite the original project using the following BibTeX entry:
+
+@misc{damian2026sbomanalyzer,
+  author = {Andrei Ionut Damian},
+  title  = {{SBOM Analyzer}},
+  year   = {2026},
+  url    = {https://github.com/aidamian/SBOM_Analyzer}
+}
+
+This NOTICE is informational and does not modify the Apache License, Version
+2.0. See LICENSE for the terms governing use, modification, and distribution.

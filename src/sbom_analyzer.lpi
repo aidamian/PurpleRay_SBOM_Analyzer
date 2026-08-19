@@ -17,6 +17,16 @@
         <DpiAware Value="True/PM"/>
       </XPManifest>
     </General>
+    <VersionInfo>
+      <UseVersionInfo Value="True"/>
+      <MajorVersionNr Value="0"/>
+      <MinorVersionNr Value="1"/>
+      <RevisionNr Value="0"/>
+      <BuildNr Value="0"/>
+      <Language Value="0409"/>
+      <CharSet Value="04E4"/>
+      <StringTable Comments="Native static SBOM inventory and CycloneDX export" CompanyName="Andrei Ionut Damian" FileDescription="SBOM Analyzer" FileVersion="0.1.0.0" InternalName="sbom-analyzer" LegalCopyright="Copyright (c) 2026 Andrei Ionut Damian" LegalTrademarks="" OriginalFilename="sbom-analyzer.exe" ProductName="SBOM Analyzer" ProductVersion="0.1.0-dev"/>
+    </VersionInfo>
     <BuildModes Count="2">
       <Item1 Name="Debug" Default="True"/>
       <Item2 Name="Release">

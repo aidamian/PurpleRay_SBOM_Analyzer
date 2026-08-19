@@ -1,8 +1,9 @@
 <#
 Copyright (c) 2026 Andrei Ionut Damian.
 
-SBOM Analyzer is open source, but this notice and the project's BibTeX
-citation must be retained and the original work cited in derivative works.
+Licensed under the Apache License, Version 2.0; see LICENSE.
+Please retain the applicable attribution notices and cite the project using
+the BibTeX entry in NOTICE.
 #>
 
 $ErrorActionPreference = 'Stop'

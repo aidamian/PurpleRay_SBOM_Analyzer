@@ -1,17 +1,17 @@
 (**
   SBOM Analyzer native-binary header unit.
 
-  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
-  author's copyright and attribution rights are retained.
+  Copyright (c) 2026 Andrei Ionut Damian. This source is licensed under
+  the Apache License, Version 2.0; see LICENSE.
 
   Description
   -----------
   Detects PE, ELF, thin Mach-O, and universal Mach-O files and reports their
   architecture and broad binary classification without executing them.
 
-  Citation requirement
-  --------------------
-  Derivative works must retain this notice and cite the project as follows:
+  Citation request
+  ----------------
+  Please retain this notice and cite the project as follows:
 
   @misc{damian2026sbomanalyzer,
     author = {Andrei Ionut Damian},

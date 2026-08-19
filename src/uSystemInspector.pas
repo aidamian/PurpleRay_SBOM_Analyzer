@@ -1,17 +1,17 @@
 (**
   SBOM Analyzer operating-system inspection unit.
 
-  Copyright (c) 2026 Andrei Ionut Damian. This source is open source, but the
-  author's copyright and attribution rights are retained.
+  Copyright (c) 2026 Andrei Ionut Damian. This source is licensed under
+  the Apache License, Version 2.0; see LICENSE.
 
   Description
   -----------
   Enriches binary evidence through an explicit allowlist of already available
   OS tools or APIs under strict process, output, and cancellation bounds.
 
-  Citation requirement
-  --------------------
-  Derivative works must retain this notice and cite the project as follows:
+  Citation request
+  ----------------
+  Please retain this notice and cite the project as follows:
 
   @misc{damian2026sbomanalyzer,
     author = {Andrei Ionut Damian},
