@@ -132,6 +132,11 @@ Native Linux users can use the equivalent launcher:
 ./start-linux.sh
 ```
 
+The launcher stops before downloading anything unless `DISPLAY` or
+`WAYLAND_DISPLAY` identifies a graphical session. If it reports that no Linux
+UI is available, run it from a UI-enabled Linux desktop session with Wayland or
+X11.
+
 From Windows PowerShell, use:
 
 ```powershell
@@ -140,6 +145,14 @@ powershell -ExecutionPolicy Bypass -File .\start-windows.ps1
 
 Both launchers use the same versioned-directory layout and shared per-user
 `.sbom-analyzer` data directory.
+
+The current Windows release is not Authenticode-signed. Windows 11 Smart App
+Control can therefore block it, and Windows does not provide a per-application
+exception. For an immediate local test, open **Windows Security > App & browser
+control > Smart App Control settings**, turn Smart App Control off, and run the
+launcher again. The permanent distribution fix is to sign each Windows release
+with a publicly trusted Authenticode certificate; checksum verification alone
+does not establish a trusted Windows publisher.
 
 To use the Lazarus IDE, open the repository through VS Code's **WSL: Open Folder
 in WSL** command, then run:
@@ -318,8 +331,9 @@ appropriately using the citation above.
 
 ## Platform limitations
 
-- Windows and macOS outputs are not code-signed. A production distribution
-  should add Windows signing plus Apple Developer ID signing and notarization.
+- Windows and macOS outputs are not code-signed. Unsigned Windows releases can
+  be blocked by Smart App Control. A production distribution must add Windows
+  Authenticode signing plus Apple Developer ID signing and notarization.
 - The macOS release targets x86_64 and may require Rosetta on Apple Silicon.
 - Lazarus's GTK3 backend can emit non-fatal layout diagnostics with some GTK
   themes or WSLg versions; these do not indicate that scanning has failed.

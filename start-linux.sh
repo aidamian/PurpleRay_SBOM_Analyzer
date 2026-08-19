@@ -23,7 +23,7 @@ check_ui_prerequisites() {
   [[ "$(uname -s)" == 'Linux' ]] || fail 'this script must be run on Linux'
   [[ "$(uname -m)" == 'x86_64' ]] || fail 'the published release requires x86-64 Linux'
   [[ -n "${WAYLAND_DISPLAY:-}" || -n "${DISPLAY:-}" ]] ||
-    fail 'no Wayland or X11 display is configured'
+    fail 'no Linux UI is available; run this script from a UI-enabled Linux desktop session with Wayland or X11'
 
   ldconfig_command="$(command -v ldconfig 2>/dev/null || true)"
   [[ -n "$ldconfig_command" ]] || fail "'ldconfig' was not found"

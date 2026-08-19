@@ -79,6 +79,28 @@ if (-not (Test-Path -LiteralPath $BinaryPath -PathType Leaf)) {
     Stop-WithError 'the Windows archive did not contain sbom-analyzer.exe'
 }
 
+$Signature = Get-AuthenticodeSignature -LiteralPath $BinaryPath
+if ($Signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+    Write-Warning (
+        'This Windows release is not Authenticode-signed. Windows Smart App Control ' +
+        'can block unsigned applications even after their checksum is verified.'
+    )
+}
+
 Write-Host "Shared application data: $DataDirectory"
 Write-Host "Launching $BinaryPath"
-Start-Process -FilePath $BinaryPath -WorkingDirectory $InstallDirectory
+try {
+    Start-Process -FilePath $BinaryPath -WorkingDirectory $InstallDirectory
+}
+catch {
+    if ($_.Exception.Message -match 'Application Control policy|Smart App Control') {
+        Stop-WithError (
+            'Windows Smart App Control blocked this unsigned release. Windows has no ' +
+            'per-app exception. For an immediate local test, open Windows Security > ' +
+            'App & browser control > Smart App Control settings, turn Smart App Control ' +
+            'Off, and run this script again. The permanent project fix is a release ' +
+            'signed with a publicly trusted Authenticode certificate.'
+        )
+    }
+    throw
+}
