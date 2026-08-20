@@ -1,0 +1,585 @@
+object SBOMAnalyzerFrame: TSBOMAnalyzerFrame
+  Left = 0
+  Height = 626
+  Top = 0
+  Width = 1080
+  ClientHeight = 626
+  ClientWidth = 1080
+  TabOrder = 0
+  LCLVersion = '3.0.0.3'
+  object HeaderPanel: TPanel
+    Left = 0
+    Height = 54
+    Top = 0
+    Width = 1080
+    Align = alTop
+    BevelOuter = bvNone
+    ClientHeight = 54
+    ClientWidth = 1080
+    TabOrder = 0
+    object FExportButton: TButton
+      Left = 974
+      Height = 32
+      Top = 11
+      Width = 100
+      Align = alRight
+      BorderSpacing.Right = 6
+      BorderSpacing.Top = 11
+      BorderSpacing.Bottom = 11
+      Caption = 'Export SBOM'
+      OnClick = ExportClicked
+      TabOrder = 5
+    end
+    object FExportDatabaseButton: TButton
+      Left = 868
+      Height = 32
+      Top = 11
+      Width = 100
+      Align = alRight
+      BorderSpacing.Right = 6
+      BorderSpacing.Top = 11
+      BorderSpacing.Bottom = 11
+      Caption = 'Export all'
+      OnClick = ExportDatabaseClicked
+      TabOrder = 4
+    end
+    object FRefreshButton: TButton
+      Left = 792
+      Height = 32
+      Top = 11
+      Width = 70
+      Align = alRight
+      BorderSpacing.Right = 6
+      BorderSpacing.Top = 11
+      BorderSpacing.Bottom = 11
+      Caption = 'Refresh'
+      OnClick = RefreshClicked
+      TabOrder = 3
+    end
+    object FRescanButton: TButton
+      Left = 716
+      Height = 32
+      Top = 11
+      Width = 70
+      Align = alRight
+      BorderSpacing.Right = 6
+      BorderSpacing.Top = 11
+      BorderSpacing.Bottom = 11
+      Caption = 'Rescan'
+      OnClick = RescanClicked
+      TabOrder = 2
+    end
+    object FCancelButton: TButton
+      Left = 640
+      Height = 32
+      Top = 11
+      Width = 70
+      Align = alRight
+      BorderSpacing.Right = 6
+      BorderSpacing.Top = 11
+      BorderSpacing.Bottom = 11
+      Caption = 'Cancel'
+      OnClick = CancelClicked
+      TabOrder = 1
+    end
+    object FNewButton: TButton
+      Left = 549
+      Height = 32
+      Top = 11
+      Width = 85
+      Align = alRight
+      BorderSpacing.Right = 6
+      BorderSpacing.Top = 11
+      BorderSpacing.Bottom = 11
+      Caption = 'New Scan'
+      OnClick = NewScanClicked
+      TabOrder = 0
+    end
+  end
+  object StatusPanel: TPanel
+    Left = 0
+    Height = 62
+    Top = 564
+    Width = 1080
+    Align = alBottom
+    BevelOuter = bvNone
+    ClientHeight = 62
+    ClientWidth = 1080
+    TabOrder = 2
+    object FProgressPath: TLabel
+      Left = 10
+      Height = 20
+      Top = 0
+      Width = 1060
+      Align = alTop
+      AutoSize = False
+      BorderSpacing.Left = 10
+      BorderSpacing.Right = 10
+      Caption = 'Ready'
+      Layout = tlCenter
+    end
+    object FProgressStats: TLabel
+      Left = 10
+      Height = 20
+      Top = 42
+      Width = 1060
+      Align = alBottom
+      AutoSize = False
+      BorderSpacing.Left = 10
+      BorderSpacing.Right = 10
+      Caption = 'Drop a folder here or choose New Scan.'
+      Layout = tlCenter
+    end
+    object FProgressBar: TProgressBar
+      Left = 10
+      Height = 16
+      Top = 23
+      Width = 1060
+      Align = alClient
+      BorderSpacing.Left = 10
+      BorderSpacing.Top = 3
+      BorderSpacing.Right = 10
+      BorderSpacing.Bottom = 3
+      Max = 100
+      TabOrder = 0
+    end
+  end
+  object ContentPanel: TPanel
+    Left = 0
+    Height = 510
+    Top = 54
+    Width = 1080
+    Align = alClient
+    BevelOuter = bvNone
+    ClientHeight = 510
+    ClientWidth = 1080
+    TabOrder = 1
+    object TaskPane: TPanel
+      Left = 0
+      Height = 510
+      Top = 0
+      Width = 330
+      Align = alLeft
+      BevelOuter = bvNone
+      ClientHeight = 510
+      ClientWidth = 330
+      Constraints.MinWidth = 240
+      TabOrder = 0
+      object TaskHeading: TLabel
+        Left = 10
+        Height = 34
+        Top = 0
+        Width = 310
+        Align = alTop
+        AutoSize = False
+        BorderSpacing.Left = 10
+        BorderSpacing.Right = 10
+        Caption = 'Task history'
+        Font.Height = -16
+        Font.Style = [fsBold]
+        Layout = tlCenter
+        ParentFont = False
+      end
+      object TaskSearchPanel: TPanel
+        Left = 0
+        Height = 38
+        Top = 34
+        Width = 330
+        Align = alTop
+        BevelOuter = bvNone
+        ClientHeight = 38
+        ClientWidth = 330
+        TabOrder = 0
+        object TaskSearchLabel: TLabel
+          Left = 10
+          Height = 38
+          Top = 0
+          Width = 52
+          Align = alLeft
+          AutoSize = False
+          BorderSpacing.Left = 10
+          Caption = 'Search'
+          Layout = tlCenter
+        end
+        object FTaskSearch: TEdit
+          Left = 68
+          Height = 27
+          Top = 5
+          Width = 252
+          Align = alClient
+          BorderSpacing.Left = 6
+          BorderSpacing.Top = 5
+          BorderSpacing.Right = 10
+          BorderSpacing.Bottom = 6
+          OnChange = TaskSearchChanged
+          TabOrder = 0
+          TextHint = 'Folder, status, date...'
+        end
+      end
+      object FEmptyLabel: TLabel
+        Left = 10
+        Height = 44
+        Top = 72
+        Width = 310
+        Align = alTop
+        AutoSize = False
+        BorderSpacing.Left = 10
+        BorderSpacing.Right = 10
+        Caption = 'No scans yet. Choose New Scan or drop a local folder onto this window.'
+        Layout = tlCenter
+        WordWrap = True
+      end
+      object FTaskList: TListView
+        Left = 0
+        Height = 394
+        Top = 116
+        Width = 330
+        Align = alClient
+        Columns = <
+          item
+            Caption = 'Created (UTC)'
+            Width = 128
+          end
+          item
+            Caption = 'Folder'
+            Width = 120
+          end
+          item
+            Caption = 'Status'
+            Width = 78
+          end
+          item
+            Caption = 'Artifacts'
+            Width = 64
+          end
+          item
+            Caption = 'Components'
+            Width = 78
+          end
+          item
+            Caption = 'Duration'
+            Width = 72
+          end>
+        GridLines = True
+        HideSelection = False
+        ReadOnly = True
+        RowSelect = True
+        TabOrder = 1
+        ViewStyle = vsReport
+        OnSelectItem = TaskSelected
+      end
+    end
+    object MainSplitter: TSplitter
+      Cursor = crHSplit
+      Left = 330
+      Height = 510
+      Top = 0
+      Width = 6
+      ResizeAnchor = akLeft
+    end
+    object DetailPane: TPanel
+      Left = 336
+      Height = 510
+      Top = 0
+      Width = 744
+      Align = alClient
+      BevelOuter = bvNone
+      ClientHeight = 510
+      ClientWidth = 744
+      TabOrder = 2
+      object FPages: TPageControl
+        Left = 6
+        Height = 498
+        Top = 6
+        Width = 732
+        ActivePage = SummaryPage
+        Align = alClient
+        BorderSpacing.Around = 6
+        TabIndex = 0
+        TabOrder = 0
+        object SummaryPage: TTabSheet
+          Caption = 'Summary'
+          ClientHeight = 469
+          ClientWidth = 724
+          object FSummaryMemo: TMemo
+            Left = 8
+            Height = 453
+            Top = 8
+            Width = 708
+            Align = alClient
+            BorderSpacing.Around = 8
+            ReadOnly = True
+            ScrollBars = ssBoth
+            TabOrder = 0
+            WordWrap = False
+          end
+        end
+        object ComponentsPage: TTabSheet
+          Caption = 'Components'
+          ClientHeight = 469
+          ClientWidth = 724
+          object ComponentFiltersPanel: TPanel
+            Left = 0
+            Height = 40
+            Top = 0
+            Width = 724
+            Align = alTop
+            BevelOuter = bvNone
+            ClientHeight = 40
+            ClientWidth = 724
+            TabOrder = 0
+            object ComponentSearchLabel: TLabel
+              Left = 8
+              Height = 40
+              Top = 0
+              Width = 48
+              Align = alLeft
+              AutoSize = False
+              BorderSpacing.Left = 8
+              Caption = 'Search'
+              Layout = tlCenter
+            end
+            object FComponentSearch: TEdit
+              Left = 62
+              Height = 27
+              Top = 6
+              Width = 170
+              Align = alLeft
+              BorderSpacing.Left = 6
+              BorderSpacing.Top = 6
+              BorderSpacing.Bottom = 7
+              OnChange = FiltersChanged
+              TabOrder = 0
+            end
+            object ComponentEcosystemLabel: TLabel
+              Left = 240
+              Height = 40
+              Top = 0
+              Width = 72
+              Align = alLeft
+              AutoSize = False
+              BorderSpacing.Left = 8
+              Caption = 'Ecosystem'
+              Layout = tlCenter
+            end
+            object FComponentEcosystem: TComboBox
+              Left = 318
+              Height = 27
+              Top = 6
+              Width = 125
+              Align = alLeft
+              BorderSpacing.Left = 6
+              BorderSpacing.Top = 6
+              BorderSpacing.Bottom = 7
+              OnChange = FiltersChanged
+              Style = csDropDownList
+              TabOrder = 1
+            end
+            object ComponentStatusLabel: TLabel
+              Left = 451
+              Height = 40
+              Top = 0
+              Width = 48
+              Align = alLeft
+              AutoSize = False
+              BorderSpacing.Left = 8
+              Caption = 'Status'
+              Layout = tlCenter
+            end
+            object FComponentStatus: TComboBox
+              Left = 505
+              Height = 27
+              Top = 6
+              Width = 165
+              Align = alLeft
+              BorderSpacing.Left = 6
+              BorderSpacing.Top = 6
+              BorderSpacing.Bottom = 7
+              OnChange = FiltersChanged
+              Style = csDropDownList
+              TabOrder = 2
+            end
+          end
+          object FComponentList: TListView
+            Left = 0
+            Height = 429
+            Top = 40
+            Width = 724
+            Align = alClient
+            Columns = <
+              item Caption = 'Name' Width = 180 end
+              item Caption = 'Version' Width = 105 end
+              item Caption = 'Ecosystem' Width = 90 end
+              item Caption = 'Type' Width = 85 end
+              item Caption = 'Scope' Width = 100 end
+              item Caption = 'Source artifact' Width = 240 end>
+            GridLines = True
+            HideSelection = False
+            PopupMenu = FCopyMenu
+            ReadOnly = True
+            RowSelect = True
+            TabOrder = 1
+            ViewStyle = vsReport
+            OnColumnClick = ComponentColumnClicked
+            OnKeyDown = ListKeyPressed
+          end
+        end
+        object ArtifactsPage: TTabSheet
+          Caption = 'Artifacts'
+          ClientHeight = 469
+          ClientWidth = 724
+          object ArtifactFiltersPanel: TPanel
+            Left = 0
+            Height = 40
+            Top = 0
+            Width = 724
+            Align = alTop
+            BevelOuter = bvNone
+            ClientHeight = 40
+            ClientWidth = 724
+            TabOrder = 0
+            object ArtifactSearchLabel: TLabel
+              Left = 8
+              Height = 40
+              Top = 0
+              Width = 48
+              Align = alLeft
+              AutoSize = False
+              BorderSpacing.Left = 8
+              Caption = 'Search'
+              Layout = tlCenter
+            end
+            object FArtifactSearch: TEdit
+              Left = 62
+              Height = 27
+              Top = 6
+              Width = 170
+              Align = alLeft
+              BorderSpacing.Left = 6
+              BorderSpacing.Top = 6
+              BorderSpacing.Bottom = 7
+              OnChange = FiltersChanged
+              TabOrder = 0
+            end
+            object ArtifactTypeLabel: TLabel
+              Left = 240
+              Height = 40
+              Top = 0
+              Width = 40
+              Align = alLeft
+              AutoSize = False
+              BorderSpacing.Left = 8
+              Caption = 'Type'
+              Layout = tlCenter
+            end
+            object FArtifactType: TComboBox
+              Left = 286
+              Height = 27
+              Top = 6
+              Width = 160
+              Align = alLeft
+              BorderSpacing.Left = 6
+              BorderSpacing.Top = 6
+              BorderSpacing.Bottom = 7
+              OnChange = FiltersChanged
+              Style = csDropDownList
+              TabOrder = 1
+            end
+            object ArtifactStatusLabel: TLabel
+              Left = 454
+              Height = 40
+              Top = 0
+              Width = 48
+              Align = alLeft
+              AutoSize = False
+              BorderSpacing.Left = 8
+              Caption = 'Status'
+              Layout = tlCenter
+            end
+            object FArtifactStatus: TComboBox
+              Left = 508
+              Height = 27
+              Top = 6
+              Width = 165
+              Align = alLeft
+              BorderSpacing.Left = 6
+              BorderSpacing.Top = 6
+              BorderSpacing.Bottom = 7
+              OnChange = FiltersChanged
+              Style = csDropDownList
+              TabOrder = 2
+            end
+          end
+          object FArtifactList: TListView
+            Left = 0
+            Height = 429
+            Top = 40
+            Width = 724
+            Align = alClient
+            Columns = <
+              item Caption = 'Relative path' Width = 250 end
+              item Caption = 'Type' Width = 150 end
+              item Caption = 'Ecosystem' Width = 85 end
+              item Caption = 'Status' Width = 140 end
+              item Caption = 'Size' Width = 85 end
+              item Caption = 'SHA-256' Width = 220 end
+              item Caption = 'Message' Width = 280 end>
+            GridLines = True
+            HideSelection = False
+            PopupMenu = FCopyMenu
+            ReadOnly = True
+            RowSelect = True
+            TabOrder = 1
+            ViewStyle = vsReport
+            OnColumnClick = ArtifactColumnClicked
+            OnKeyDown = ListKeyPressed
+          end
+        end
+        object SBOMPage: TTabSheet
+          Caption = 'SBOM JSON'
+          ClientHeight = 469
+          ClientWidth = 724
+          object FSBOMMemo: TMemo
+            Left = 8
+            Height = 453
+            Top = 8
+            Width = 708
+            Align = alClient
+            BorderSpacing.Around = 8
+            Font.Name = 'Monospace'
+            ParentFont = False
+            ReadOnly = True
+            ScrollBars = ssBoth
+            TabOrder = 0
+            WordWrap = False
+          end
+        end
+        object MessagesPage: TTabSheet
+          Caption = 'Messages'
+          ClientHeight = 469
+          ClientWidth = 724
+          object FMessagesMemo: TMemo
+            Left = 8
+            Height = 453
+            Top = 8
+            Width = 708
+            Align = alClient
+            BorderSpacing.Around = 8
+            ReadOnly = True
+            ScrollBars = ssBoth
+            TabOrder = 0
+            WordWrap = False
+          end
+        end
+      end
+    end
+  end
+  object FCopyMenu: TPopupMenu
+    Left = 936
+    Top = 104
+    object CopySelectedMenuItem: TMenuItem
+      Caption = 'Copy selected value'
+      OnClick = CopySelectedClicked
+    end
+  end
+end

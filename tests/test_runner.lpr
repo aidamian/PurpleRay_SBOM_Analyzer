@@ -620,6 +620,238 @@ begin
   end;
 end;
 
+{**
+  Verifies the compile-time feature shell and Analyzer frame ownership split.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when the shell regains scan-domain responsibilities, the frame is
+    auto-created, a placeholder feature is exposed, or either LFM/LPI resource
+    declaration diverges from the intended ownership model.
+}
+procedure TestApplicationShellStructure;
+var
+  ShellSourceLines, ShellResourceLines, AnalyzerSourceLines,
+    AnalyzerResourceLines, ProjectLines, ProgramLines: TStringList;
+  ShellSource, ShellResource, AnalyzerSource, AnalyzerResource, ProjectText,
+    ProgramText: string;
+  LineIndex, PageCount: Integer;
+begin
+  ShellSourceLines := TStringList.Create;
+  ShellResourceLines := TStringList.Create;
+  AnalyzerSourceLines := TStringList.Create;
+  AnalyzerResourceLines := TStringList.Create;
+  ProjectLines := TStringList.Create;
+  ProgramLines := TStringList.Create;
+  try
+    ShellSourceLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'uMainForm.pas');
+    ShellResourceLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'uMainForm.lfm');
+    AnalyzerSourceLines.LoadFromFile(
+      IncludeTrailingPathDelimiter(ProjectRoot) + 'src' + DirectorySeparator +
+      'uSBOMAnalyzerFrame.pas');
+    AnalyzerResourceLines.LoadFromFile(
+      IncludeTrailingPathDelimiter(ProjectRoot) + 'src' + DirectorySeparator +
+      'uSBOMAnalyzerFrame.lfm');
+    ProjectLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'purpleray_sbom_analyzer.lpi');
+    ProgramLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'purpleray_sbom_analyzer.lpr');
+    ShellSource := ShellSourceLines.Text;
+    ShellResource := ShellResourceLines.Text;
+    AnalyzerSource := AnalyzerSourceLines.Text;
+    AnalyzerResource := AnalyzerResourceLines.Text;
+    ProjectText := ProjectLines.Text;
+    ProgramText := ProgramLines.Text;
+
+    AssertTrue(Pos('TMainForm = class(TForm)', ShellSource) > 0,
+      'the application shell is not the main form');
+    AssertTrue(Pos('uSBOMAnalyzerFrame', ShellSource) > 0,
+      'the shell does not import the Analyzer feature frame');
+    AssertTrue(Pos('TSBOMAnalyzerFrame.Create(AnalyzerPage)', ShellSource) > 0,
+      'the shell does not create the Analyzer frame inside its page');
+    AssertTrue(Pos('FAnalyzerFrame.Parent := AnalyzerPage', ShellSource) > 0,
+      'the Analyzer frame is not parented to its notebook page');
+    AssertTrue(Pos('uModels', ShellSource) = 0,
+      'the shell imports task-model responsibilities');
+    AssertTrue(Pos('uTaskHistory', ShellSource) = 0,
+      'the shell imports task-history responsibilities');
+    AssertTrue(Pos('uSettingsStore', ShellSource) = 0,
+      'the shell imports settings-store responsibilities');
+    AssertTrue(Pos('uScanWorker', ShellSource) = 0,
+      'the shell imports scan-worker responsibilities');
+    AssertTrue(Pos('uScanEngine', ShellSource) = 0,
+      'the shell imports scan-engine responsibilities');
+    AssertTrue(Pos('uExportUtils', ShellSource) = 0,
+      'the shell imports export responsibilities');
+
+    AssertTrue(Pos('object MainForm: TMainForm', ShellResource) > 0,
+      'the main-form resource root differs');
+    AssertTrue(Pos('AllowDropFiles = True', ShellResource) > 0,
+      'the shell no longer accepts folder drops');
+    AssertTrue(Pos('KeyPreview = True', ShellResource) > 0,
+      'the shell no longer receives application shortcuts');
+    AssertTrue(Pos('object FeatureSelector: TComboBox', ShellResource) > 0,
+      'the feature selector is missing');
+    AssertTrue(Pos('Style = csDropDownList', ShellResource) > 0,
+      'the feature selector should not accept arbitrary text');
+    AssertTrue(Pos('object WorkspaceNotebook: TNotebook', ShellResource) > 0,
+      'the tabless workspace notebook is missing');
+    AssertTrue(Pos('object AnalyzerPage: TPage', ShellResource) > 0,
+      'the Analyzer workspace page is missing');
+    AssertTrue(Pos('Compare', ShellResource) = 0,
+      'an unfinished comparison placeholder is exposed');
+    PageCount := 0;
+    for LineIndex := 0 to ShellResourceLines.Count - 1 do
+      if Pos(': TPage', ShellResourceLines[LineIndex]) > 0 then
+        Inc(PageCount);
+    AssertEqual(1, PageCount,
+      'the shell should expose exactly one completed feature page');
+
+    AssertTrue(Pos('TSBOMAnalyzerFrame = class(TFrame)', AnalyzerSource) > 0,
+      'the Analyzer workspace is not an LCL frame');
+    AssertTrue(Pos('procedure ShowPendingWarnings;', AnalyzerSource) > 0,
+      'the Analyzer shell API is missing startup-warning delivery');
+    AssertTrue(Pos('procedure HandleDroppedFiles(', AnalyzerSource) > 0,
+      'the Analyzer shell API is missing drop handling');
+    AssertTrue(Pos('function HandleShortcut(', AnalyzerSource) > 0,
+      'the Analyzer shell API is missing shortcut handling');
+    AssertTrue(Pos('function PrepareForClose: Boolean;', AnalyzerSource) > 0,
+      'the Analyzer shell API is missing safe shutdown');
+    AssertTrue(Pos('procedure Activate;', AnalyzerSource) > 0,
+      'the Analyzer shell API is missing feature activation');
+    AssertTrue(Pos('property ScanActive: Boolean', AnalyzerSource) > 0,
+      'the Analyzer shell API is missing activity state');
+    AssertTrue(Pos('property OnActivityChanged:', AnalyzerSource) > 0,
+      'the Analyzer shell API is missing activity notifications');
+    AssertTrue(Pos('uMainForm', AnalyzerSource) = 0,
+      'the Analyzer frame depends back on its shell');
+    AssertTrue(Pos('FindTask(FWorker.ResultTask.ID)', AnalyzerSource) > 0,
+      'shutdown does not recover the worker result independently');
+    AssertTrue(Pos('FClosePrepared: Boolean;', AnalyzerSource) > 0,
+      'shutdown lacks a separate successful-completion guard');
+    AssertTrue(Pos('if FClosePrepared then', AnalyzerSource) > 0,
+      'completed shutdown is not idempotent');
+    AssertTrue(Pos('FClosePrepared := True;', AnalyzerSource) > 0,
+      'shutdown never records successful completion');
+    AssertTrue(Pos('FreeAndNil(FWorker)', AnalyzerSource) > 0,
+      'shutdown does not remove worker-owned queued events');
+
+    AssertTrue(Pos('object SBOMAnalyzerFrame: TSBOMAnalyzerFrame',
+      AnalyzerResource) > 0, 'the Analyzer frame resource root differs');
+    AssertTrue(Pos('AllowDropFiles =', AnalyzerResource) = 0,
+      'the frame retained a form-only drop property');
+    AssertTrue(Pos('OnCloseQuery =', AnalyzerResource) = 0,
+      'the frame retained a form-only close event');
+    AssertTrue(Pos('OnDropFiles =', AnalyzerResource) = 0,
+      'the frame retained a form-only drop event');
+    AssertTrue(Pos(LineEnding + '  OnKeyDown =', AnalyzerResource) = 0,
+      'the frame retained a form-only key event');
+    AssertTrue(Pos('OnShow =', AnalyzerResource) = 0,
+      'the frame retained a form-only show event');
+    AssertTrue(Pos('Position =', AnalyzerResource) = 0,
+      'the frame retained a form-only position property');
+
+    AssertTrue(Pos('<Units Count="4">', ProjectText) > 0,
+      'the Lazarus project unit count does not include the feature frame');
+    AssertTrue(Pos('<Filename Value="uSBOMAnalyzerFrame.pas"/>',
+      ProjectText) > 0, 'the Lazarus project does not list the feature frame');
+    AssertTrue(Pos('<ComponentName Value="SBOMAnalyzerFrame"/>',
+      ProjectText) > 0, 'the Lazarus frame component name differs');
+    AssertTrue(Pos('<HasResources Value="True"/>', ProjectText) > 0,
+      'the Lazarus project does not register the frame resource');
+    AssertTrue(Pos('<ResourceBaseClass Value="Frame"/>', ProjectText) > 0,
+      'the Lazarus project does not register a Frame resource');
+    AssertTrue(Pos('Application.CreateForm(TMainForm, MainForm);',
+      ProgramText) > 0, 'the application no longer auto-creates its shell');
+    AssertTrue(Pos('CreateForm(TSBOMAnalyzerFrame', ProgramText) = 0,
+      'the feature frame must be created by the shell, not the program');
+  finally
+    ProgramLines.Free;
+    ProjectLines.Free;
+    AnalyzerResourceLines.Free;
+    AnalyzerSourceLines.Free;
+    ShellResourceLines.Free;
+    ShellSourceLines.Free;
+  end;
+end;
+
+{**
+  Verifies the settings dialog keeps its GTK3 DPI-safe top-label layout.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when the LFM restores top border spacing on the first aligned label
+    or removes the fixed spacer that supplies the equivalent visual margin.
+}
+procedure TestScanSettingsDialogDPIStableLayout;
+var
+  SourceLines, ResourceLines: TStringList;
+  SourceText, ResourceText: string;
+  DescriptionIndex, LineIndex: Integer;
+begin
+  SourceLines := TStringList.Create;
+  ResourceLines := TStringList.Create;
+  try
+    SourceLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'uScanSettingsDialog.pas');
+    ResourceLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'uScanSettingsDialog.lfm');
+    SourceText := SourceLines.Text;
+    ResourceText := ResourceLines.Text;
+
+    AssertTrue(Pos('DescriptionTopSpacer: TPanel;', SourceText) > 0,
+      'the DPI-safe settings-dialog spacer is not LFM-backed');
+    AssertTrue(Pos('object DescriptionTopSpacer: TPanel', ResourceText) > 0,
+      'the settings dialog lacks its fixed top spacer');
+    AssertTrue(Pos('object DescriptionTopSpacer: TPanel', ResourceText) <
+      Pos('object DescriptionLabel: TLabel', ResourceText),
+      'the settings-dialog spacer must precede the first aligned label');
+
+    DescriptionIndex := -1;
+    for LineIndex := 0 to ResourceLines.Count - 1 do
+      if Pos('object DescriptionLabel: TLabel',
+        ResourceLines[LineIndex]) > 0 then
+      begin
+        DescriptionIndex := LineIndex;
+        Break;
+      end;
+    AssertTrue(DescriptionIndex >= 0,
+      'the settings-dialog description label is missing');
+    for LineIndex := DescriptionIndex + 1 to ResourceLines.Count - 1 do
+    begin
+      if Trim(ResourceLines[LineIndex]) = 'end' then
+        Break;
+      AssertTrue(Pos('BorderSpacing.Top', ResourceLines[LineIndex]) = 0,
+        'top spacing on the first aligned label reintroduces the GTK3 DPI loop');
+      AssertTrue(Pos('BorderSpacing.Around', ResourceLines[LineIndex]) = 0,
+        'around spacing on the first aligned label reintroduces the GTK3 DPI loop');
+    end;
+  finally
+    ResourceLines.Free;
+    SourceLines.Free;
+  end;
+end;
+
 procedure TestRequirementsParser;
 var
   Components: TObjectList;
@@ -2069,6 +2301,9 @@ begin
   ForceDirectories(TemporaryRoot);
   RunTest('SHA-256 vectors', @TestSHA256);
   RunTest('displayed product version', @TestDisplayedVersion);
+  RunTest('application shell structure', @TestApplicationShellStructure);
+  RunTest('settings dialog DPI-stable layout',
+    @TestScanSettingsDialogDPIStableLayout);
   RunTest('requirements parser', @TestRequirementsParser);
   RunTest('package.json parser', @TestPackageJSONParser);
   RunTest('package-lock.json parser', @TestPackageLockParser);

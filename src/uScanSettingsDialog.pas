@@ -32,6 +32,7 @@ uses
 type
   TScanSettingsDialog = class(TForm)
   published
+    DescriptionTopSpacer: TPanel;
     DescriptionLabel: TLabel;
     FIncludeAbsolutePaths: TCheckBox;
     FFollowSymbolicLinks: TCheckBox;

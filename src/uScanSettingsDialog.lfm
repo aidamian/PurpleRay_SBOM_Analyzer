@@ -11,6 +11,17 @@ object ScanSettingsDialog: TScanSettingsDialog
   Constraints.MinWidth = 470
   Position = poScreenCenter
   LCLVersion = '3.0.0.3'
+  object DescriptionTopSpacer: TPanel
+    Left = 0
+    Height = 12
+    Top = 0
+    Width = 540
+    Align = alTop
+    BevelOuter = bvNone
+    ClientHeight = 12
+    ClientWidth = 540
+    TabOrder = 6
+  end
   object DescriptionLabel: TLabel
     Left = 12
     Height = 48
@@ -18,7 +29,9 @@ object ScanSettingsDialog: TScanSettingsDialog
     Width = 516
     Align = alTop
     AutoSize = False
-    BorderSpacing.Around = 12
+    BorderSpacing.Left = 12
+    BorderSpacing.Right = 12
+    BorderSpacing.Bottom = 12
     Caption = 'Choose how this scan treats paths, symbolic links, hashes, and ignored files. Absolute paths are excluded from exported CycloneDX data by default.'
     WordWrap = True
   end

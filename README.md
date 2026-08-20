@@ -10,6 +10,11 @@ requires a separate scanner.
 The application uses one Object Pascal/Lazarus LCL codebase for Windows x64
 (Win32), Linux x64 (GTK3), and macOS x64 (Cocoa).
 
+Its main window is a lightweight native feature shell with a compact selector
+and tabless workspace. Each completed feature is compiled into the executable
+as an LFM-backed `TFrame`; this is not a plugin system. `SBOM Analyzer` is the
+only feature currently exposed, so no unfinished placeholder is shown.
+
 ## What it does
 
 - Runs each recursive scan on a worker thread with cooperative cancellation.
@@ -41,11 +46,11 @@ discovered.
 
 ## Using the application
 
-Choose **New Scan** and select a folder, or drop a local folder onto the main
-window. Review the settings, then start the scan. The history pane keeps old
-tasks and has its own search box. Drag the vertical splitter to resize it. The
-detail tabs expose the summary, components, artifacts, generated JSON,
-warnings, and parser messages.
+Select **SBOM Analyzer**, choose **New Scan**, and select a folder, or drop a
+local folder onto the main window. Review the settings, then start the scan.
+The history pane keeps old tasks and has its own search box. Drag the vertical
+splitter to resize it. The detail tabs expose the summary, components,
+artifacts, generated JSON, warnings, and parser messages.
 
 **Export SBOM** suggests a filename beginning with the scan timestamp and
 folder name, for example
@@ -198,10 +203,11 @@ in WSL** command, then run:
 lazarus src/purpleray_sbom_analyzer.lpi
 ```
 
-Select the GTK3 widgetset for a Linux build. The main window and scan-settings
-dialog are stored as the human-readable `src/uMainForm.lfm` and
-`src/uScanSettingsDialog.lfm` resources and can be edited in the Lazarus form
-designer.
+Select the GTK3 widgetset for a Linux build. The lightweight application shell,
+SBOM Analyzer workspace, and scan-settings dialog are stored as the
+human-readable `src/uMainForm.lfm`, `src/uSBOMAnalyzerFrame.lfm`, and
+`src/uScanSettingsDialog.lfm` resources. All three can be edited in the
+Lazarus form designer.
 
 ## Tests
 
@@ -212,6 +218,7 @@ SHA-256, native binary headers and dependency tables, OS-evidence parsing,
 component deduplication,
 worker exception containment, bounded manifest parsing, case-preserving and
 glob-safe enumeration, special-file and permission handling,
+application-shell/frame ownership and Lazarus resource registration,
 deterministic/path-safe CycloneDX generation, ignore matching, symbolic-link
 loops, and cancellation. Platform-inapplicable cases are reported explicitly
 as `SKIP`: Linux exercises literal wildcard and case-variant filenames, FIFOs,

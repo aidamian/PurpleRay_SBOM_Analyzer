@@ -29,7 +29,7 @@ interface
 const
   AppName = 'PurpleRay SBOM Analyzer';
   AppExecutableName = 'purpleray-sbom-analyzer';
-  AppVersion = '0.3.5';
+  AppVersion = '0.3.6';
   AppCommit = 'unknown';
 
 {**
