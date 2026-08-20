@@ -290,7 +290,9 @@ end;
   Returns
   -------
   string
-    Trimmed final path component used as the native component name.
+    Trimmed final path component used as the native component name. The full
+    filename is retained, including an ELF SONAME ABI suffix that is not
+    suitable for the component Version field.
 
   Raises
   ------

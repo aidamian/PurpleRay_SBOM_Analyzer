@@ -121,6 +121,72 @@ function BuildPackageURL(const AEcosystem, AName, AVersion: string): string;
 }
 function IsExactVersion(const AVersion: string): Boolean;
 
+{**
+  Determines whether version text is a recognizable declarative constraint.
+
+  Parameters
+  ----------
+  AVersion
+    Version, range, tag, local path, or source-reference text.
+
+  Returns
+  -------
+  Boolean
+    True only for range/wildcard constraint syntax that is safe to retain as
+    ``requested-range``; paths, URLs, variables, and tags return False.
+
+  Raises
+  ------
+  None
+}
+function IsVersionRange(const AVersion: string): Boolean;
+
+{**
+  Applies ecosystem rules when distinguishing resolved versions from requests.
+
+  Parameters
+  ----------
+  AEcosystem
+    Package ecosystem label.
+  AVersion
+    Candidate version text.
+
+  Returns
+  -------
+  Boolean
+    True only for a resolved version. For npm this requires a complete
+    three-segment semantic version, so partial X-ranges and dist-tags fail.
+
+  Raises
+  ------
+  None
+}
+function IsExactEcosystemVersion(const AEcosystem,
+  AVersion: string): Boolean;
+
+{**
+  Applies ecosystem rules when recognizing safe version constraints.
+
+  Parameters
+  ----------
+  AEcosystem
+    Package ecosystem label.
+  AVersion
+    Candidate version or constraint text.
+
+  Returns
+  -------
+  Boolean
+    True for generic constraints and npm one/two-segment X-ranges; false for
+    tags, paths, URLs, variables, and resolved versions.
+
+  Raises
+  ------
+  None
+}
+function IsEcosystemVersionRange(const AEcosystem,
+  AVersion: string): Boolean;
+
 implementation
 
 uses
@@ -178,20 +244,207 @@ begin
   end;
 end;
 
-function IsExactVersion(const AVersion: string): Boolean;
-const
-  ConstraintCharacters = ['<', '>', '=', '~', '^', '*', '|', ',', ' '];
+{**
+  Detects source references that must not become versions or exported ranges.
+
+  Parameters
+  ----------
+  AVersion
+    Candidate dependency-version text.
+
+  Returns
+  -------
+  Boolean
+    True for URLs, VCS selectors, workspace/local paths, aliases, variables,
+    and other path-bearing source references.
+
+  Raises
+  ------
+  None
+}
+function IsVersionSourceReference(const AVersion: string): Boolean;
 var
-  I: Integer;
+  LowerVersion, VersionValue: string;
 begin
-  Result := Trim(AVersion) <> '';
-  if not Result then
-    Exit;
-  for I := 1 to Length(AVersion) do
-    if AVersion[I] in ConstraintCharacters then
-      Exit(False);
+  VersionValue := Trim(AVersion);
+  LowerVersion := LowerCase(VersionValue);
+  Result := (Pos('://', LowerVersion) > 0) or
+    (Pos('git+', LowerVersion) > 0) or
+    (Pos('file:', LowerVersion) > 0) or
+    (Pos('link:', LowerVersion) > 0) or
+    (Pos('workspace:', LowerVersion) > 0) or
+    (Pos('path:', LowerVersion) > 0) or
+    (Pos('npm:', LowerVersion) = 1) or
+    (Pos('github:', LowerVersion) = 1) or
+    (Pos('gitlab:', LowerVersion) = 1) or
+    (Pos('bitbucket:', LowerVersion) = 1) or
+    (Pos('ssh:', LowerVersion) = 1) or
+    (Pos('git:', LowerVersion) = 1) or
+    (Pos('git@', LowerVersion) = 1) or
+    (Pos('/', VersionValue) > 0) or
+    (Pos('\', VersionValue) > 0) or
+    (Pos('#', VersionValue) > 0) or
+    (Pos('$', VersionValue) > 0) or
+    (Pos('{', VersionValue) > 0) or
+    (Pos('}', VersionValue) > 0);
 end;
 
+function IsVersionRange(const AVersion: string): Boolean;
+const
+  ConstraintCharacters = ['<', '>', '=', '~', '^', '*', '|', ',', ' ',
+    '[', ']', '(', ')'];
+var
+  I: Integer;
+  VersionValue, LowerVersion: string;
+begin
+  VersionValue := Trim(AVersion);
+  Result := False;
+  if (VersionValue = '') or IsVersionSourceReference(VersionValue) then
+    Exit;
+  LowerVersion := LowerCase(VersionValue);
+  for I := 1 to Length(VersionValue) do
+  begin
+    if VersionValue[I] in ConstraintCharacters then
+      Exit(True);
+    if (VersionValue[I] = '+') and (I = Length(VersionValue)) then
+      Exit(True);
+    if (LowerVersion[I] = 'x') and
+      ((I = 1) or (LowerVersion[I - 1] in ['.', '-'])) and
+      ((I = Length(LowerVersion)) or (LowerVersion[I + 1] in ['.', '-'])) then
+      Exit(True);
+  end;
+end;
+
+function IsExactVersion(const AVersion: string): Boolean;
+var
+  LowerVersion, VersionValue: string;
+begin
+  VersionValue := Trim(AVersion);
+  LowerVersion := LowerCase(VersionValue);
+  Result := (VersionValue <> '') and
+    not IsVersionSourceReference(VersionValue) and
+    not IsVersionRange(VersionValue) and
+    (LowerVersion <> 'latest') and
+    (LowerVersion <> 'next') and
+    (LowerVersion <> 'stable') and
+    (Pos('latest.', LowerVersion) <> 1);
+end;
+
+{**
+  Counts numeric npm core-version segments and validates any exact suffix.
+
+  Parameters
+  ----------
+  AVersion
+    Candidate npm version without range operators or source references.
+  ASegmentCount
+    Receives the number of numeric dot-delimited core segments.
+  AHasSuffix
+    Receives True when prerelease or build metadata follows the core.
+
+  Returns
+  -------
+  Boolean
+    True when the candidate has a numeric core and a safe SemVer suffix.
+
+  Raises
+  ------
+  None
+}
+function ParseNPMVersionShape(const AVersion: string; out ASegmentCount: Integer;
+  out AHasSuffix: Boolean): Boolean;
+var
+  I, CoreEnd, SegmentStart: Integer;
+  VersionValue: string;
+begin
+  ASegmentCount := 0;
+  AHasSuffix := False;
+  VersionValue := Trim(AVersion);
+  if (VersionValue <> '') and (VersionValue[1] in ['v', 'V']) then
+    Delete(VersionValue, 1, 1);
+  if VersionValue = '' then
+    Exit(False);
+  CoreEnd := Length(VersionValue) + 1;
+  for I := 1 to Length(VersionValue) do
+    if VersionValue[I] in ['-', '+'] then
+    begin
+      CoreEnd := I;
+      AHasSuffix := True;
+      Break;
+    end;
+  if AHasSuffix then
+  begin
+    if CoreEnd = Length(VersionValue) then
+      Exit(False);
+    for I := CoreEnd + 1 to Length(VersionValue) do
+      if not (VersionValue[I] in ['A'..'Z', 'a'..'z', '0'..'9', '-', '.',
+        '+']) then
+        Exit(False);
+  end;
+  SegmentStart := 1;
+  for I := 1 to CoreEnd do
+    if (I = CoreEnd) or (VersionValue[I] = '.') then
+    begin
+      if I = SegmentStart then
+        Exit(False);
+      while SegmentStart < I do
+      begin
+        if not (VersionValue[SegmentStart] in ['0'..'9']) then
+          Exit(False);
+        Inc(SegmentStart);
+      end;
+      Inc(ASegmentCount);
+      SegmentStart := I + 1;
+    end;
+  Result := ASegmentCount > 0;
+end;
+
+function IsExactEcosystemVersion(const AEcosystem,
+  AVersion: string): Boolean;
+var
+  SegmentCount: Integer;
+  HasSuffix: Boolean;
+begin
+  Result := IsExactVersion(AVersion);
+  if Result and SameText(Trim(AEcosystem), 'npm') then
+    Result := ParseNPMVersionShape(AVersion, SegmentCount, HasSuffix) and
+      (SegmentCount = 3);
+end;
+
+function IsEcosystemVersionRange(const AEcosystem,
+  AVersion: string): Boolean;
+var
+  SegmentCount: Integer;
+  HasSuffix: Boolean;
+begin
+  Result := IsVersionRange(AVersion);
+  if Result or not SameText(Trim(AEcosystem), 'npm') or
+    not IsExactVersion(AVersion) then
+    Exit;
+  Result := ParseNPMVersionShape(AVersion, SegmentCount, HasSuffix) and
+    not HasSuffix and (SegmentCount in [1, 2]);
+end;
+
+{**
+  Percent-encodes one Package URL component using UTF-8 source bytes.
+
+  Parameters
+  ----------
+  AValue
+    Component text to encode.
+  AKeepSlash
+    True when slash separators belong to an ecosystem namespace path.
+
+  Returns
+  -------
+  string
+    Package URL component with reserved bytes encoded using uppercase hex.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the result string cannot be allocated.
+}
 function PercentEncode(const AValue: string; AKeepSlash: Boolean): string;
 const
   HexChars = '0123456789ABCDEF';
@@ -213,17 +466,229 @@ begin
   end;
 end;
 
-function BuildPackageURL(const AEcosystem, AName, AVersion: string): string;
+{**
+  Reports whether a character is an ASCII letter or decimal digit.
+
+  Parameters
+  ----------
+  AValue
+    Character to classify.
+
+  Returns
+  -------
+  Boolean
+    True for ASCII A-Z, a-z, or 0-9; otherwise False.
+
+  Raises
+  ------
+  None
+}
+function IsASCIIAlphaNumeric(AValue: Char): Boolean;
+begin
+  Result := AValue in ['A'..'Z', 'a'..'z', '0'..'9'];
+end;
+
+{**
+  Validates a Python distribution name before PEP-503 normalization.
+
+  Parameters
+  ----------
+  AName
+    Candidate PyPI project name.
+
+  Returns
+  -------
+  Boolean
+    True when the name has alphanumeric endpoints and contains only the
+    characters permitted for Python distribution names.
+
+  Raises
+  ------
+  None
+}
+function IsValidPyPIName(const AName: string): Boolean;
 var
-  TypeName, NameValue: string;
-  ScopeSeparator: SizeInt;
+  I: Integer;
+begin
+  Result := (AName <> '') and IsASCIIAlphaNumeric(AName[1]) and
+    IsASCIIAlphaNumeric(AName[Length(AName)]);
+  if not Result then
+    Exit;
+  for I := 1 to Length(AName) do
+    if not IsASCIIAlphaNumeric(AName[I]) and
+      not (AName[I] in ['.', '_', '-']) then
+      Exit(False);
+end;
+
+{**
+  Applies Python package-name normalization defined by PEP 503.
+
+  Parameters
+  ----------
+  AName
+    Valid PyPI project name whose display spelling must remain untouched.
+
+  Returns
+  -------
+  string
+    Lowercase name with every run of period, underscore, or hyphen replaced
+    by one hyphen.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the normalized string cannot be allocated.
+}
+function NormalizePyPIName(const AName: string): string;
+var
+  I: Integer;
+  InSeparatorRun: Boolean;
+  CharacterValue: Char;
 begin
   Result := '';
-  if (AName = '') or not IsExactVersion(AVersion) then
+  InSeparatorRun := False;
+  for I := 1 to Length(AName) do
+  begin
+    CharacterValue := AName[I];
+    if CharacterValue in ['.', '_', '-'] then
+    begin
+      if not InSeparatorRun then
+        Result := Result + '-';
+      InSeparatorRun := True;
+    end
+    else
+    begin
+      Result := Result + LowerCase(CharacterValue);
+      InSeparatorRun := False;
+    end;
+  end;
+end;
+
+{**
+  Builds the canonical path portion for an npm package name.
+
+  Parameters
+  ----------
+  AName
+    Unscoped name or scoped name in ``@scope/package`` form.
+  APath
+    Receives the lowercase and percent-encoded purl path on success.
+
+  Returns
+  -------
+  Boolean
+    True when the package name is complete and structurally valid.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if temporary or result strings cannot be allocated.
+}
+function TryBuildNPMPath(const AName: string; out APath: string): Boolean;
+var
+  NameValue, ScopeValue, PackageValue: string;
+  ScopeSeparator: SizeInt;
+begin
+  APath := '';
+  NameValue := LowerCase(Trim(AName));
+  if NameValue = '' then
+    Exit(False);
+  if NameValue[1] <> '@' then
+  begin
+    if Pos('/', NameValue) > 0 then
+      Exit(False);
+    APath := PercentEncode(NameValue, False);
+    Exit(APath <> '');
+  end;
+  ScopeSeparator := Pos('/', NameValue);
+  if (ScopeSeparator <= 2) or (ScopeSeparator = Length(NameValue)) or
+    (Pos('/', Copy(NameValue, ScopeSeparator + 1, MaxInt)) > 0) then
+    Exit(False);
+  ScopeValue := Copy(NameValue, 1, ScopeSeparator - 1);
+  PackageValue := Copy(NameValue, ScopeSeparator + 1, MaxInt);
+  APath := PercentEncode(ScopeValue, False) + '/' +
+    PercentEncode(PackageValue, False);
+  Result := True;
+end;
+
+{**
+  Converts a resolved Gradle module name into a Maven purl path.
+
+  Parameters
+  ----------
+  AName
+    Gradle module coordinate in exact ``group:artifact`` form.
+  APath
+    Receives the encoded ``group/artifact`` path on success.
+
+  Returns
+  -------
+  Boolean
+    True only when both coordinate parts are present and no extra colon is
+    supplied.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if temporary or result strings cannot be allocated.
+}
+function TryBuildGradleMavenPath(const AName: string;
+  out APath: string): Boolean;
+var
+  SeparatorAt: SizeInt;
+  GroupValue, ArtifactValue: string;
+begin
+  APath := '';
+  SeparatorAt := Pos(':', AName);
+  if (SeparatorAt <= 1) or (SeparatorAt = Length(AName)) or
+    (Pos(':', Copy(AName, SeparatorAt + 1, MaxInt)) > 0) then
+    Exit(False);
+  GroupValue := Trim(Copy(AName, 1, SeparatorAt - 1));
+  ArtifactValue := Trim(Copy(AName, SeparatorAt + 1, MaxInt));
+  if (GroupValue = '') or (ArtifactValue = '') then
+    Exit(False);
+  APath := PercentEncode(GroupValue, False) + '/' +
+    PercentEncode(ArtifactValue, False);
+  Result := True;
+end;
+
+function BuildPackageURL(const AEcosystem, AName, AVersion: string): string;
+var
+  EcosystemValue, TypeName, NameValue, PackageName, VersionValue: string;
+begin
+  Result := '';
+  NameValue := '';
+  PackageName := Trim(AName);
+  VersionValue := Trim(AVersion);
+  EcosystemValue := LowerCase(Trim(AEcosystem));
+  if (PackageName = '') or
+    not IsExactEcosystemVersion(EcosystemValue, VersionValue) then
     Exit;
-  case LowerCase(AEcosystem) of
-    'npm': TypeName := 'npm';
-    'pypi': TypeName := 'pypi';
+  case EcosystemValue of
+    'npm':
+      begin
+        TypeName := 'npm';
+        if not TryBuildNPMPath(PackageName, NameValue) then
+          Exit;
+      end;
+    'pypi':
+      begin
+        TypeName := 'pypi';
+        if not IsValidPyPIName(PackageName) then
+          Exit;
+        NameValue := PercentEncode(NormalizePyPIName(PackageName), False);
+      end;
+    'gradle':
+      begin
+        TypeName := 'maven';
+        if not TryBuildGradleMavenPath(PackageName, NameValue) then
+          Exit;
+      end;
+    'conda':
+      begin
+        TypeName := 'conda';
+        NameValue := PercentEncode(PackageName, False);
+      end;
     'go': TypeName := 'golang';
     'cargo': TypeName := 'cargo';
     'nuget': TypeName := 'nuget';
@@ -236,17 +701,11 @@ begin
   else
     Exit;
   end;
-  NameValue := PercentEncode(AName, (TypeName = 'composer') or
-    (TypeName = 'golang') or (TypeName = 'swift'));
-  if (TypeName = 'npm') and (Length(AName) > 0) and (AName[1] = '@') then
-  begin
-    ScopeSeparator := Pos('/', AName);
-    if ScopeSeparator > 1 then
-      NameValue := PercentEncode(Copy(AName, 1, ScopeSeparator - 1), False) +
-        Copy(AName, ScopeSeparator, MaxInt);
-  end;
+  if NameValue = '' then
+    NameValue := PercentEncode(PackageName, (TypeName = 'composer') or
+      (TypeName = 'golang') or (TypeName = 'swift'));
   Result := 'pkg:' + TypeName + '/' + NameValue + '@' +
-    PercentEncode(AVersion, False);
+    PercentEncode(VersionValue, False);
 end;
 
 {**
@@ -300,6 +759,8 @@ begin
   Component.ComponentType := AComponentType;
   if APURL <> '' then
     Component.PackageURL := APURL
+  else if SameText(AParser, 'conservative-cargo-toml') then
+    Component.PackageURL := ''
   else
     Component.PackageURL := BuildPackageURL(AEcosystem, Component.Name,
       Component.Version);
@@ -703,11 +1164,42 @@ begin
     Result := UTF8Encode(AElement.GetAttribute(UTF8Decode(AName)));
 end;
 
+{**
+  Converts Maven dependency metadata to the analyzer's stable scope vocabulary.
+
+  Parameters
+  ----------
+  AScope
+    Raw Maven scope; blank means Maven's default compile scope.
+  AOptional
+    Raw Maven optional flag.
+
+  Returns
+  -------
+  string
+    ``runtime``, ``development``, ``optional``, or a retained Maven scope such
+    as ``provided`` or ``system``.
+
+  Raises
+  ------
+  None
+}
+function MavenDependencyScope(const AScope, AOptional: string): string;
+begin
+  if SameText(Trim(AOptional), 'true') then
+    Exit('optional');
+  Result := LowerCase(Trim(AScope));
+  if (Result = '') or (Result = 'compile') or (Result = 'runtime') then
+    Result := 'runtime'
+  else if Result = 'test' then
+    Result := 'development';
+end;
+
 procedure WalkMavenDependencies(ANode: TDOMNode; AComponents: TObjectList;
   const ARelativePath: string);
 var
   Child: TDOMNode;
-  GroupID, ArtifactID, VersionValue, ScopeValue, PURL: string;
+  GroupID, ArtifactID, VersionValue, ScopeValue, OptionalValue, PURL: string;
 begin
   if ANode = nil then
     Exit;
@@ -716,9 +1208,11 @@ begin
     GroupID := ChildText(ANode, 'groupId');
     ArtifactID := ChildText(ANode, 'artifactId');
     VersionValue := ChildText(ANode, 'version');
-    ScopeValue := ChildText(ANode, 'scope');
-    if ScopeValue = '' then
-      ScopeValue := 'runtime';
+    ScopeValue := LowerCase(ChildText(ANode, 'scope'));
+    if ScopeValue = 'import' then
+      Exit;
+    OptionalValue := ChildText(ANode, 'optional');
+    ScopeValue := MavenDependencyScope(ScopeValue, OptionalValue);
     PURL := '';
     if (GroupID <> '') and (ArtifactID <> '') and IsExactVersion(VersionValue) then
       PURL := 'pkg:maven/' + PercentEncode(GroupID, False) + '/' +
@@ -1161,7 +1655,7 @@ procedure ParseCargoTOML(const AFileName, ARelativePath: string;
 var
   Lines: TStringList;
   I, EqualsAt: Integer;
-  LineValue, SectionValue, NameValue, VersionValue: string;
+  LineValue, SectionValue, NameValue, VersionValue, ScopeValue: string;
 begin
   Lines := TStringList.Create;
   try
@@ -1201,8 +1695,15 @@ begin
         else
           VersionValue := '';
       end;
+      case SectionValue of
+        'dependencies': ScopeValue := 'runtime';
+        'dev-dependencies': ScopeValue := 'development';
+        'build-dependencies': ScopeValue := 'build';
+      else
+        ScopeValue := SectionValue;
+      end;
       AddComponent(AComponents, Unquote(NameValue), Unquote(VersionValue),
-        'Cargo', ARelativePath, 'conservative-cargo-toml', SectionValue);
+        'Cargo', ARelativePath, 'conservative-cargo-toml', ScopeValue);
     end;
   finally
     Lines.Free;

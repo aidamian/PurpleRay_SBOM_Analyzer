@@ -27,7 +27,7 @@ program test_runner;
 uses
   {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
   {$IFDEF Windows}Windows,{$ENDIF}
-  Classes, SysUtils, Contnrs, fpjson, zipper,
+  Classes, SysUtils, Contnrs, fpjson, jsonparser, zipper,
   uModels, uSHA256, uBinaryInspector, uManifestParsers, uArtifactIdentifier,
   uTaskHistory, uJSONUtils, uComponentNormalizer, uCycloneDX, uIgnoreMatcher,
   uScanEngine, uPlatform, uSystemInspector, uNativeDependencyInspector,
@@ -468,6 +468,154 @@ begin
 end;
 
 {**
+  Finds an object in a JSON array by one exact string member.
+
+  Parameters
+  ----------
+  AArray
+    Array whose object elements are searched; nil is accepted.
+  AField
+    Required string-member name.
+  AValue
+    Exact case-sensitive member value to match.
+
+  Returns
+  -------
+  TJSONObject
+    Borrowed matching object, or nil when no element matches.
+
+  Raises
+  ------
+  None
+}
+function FindJSONObjectByString(AArray: TJSONArray; const AField,
+  AValue: string): TJSONObject;
+var
+  I: Integer;
+  Candidate: TJSONObject;
+begin
+  Result := nil;
+  if AArray = nil then
+    Exit;
+  for I := 0 to AArray.Count - 1 do
+    if AArray.Items[I].JSONType = jtObject then
+    begin
+      Candidate := TJSONObject(AArray.Items[I]);
+      if JSONString(Candidate, AField) = AValue then
+        Exit(Candidate);
+    end;
+end;
+
+{**
+  Tests whether a JSON array contains one exact string value.
+
+  Parameters
+  ----------
+  AArray
+    Array whose scalar strings are searched; nil is accepted.
+  AValue
+    Exact case-sensitive value to find.
+
+  Returns
+  -------
+  Boolean
+    True when AValue occurs as a string array element.
+
+  Raises
+  ------
+  None
+}
+function JSONArrayContainsString(AArray: TJSONArray; const AValue: string):
+  Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  if AArray = nil then
+    Exit;
+  for I := 0 to AArray.Count - 1 do
+    if (AArray.Items[I].JSONType = jtString) and
+      (AArray.Items[I].AsString = AValue) then
+      Exit(True);
+end;
+
+{**
+  Looks up one named CycloneDX property on a component object.
+
+  Parameters
+  ----------
+  AComponent
+    Component object containing an optional properties array.
+  AName
+    Exact property name.
+  AValue
+    Receives the property value when present.
+
+  Returns
+  -------
+  Boolean
+    True when the requested property exists.
+
+  Raises
+  ------
+  None
+}
+function FindCycloneProperty(AComponent: TJSONObject; const AName: string;
+  out AValue: string): Boolean;
+var
+  Item: TJSONObject;
+begin
+  AValue := '';
+  Item := FindJSONObjectByString(JSONArray(AComponent, 'properties'), 'name',
+    AName);
+  Result := Item <> nil;
+  if Result then
+    AValue := JSONString(Item, 'value');
+end;
+
+{**
+  Adds a fully described component to a synthetic scan task.
+
+  Parameters
+  ----------
+  ATask
+    Task that takes ownership of the component.
+  AName, AVersion, AEcosystem, APURL
+    Component identity and optional Package URL.
+  ASourceArtifact, ASourceParser, AScope
+    Root-relative provenance and dependency-scope evidence.
+  AComponentType
+    CycloneDX component type.
+
+  Returns
+  -------
+  TComponent
+    Borrowed component reference for additional test-specific setup.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated when the component or evidence list cannot be allocated.
+}
+function AddFixtureComponent(ATask: TScanTask; const AName, AVersion,
+  AEcosystem, APURL, ASourceArtifact, ASourceParser, AScope,
+  AComponentType: string): uModels.TComponent;
+begin
+  Result := uModels.TComponent.Create;
+  Result.Name := AName;
+  Result.Version := AVersion;
+  Result.Ecosystem := AEcosystem;
+  Result.PackageURL := APURL;
+  Result.SourceArtifact := ASourceArtifact;
+  Result.SourceParser := ASourceParser;
+  Result.DependencyScope := AScope;
+  Result.ComponentType := AComponentType;
+  if ASourceArtifact <> '' then
+    Result.EvidencePaths.Add(ASourceArtifact);
+  ATask.Components.Add(Result);
+end;
+
+{**
   Searches a string collection for a case-insensitive diagnostic fragment.
 
   Parameters
@@ -551,18 +699,19 @@ end;
   Raises
   ------
   Exception
-    Raised when VERSION, the compiled UI value, or Lazarus file/product
-    resource metadata diverge.
+    Raised when VERSION, the compiled UI value, Lazarus file/product resource
+    metadata, or the operator-only CI generation order diverges.
 }
 procedure TestDisplayedVersion;
 var
-  VersionLines, VersionParts, ProjectLines: TStringList;
-  VersionValue, ProjectText: string;
-  PartIndex, CharacterIndex, PartValue: Integer;
+  VersionLines, VersionParts, ProjectLines, WorkflowLines: TStringList;
+  VersionValue, ProjectText, WorkflowText: string;
+  PartIndex, CharacterIndex, PartValue, CheckPosition, WritePosition: Integer;
 begin
   VersionLines := TStringList.Create;
   VersionParts := TStringList.Create;
   ProjectLines := TStringList.Create;
+  WorkflowLines := TStringList.Create;
   try
     VersionLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
       'VERSION');
@@ -613,7 +762,20 @@ begin
       'Lazarus string file version differs from VERSION');
     AssertTrue(Pos('ProductVersion="' + VersionValue + '"', ProjectText) > 0,
       'Lazarus product version differs from VERSION');
+    WorkflowLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      '.github' + DirectorySeparator + 'workflows' + DirectorySeparator +
+      'build-release.yml');
+    WorkflowText := WorkflowLines.Text;
+    CheckPosition := Pos('scripts/check-version.sh', WorkflowText);
+    WritePosition := Pos('scripts/write-version.sh', WorkflowText);
+    AssertTrue((CheckPosition = 0) or (CheckPosition > WritePosition),
+      'CI must not require synchronized fallbacks before generation');
+    AssertTrue(WritePosition > 0,
+      'CI version generation step is missing');
+    AssertTrue(WritePosition < Pos('scripts/run-tests.sh', WorkflowText),
+      'CI must generate version metadata before compiling tests');
   finally
+    WorkflowLines.Free;
     ProjectLines.Free;
     VersionParts.Free;
     VersionLines.Free;
@@ -873,10 +1035,348 @@ begin
       AssertEqual('>=2.2', Component.Version, 'constraint should be retained');
       AssertEqual('', Component.PackageURL,
         'constraint must not be converted to an exact purl');
+      Component := FindComponent(Components, 'Typing_Extensions');
+      AssertTrue(Component <> nil,
+        'the display spelling of the Python package is missing');
+      AssertEqual('4.12.2', Component.Version,
+        'Python exact version differs');
+      AssertEqual('pkg:pypi/typing-extensions@4.12.2',
+        Component.PackageURL, 'PEP-503 normalized PyPI purl differs');
     finally
       Artifact.Free;
     end;
   finally
+    Components.Free;
+  end;
+end;
+
+{**
+  Verifies ecosystem-specific Package URL canonicalization and rejection.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when a supported ecosystem produces a noncanonical purl or an
+    unresolved version/name is assigned a misleading purl.
+}
+procedure TestPackageURLNormalization;
+begin
+  AssertEqual('pkg:pypi/flask@3.0.3',
+    BuildPackageURL('PyPI', 'Flask', '3.0.3'),
+    'PyPI purl must be lowercase');
+  AssertEqual('pkg:pypi/typing-extensions@4.12.2',
+    BuildPackageURL('PyPI', 'typing_extensions', '4.12.2'),
+    'PyPI separator runs must follow PEP 503');
+  AssertEqual('pkg:pypi/friendly-bard@1.0',
+    BuildPackageURL('PyPI', 'FrIeNdLy-._.-bArD', '1.0'),
+    'PyPI mixed separator normalization differs');
+  AssertEqual('pkg:npm/lodash@4.17.21',
+    BuildPackageURL('npm', 'LoDash', '4.17.21'),
+    'npm purl name must be lowercase');
+  AssertEqual('pkg:npm/%40scope/tool@3.4.5',
+    BuildPackageURL('npm', '@Scope/Tool', '3.4.5'),
+    'scoped npm purl normalization differs');
+  AssertEqual('pkg:maven/org.example/demo-core@2.1.0',
+    BuildPackageURL('Gradle', 'org.example:demo-core', '2.1.0'),
+    'Gradle module must use a Maven purl');
+  AssertEqual('pkg:conda/numpy@2.1.0',
+    BuildPackageURL('Conda', 'numpy', '2.1.0'),
+    'Conda purl differs');
+  AssertEqual('', BuildPackageURL('npm', 'lodash', '^4.17.21'),
+    'a range must not produce a purl');
+  AssertEqual('', BuildPackageURL('npm', 'lodash', 'latest'),
+    'an npm tag must not produce a purl');
+  AssertEqual('', BuildPackageURL('npm', 'lodash', '1'),
+    'an npm one-segment X-range must not produce a purl');
+  AssertEqual('', BuildPackageURL('npm', 'lodash', '1.2'),
+    'an npm two-segment X-range must not produce a purl');
+  AssertEqual('', BuildPackageURL('npm', 'lodash', 'canary'),
+    'an arbitrary npm dist-tag must not produce a purl');
+  AssertEqual('pkg:npm/lodash@1.2.3-beta.1%2Bbuild.4',
+    BuildPackageURL('npm', 'lodash', '1.2.3-beta.1+build.4'),
+    'an exact npm prerelease/build version was rejected');
+  AssertEqual('', BuildPackageURL('Gradle', 'org.example:demo-core', '1.+'),
+    'a Gradle dynamic selector must not produce a purl');
+  AssertTrue(not IsVersionRange('file:/home/alice/private/pkg'),
+    'a private local path must not be classified as a requested range');
+  AssertEqual('', BuildPackageURL('npm', '@scope/', '1.0.0'),
+    'an incomplete npm scope must not produce a purl');
+  AssertEqual('', BuildPackageURL('Gradle', 'org.example:', '1.0.0'),
+    'an incomplete Gradle coordinate must not produce a purl');
+end;
+
+{**
+  Verifies that conservative Gradle and Conda parsers assign resolved purls.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when production parser dispatch loses an exact module identity or
+    emits an ecosystem-incompatible Package URL.
+}
+procedure TestGradleAndCondaPURLs;
+var
+  DirectoryName, FileName: string;
+  Components: TObjectList;
+  Artifact: TArtifact;
+  Component: uModels.TComponent;
+begin
+  DirectoryName := NewTemporaryDirectory('gradle-conda-purls');
+  Components := TObjectList.Create(True);
+  try
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) +
+      'gradle.lockfile';
+    WriteText(FileName, 'org.example:demo-core:2.1.0=runtimeClasspath' +
+      LineEnding);
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'gradle.lockfile', pkGradleLock, Artifact,
+        Components);
+      Component := FindComponent(Components, 'org.example:demo-core');
+      AssertTrue(Component <> nil, 'Gradle component is missing');
+      AssertEqual('pkg:maven/org.example/demo-core@2.1.0',
+        Component.PackageURL, 'parsed Gradle purl differs');
+    finally
+      Artifact.Free;
+    end;
+
+    Components.Clear;
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) +
+      'environment.yml';
+    WriteText(FileName, 'name: fixture' + LineEnding + 'dependencies:' +
+      LineEnding + '  - numpy=2.1.0=py312_0' + LineEnding);
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'environment.yml', pkEnvironmentYAML, Artifact,
+        Components);
+      Component := FindComponent(Components, 'numpy');
+      AssertTrue(Component <> nil, 'Conda component is missing');
+      AssertEqual('pkg:conda/numpy@2.1.0', Component.PackageURL,
+        'parsed Conda purl differs');
+    finally
+      Artifact.Free;
+    end;
+  finally
+    Components.Free;
+  end;
+end;
+
+{**
+  Verifies production manifest parsing and honest CycloneDX version/scope use.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when Cargo requirements, npm paths/tags/partials, or Maven scopes
+    are represented as resolved versions or mapped to an incorrect spec scope.
+}
+procedure TestDeclaredVersionAndScopeSemantics;
+var
+  DirectoryName, FileName, PropertyValue: string;
+  Components: TObjectList;
+  Artifact: TArtifact;
+  Component: uModels.TComponent;
+  Task: TScanTask;
+  SBOM: UTF8String;
+  Data: TJSONData;
+  Root, ComponentJSON: TJSONObject;
+  ComponentArray: TJSONArray;
+  I: Integer;
+begin
+  DirectoryName := NewTemporaryDirectory('declared-version-scope');
+  Components := TObjectList.Create(True);
+  Task := TScanTask.Create;
+  try
+    Task.TargetDirectory := DirectoryName;
+    Task.TargetRootName := 'declared-version-scope';
+    Task.ScannerVersion := AppVersion;
+
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'Cargo.toml';
+    WriteText(FileName, '[dependencies]' + LineEnding +
+      'serde = "1.0.0"' + LineEnding + '[dev-dependencies]' + LineEnding +
+      'insta = "1.2"' + LineEnding + '[build-dependencies]' + LineEnding +
+      'cc = "1.0.99"' + LineEnding);
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'Cargo.toml', pkCargoTOML, Artifact, Components);
+      AssertTrue(Artifact.Status in [arsParsed, arsPartiallyParsed],
+        'Cargo.toml should parse conservatively');
+    finally
+      Artifact.Free;
+    end;
+    Component := FindComponent(Components, 'serde');
+    AssertTrue(Component <> nil, 'Cargo runtime dependency is missing');
+    AssertEqual('runtime', Component.DependencyScope,
+      'Cargo runtime scope differs');
+    AssertEqual('', Component.PackageURL,
+      'Cargo manifest requirement must not produce a resolved purl');
+    AssertEqual('development', FindComponent(Components,
+      'insta').DependencyScope, 'Cargo dev scope differs');
+    AssertEqual('build', FindComponent(Components, 'cc').DependencyScope,
+      'Cargo build scope differs');
+    for I := 0 to Components.Count - 1 do
+      Task.Components.Add(uModels.TComponent(Components[I]).Clone);
+    SBOM := GenerateCycloneDX(Task);
+    Data := GetJSON(string(SBOM));
+    try
+      Root := TJSONObject(Data);
+      ComponentArray := JSONArray(Root, 'components');
+      ComponentJSON := FindJSONObjectByString(ComponentArray, 'name', 'serde');
+      AssertTrue((ComponentJSON.Find('version') = nil) and
+        (ComponentJSON.Find('purl') = nil),
+        'Cargo manifest requirement became a resolved identity');
+      AssertTrue(FindCycloneProperty(ComponentJSON,
+        'purpleray-sbom-analyzer:requested-range', PropertyValue),
+        'Cargo shorthand requested range is missing');
+      AssertEqual('1.0.0', PropertyValue,
+        'Cargo shorthand requested range differs');
+      ComponentJSON := FindJSONObjectByString(ComponentArray, 'name', 'insta');
+      AssertEqual('excluded', JSONString(ComponentJSON, 'scope'),
+        'Cargo development dependency must be excluded');
+      ComponentJSON := FindJSONObjectByString(ComponentArray, 'name', 'cc');
+      AssertTrue(ComponentJSON.Find('scope') = nil,
+        'Cargo build dependency must retain the required default');
+    finally
+      Data.Free;
+    end;
+
+    Components.Clear;
+    Task.Components.Clear;
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'package.json';
+    WriteText(FileName, '{"dependencies":{' +
+      '"local-secret":"file:/home/alice/private/pkg",' +
+      '"partial":"1.2","tagged":"canary","exact":"1.2.3"}}');
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'package.json', pkPackageJSON, Artifact,
+        Components);
+      AssertTrue(Artifact.Status = arsParsed, 'package.json should parse');
+    finally
+      Artifact.Free;
+    end;
+    for I := 0 to Components.Count - 1 do
+      Task.Components.Add(uModels.TComponent(Components[I]).Clone);
+    SBOM := GenerateCycloneDX(Task);
+    AssertTrue(Pos('/home/alice/private/pkg', string(SBOM)) = 0,
+      'default SBOM leaked a local dependency path');
+    Data := GetJSON(string(SBOM));
+    try
+      Root := TJSONObject(Data);
+      ComponentArray := JSONArray(Root, 'components');
+      ComponentJSON := FindJSONObjectByString(ComponentArray, 'name',
+        'partial');
+      AssertTrue((ComponentJSON.Find('version') = nil) and
+        (ComponentJSON.Find('purl') = nil),
+        'npm partial X-range became a resolved identity');
+      AssertTrue(FindCycloneProperty(ComponentJSON,
+        'purpleray-sbom-analyzer:requested-range', PropertyValue),
+        'npm partial requested range is missing');
+      AssertEqual('1.2', PropertyValue, 'npm partial range differs');
+      ComponentJSON := FindJSONObjectByString(ComponentArray, 'name',
+        'tagged');
+      AssertTrue((ComponentJSON.Find('version') = nil) and
+        (ComponentJSON.Find('purl') = nil) and
+        not FindCycloneProperty(ComponentJSON,
+        'purpleray-sbom-analyzer:requested-range', PropertyValue),
+        'npm dist-tag was mislabeled as a resolved version or range');
+      ComponentJSON := FindJSONObjectByString(ComponentArray, 'name',
+        'exact');
+      AssertEqual('1.2.3', JSONString(ComponentJSON, 'version'),
+        'exact npm version was lost');
+      AssertEqual('pkg:npm/exact@1.2.3', JSONString(ComponentJSON, 'purl'),
+        'exact npm purl differs');
+    finally
+      Data.Free;
+    end;
+
+    Components.Clear;
+    Task.Components.Clear;
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'pom.xml';
+    WriteText(FileName, '<?xml version="1.0"?><project><dependencies>' +
+      '<dependency><groupId>org.example</groupId><artifactId>compile-dep' +
+      '</artifactId><version>1.0.0</version></dependency>' +
+      '<dependency><groupId>org.example</groupId><artifactId>test-dep' +
+      '</artifactId><version>1.0.0</version><scope>test</scope></dependency>' +
+      '<dependency><groupId>org.example</groupId><artifactId>provided-dep' +
+      '</artifactId><version>1.0.0</version><scope>provided</scope></dependency>' +
+      '<dependency><groupId>org.example</groupId><artifactId>system-dep' +
+      '</artifactId><version>1.0.0</version><scope>system</scope></dependency>' +
+      '<dependency><groupId>org.example</groupId><artifactId>optional-dep' +
+      '</artifactId><version>1.0.0</version><optional>true</optional></dependency>' +
+      '<dependency><groupId>org.example</groupId><artifactId>imported-bom' +
+      '</artifactId><version>1.0.0</version><scope>import</scope></dependency>' +
+      '</dependencies></project>');
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'pom.xml', pkMavenPOM, Artifact, Components);
+      AssertTrue(Artifact.Status = arsParsed, 'scope POM should parse');
+    finally
+      Artifact.Free;
+    end;
+    AssertEqual('runtime', FindComponent(Components,
+      'compile-dep').DependencyScope, 'Maven compile scope differs');
+    AssertEqual('development', FindComponent(Components,
+      'test-dep').DependencyScope, 'Maven test scope differs');
+    AssertEqual('provided', FindComponent(Components,
+      'provided-dep').DependencyScope, 'Maven provided scope was not retained');
+    AssertEqual('system', FindComponent(Components,
+      'system-dep').DependencyScope, 'Maven system scope was not retained');
+    AssertEqual('optional', FindComponent(Components,
+      'optional-dep').DependencyScope, 'Maven optional flag differs');
+    AssertTrue(FindComponent(Components, 'imported-bom') = nil,
+      'Maven dependency-management import became a runtime component');
+    for I := 0 to Components.Count - 1 do
+      Task.Components.Add(uModels.TComponent(Components[I]).Clone);
+    SBOM := GenerateCycloneDX(Task);
+    Data := GetJSON(string(SBOM));
+    try
+      Root := TJSONObject(Data);
+      ComponentArray := JSONArray(Root, 'components');
+      ComponentJSON := FindJSONObjectByString(ComponentArray, 'name',
+        'test-dep');
+      AssertEqual('excluded', JSONString(ComponentJSON, 'scope'),
+        'Maven test dependency must be excluded');
+      ComponentJSON := FindJSONObjectByString(ComponentArray, 'name',
+        'optional-dep');
+      AssertEqual('optional', JSONString(ComponentJSON, 'scope'),
+        'Maven optional dependency scope differs');
+      ComponentJSON := FindJSONObjectByString(ComponentArray, 'name',
+        'provided-dep');
+      AssertTrue(ComponentJSON.Find('scope') = nil,
+        'Maven provided dependency must remain required');
+      ComponentJSON := FindJSONObjectByString(ComponentArray, 'name',
+        'system-dep');
+      AssertTrue(ComponentJSON.Find('scope') = nil,
+        'Maven system dependency must remain required');
+    finally
+      Data.Free;
+    end;
+  finally
+    Task.Free;
     Components.Free;
   end;
 end;
@@ -1355,8 +1855,10 @@ end;
 
 procedure TestNativeDependencyVersions;
 begin
-  AssertEqual('6', NativeDependencyVersion('libc.so.6'),
-    'ELF SONAME major version differs');
+  AssertEqual('', NativeDependencyVersion('libc.so.6'),
+    'ELF SONAME ABI major must not become a product version');
+  AssertEqual('', NativeDependencyVersion('libgtk-3.so.0'),
+    'a bare ELF ABI suffix must not become a product version');
   AssertEqual('1.2.3', NativeDependencyVersion('/opt/lib/libdemo.so.1.2.3'),
     'ELF SONAME dotted version differs');
   AssertEqual('3', NativeDependencyVersion('/usr/lib/libcrypto.3.dylib'),
@@ -1386,6 +1888,8 @@ begin
   SetUInt16LE(Buffer, 16, 3);
   SetUInt16LE(Buffer, 18, 62);
   WriteBytes(FileName, Buffer);
+  FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'libc.so.6';
+  WriteBytes(FileName, Buffer);
 
   Task := TScanTask.Create;
   Engine := TScanEngine.Create(nil, nil);
@@ -1398,9 +1902,16 @@ begin
     AssertTrue(Component <> nil, 'versioned native component is missing');
     AssertEqual('4.2', Component.Version,
       'versioned native component lost filename evidence');
+    Component := FindComponent(Task.Components, 'libc.so.6');
+    AssertTrue(Component <> nil, 'bare-ABI native component is missing');
+    AssertEqual('', Component.Version,
+      'bare ELF ABI suffix leaked into the component version');
     SBOM := GenerateCycloneDX(Task);
     AssertTrue(Pos('"version" : "4.2"', string(SBOM)) > 0,
       'native version evidence is missing from CycloneDX output');
+    AssertTrue(Pos('purpleray-sbom-analyzer:soname-abi-version',
+      string(SBOM)) > 0,
+      'bare ELF ABI evidence is missing from CycloneDX properties');
   finally
     Engine.Free;
     Task.Free;
@@ -1700,7 +2211,8 @@ end;
   ------
   Exception
     Raised when scoped evidence does not merge or production artifact
-    identification omits the current-format Lazarus project.
+    identification/serialization omits the parsed project or current-format
+    Lazarus requirement.
 }
 procedure TestManifestLockScan;
 var
@@ -1708,6 +2220,11 @@ var
   Engine: TScanEngine;
   Component: uModels.TComponent;
   Artifact: TArtifact;
+  SBOM: UTF8String;
+  Data: TJSONData;
+  Root, Metadata, Primary, ComponentJSON, RootDependency: TJSONObject;
+  Components, Dependencies, DependsOn: TJSONArray;
+  RootReference, ComponentReferenceValue: string;
 begin
   Task := TScanTask.Create;
   Engine := TScanEngine.Create(nil, nil);
@@ -1737,9 +2254,555 @@ begin
       'production Lazarus parser identification differs');
     AssertEqual(1, Artifact.ComponentCount,
       'production Lazarus artifact component count differs');
+
+    SBOM := GenerateCycloneDX(Task);
+    Data := GetJSON(string(SBOM));
+    try
+      Root := TJSONObject(Data);
+      Metadata := JSONObject(Root, 'metadata');
+      Primary := JSONObject(Metadata, 'component');
+      AssertEqual('fixtures', JSONString(Primary, 'name'),
+        'production root folder name differs');
+      AssertEqual('pkg:npm/fixture-app@1.2.3', JSONString(Primary, 'purl'),
+        'parsed project component was not promoted');
+      RootReference := JSONString(Primary, 'bom-ref');
+      Components := JSONArray(Root, 'components');
+      AssertTrue(FindJSONObjectByString(Components, 'name',
+        'fixture-app') = nil, 'parsed project remains duplicated');
+      ComponentJSON := FindJSONObjectByString(Components, 'name', 'lodash');
+      AssertTrue(ComponentJSON <> nil,
+        'production CycloneDX components omitted lodash');
+      ComponentReferenceValue := JSONString(ComponentJSON, 'bom-ref');
+      Dependencies := JSONArray(Root, 'dependencies');
+      RootDependency := FindJSONObjectByString(Dependencies, 'ref',
+        RootReference);
+      DependsOn := JSONArray(RootDependency, 'dependsOn');
+      AssertTrue(JSONArrayContainsString(DependsOn,
+        ComponentReferenceValue),
+        'production manifest edge to lodash is missing');
+    finally
+      Data.Free;
+    end;
   finally
     Engine.Free;
     Task.Free;
+  end;
+end;
+
+{**
+  Verifies stable synthetic roots and conservative multi-project handling.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when task IDs affect root identity, filesystem roots leak as names,
+    or ambiguous projects are promoted instead of remaining explicit.
+}
+procedure TestCycloneDXSyntheticRoot;
+var
+  Task: TScanTask;
+  Content: UTF8String;
+  Data: TJSONData;
+  Root, Metadata, Primary, RootDependency: TJSONObject;
+  Components, Dependencies, DependsOn: TJSONArray;
+  FirstReference, SecondReference: string;
+begin
+  Task := TScanTask.Create;
+  try
+    Task.ID := '11111111-2222-3333-4444-555555555555';
+    Task.TargetDirectory := '/first/location/repeated-name';
+    Task.ScannerVersion := AppVersion;
+    Content := GenerateCycloneDX(Task);
+    Data := GetJSON(string(Content));
+    try
+      Root := TJSONObject(Data);
+      Metadata := JSONObject(Root, 'metadata');
+      Primary := JSONObject(Metadata, 'component');
+      FirstReference := JSONString(Primary, 'bom-ref');
+      AssertTrue(FirstReference <> '', 'synthetic root reference is missing');
+    finally
+      Data.Free;
+    end;
+
+    Task.ID := 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    Content := GenerateCycloneDX(Task);
+    Data := GetJSON(string(Content));
+    try
+      Root := TJSONObject(Data);
+      Metadata := JSONObject(Root, 'metadata');
+      Primary := JSONObject(Metadata, 'component');
+      SecondReference := JSONString(Primary, 'bom-ref');
+      AssertEqual(FirstReference, SecondReference,
+        'synthetic root reference changed with the task ID');
+    finally
+      Data.Free;
+    end;
+
+    AddFixtureComponent(Task, 'project-one', '1.0.0', 'npm',
+      'pkg:npm/project-one@1.0.0', 'one/package.json', 'package-json',
+      'project', 'application');
+    AddFixtureComponent(Task, 'project-two', '2.0.0', 'npm',
+      'pkg:npm/project-two@2.0.0', 'two/package.json', 'package-json',
+      'project', 'application');
+    Content := GenerateCycloneDX(Task);
+    Data := GetJSON(string(Content));
+    try
+      Root := TJSONObject(Data);
+      Metadata := JSONObject(Root, 'metadata');
+      Primary := JSONObject(Metadata, 'component');
+      AssertEqual(FirstReference, JSONString(Primary, 'bom-ref'),
+        'ambiguous projects replaced the synthetic root');
+      Components := JSONArray(Root, 'components');
+      AssertEqual(2, Components.Count,
+        'ambiguous project components should remain explicit');
+      Dependencies := JSONArray(Root, 'dependencies');
+      RootDependency := FindJSONObjectByString(Dependencies, 'ref',
+        FirstReference);
+      DependsOn := JSONArray(RootDependency, 'dependsOn');
+      AssertEqual(2, DependsOn.Count,
+        'ambiguous projects should remain root dependencies');
+    finally
+      Data.Free;
+    end;
+
+    Task.TargetDirectory := '/';
+    Task.TargetRootName := '/';
+    Content := GenerateCycloneDX(Task);
+    Data := GetJSON(string(Content));
+    try
+      Root := TJSONObject(Data);
+      Metadata := JSONObject(Root, 'metadata');
+      Primary := JSONObject(Metadata, 'component');
+      AssertEqual('scanned-project', JSONString(Primary, 'name'),
+        'Unix filesystem root leaked as the primary component name');
+    finally
+      Data.Free;
+    end;
+
+    Task.TargetDirectory := 'C:\';
+    Task.TargetRootName := 'C:\';
+    Content := GenerateCycloneDX(Task);
+    Data := GetJSON(string(Content));
+    try
+      Root := TJSONObject(Data);
+      Metadata := JSONObject(Root, 'metadata');
+      Primary := JSONObject(Metadata, 'component');
+      AssertEqual('scanned-project', JSONString(Primary, 'name'),
+        'Windows filesystem root leaked as the primary component name');
+    finally
+      Data.Free;
+    end;
+  finally
+    Task.Free;
+  end;
+end;
+
+{**
+  Verifies CycloneDX subject promotion, honest fields, scopes, and graph edges.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when either supported schema version loses subject identity,
+    component semantics, retained evidence, or a directly observed graph edge.
+  EFCreateError, EWriteError
+    Propagated when the optional CI schema fixtures cannot be written.
+}
+procedure TestCycloneDXStructure;
+var
+  Task: TScanTask;
+  ProjectComponent, SharedComponent: uModels.TComponent;
+  Artifact: TArtifact;
+  SBOM16, SBOM17: UTF8String;
+  Data: TJSONData;
+  Root, Metadata, Primary, ComponentJSON, RuntimeJSON, RangeJSON,
+    OptionalJSON, PeerJSON, ResolvedJSON, MergedJSON, BuildJSON, BinaryJSON,
+    SecondBinaryJSON, LibcJSON, DottedJSON, SharedJSON, RootDependency, BinaryDependency,
+    SecondBinaryDependency: TJSONObject;
+  Components, Dependencies, DependsOn: TJSONArray;
+  RootReference, RuntimeReference, RangeReference, OptionalReference,
+    PeerReference, ResolvedReference, MergedReference, BinaryReference,
+    SecondBinaryReference, LibcReference,
+    DottedReference, SharedReference, SystemReference, PropertyValue,
+    FixtureDirectory: string;
+begin
+  Task := TScanTask.Create;
+  try
+    Task.ID := '00112233-4455-6677-8899-aabbccddeeff';
+    Task.CreatedUTC := '2025-01-02T03:04:05.000Z';
+    Task.StartedUTC := Task.CreatedUTC;
+    Task.TargetDirectory := '/private/acme/fixture-root/';
+    Task.TargetRootName := 'stale-root-name';
+    Task.ScannerVersion := AppVersion;
+
+    ProjectComponent := AddFixtureComponent(Task, 'fixture-app', '1.2.3',
+      'npm', 'pkg:npm/fixture-app@1.2.3', 'package.json', 'package-json',
+      'project', 'application');
+    ProjectComponent.SHA256 := SHA256String('fixture-project');
+    AddFixtureComponent(Task, 'lodash', '4.17.21', 'npm',
+      'pkg:npm/lodash@4.17.21', 'package.json', 'package-json', 'runtime',
+      'library');
+    AddFixtureComponent(Task, 'vitest', '^2.0.0', 'npm', '', 'package.json',
+      'package-json', 'development', 'library');
+    AddFixtureComponent(Task, 'optional-tool', '1.1.0', 'npm',
+      'pkg:npm/optional-tool@1.1.0', 'package.json', 'package-json',
+      'optional', 'library');
+    AddFixtureComponent(Task, 'peer-tool', '1.0.0', 'npm',
+      'pkg:npm/peer-tool@1.0.0', 'package.json', 'package-json', 'peer',
+      'library');
+    AddFixtureComponent(Task, 'locked-tool', '3.0.0', 'npm',
+      'pkg:npm/locked-tool@3.0.0', 'package-lock.json',
+      'package-lock-json', 'resolved', 'library');
+    AddFixtureComponent(Task, 'merged-tool', '2.0.0', 'npm',
+      'pkg:npm/merged-tool@2.0.0', 'package.json', 'package-json',
+      'development, runtime', 'library');
+
+    AddFixtureComponent(Task, 'demo-tool', '', 'native', '', 'bin/demo-tool',
+      'binary-header', '', 'application');
+    AddFixtureComponent(Task, 'libc.so.6', '6', 'native', '', 'bin/demo-tool',
+      'binary-dependency-table', 'runtime', 'library');
+    AddFixtureComponent(Task, 'libdemo.so.1.2.3', '1.2.3', 'native', '',
+      'bin/demo-tool', 'binary-dependency-table', 'runtime', 'library');
+    AddFixtureComponent(Task, 'libsystem.so.2', '', 'native', '',
+      'bin/demo-tool', 'readelf', 'runtime', 'library');
+    AddFixtureComponent(Task, 'libbuild.so.1', '', 'native', '',
+      'bin/demo-tool', 'binary-dependency-table', 'build', 'library');
+    AddFixtureComponent(Task, 'libother.so.1', '', 'native', '',
+      'bin/other-tool', 'binary-dependency-table', 'runtime', 'library');
+    SharedComponent := AddFixtureComponent(Task, 'libshared.so.7', '',
+      'native', '', 'bin/demo-tool', 'binary-dependency-table', 'runtime',
+      'library');
+    SharedComponent.EvidencePaths.Add('bin/demo-copy');
+    AddFixtureComponent(Task, 'demo-copy', '', 'native', '', 'bin/demo-copy',
+      'binary-header', '', 'application');
+
+    Artifact := TArtifact.Create;
+    Artifact.RelativePath := 'bin/demo-tool';
+    Artifact.ArtifactType := 'ELF executable';
+    Artifact.ParserName := 'binary-header';
+    Artifact.Status := arsParsed;
+    Task.Artifacts.Add(Artifact);
+
+    SBOM16 := GenerateCycloneDX(Task, cdxSpec16);
+    SBOM17 := GenerateCycloneDX(Task);
+    FixtureDirectory := GetEnvironmentVariable(
+      'PURPLERAY_CYCLONEDX_FIXTURE_DIR');
+    if FixtureDirectory <> '' then
+    begin
+      if not ForceDirectories(FixtureDirectory) then
+        Fail('Unable to create CycloneDX schema-fixture directory: ' +
+          FixtureDirectory);
+      WriteUTF8File(IncludeTrailingPathDelimiter(FixtureDirectory) +
+        'fixture-1.6.cdx.json', SBOM16);
+      WriteUTF8File(IncludeTrailingPathDelimiter(FixtureDirectory) +
+        'fixture-1.7.cdx.json', SBOM17);
+    end;
+
+    Data := GetJSON(string(SBOM16));
+    try
+      AssertTrue(Data.JSONType = jtObject,
+        'CycloneDX 1.6 output root is not an object');
+      Root := TJSONObject(Data);
+      AssertEqual('1.6', JSONString(Root, 'specVersion'),
+        'explicit CycloneDX compatibility version differs');
+      AssertEqual('https://cyclonedx.org/schema/bom-1.6.schema.json',
+        JSONString(Root, '$schema'), 'CycloneDX 1.6 schema URL differs');
+    finally
+      Data.Free;
+    end;
+
+    Data := GetJSON(string(SBOM17));
+    try
+      AssertTrue(Data.JSONType = jtObject,
+        'CycloneDX 1.7 output root is not an object');
+      Root := TJSONObject(Data);
+      AssertEqual('1.7', JSONString(Root, 'specVersion'),
+        'default CycloneDX version differs');
+      AssertEqual('https://cyclonedx.org/schema/bom-1.7.schema.json',
+        JSONString(Root, '$schema'), 'CycloneDX 1.7 schema URL differs');
+
+      Metadata := JSONObject(Root, 'metadata');
+      AssertTrue(Metadata <> nil, 'CycloneDX metadata is missing');
+      Primary := JSONObject(Metadata, 'component');
+      AssertTrue(Primary <> nil, 'metadata.component is missing');
+      AssertEqual('application', JSONString(Primary, 'type'),
+        'primary component type differs');
+      AssertEqual('fixture-root', JSONString(Primary, 'name'),
+        'primary component must use the target-folder basename');
+      AssertEqual('1.2.3', JSONString(Primary, 'version'),
+        'project version was not promoted');
+      AssertEqual('pkg:npm/fixture-app@1.2.3', JSONString(Primary, 'purl'),
+        'project purl was not promoted');
+      RootReference := JSONString(Primary, 'bom-ref');
+      AssertEqual('pkg:npm/fixture-app@1.2.3', RootReference,
+        'promoted project reference differs');
+      AssertTrue(Primary.Find('scope') = nil,
+        'project scope must use the required default');
+
+      Components := JSONArray(Root, 'components');
+      AssertTrue(Components <> nil, 'CycloneDX components are missing');
+      AssertEqual(14, Components.Count,
+        'promoted project component was not removed exactly once');
+      AssertTrue(FindJSONObjectByString(Components, 'name', 'fixture-app') = nil,
+        'promoted project remains duplicated in components');
+
+      RuntimeJSON := FindJSONObjectByString(Components, 'name', 'lodash');
+      RangeJSON := FindJSONObjectByString(Components, 'name', 'vitest');
+      OptionalJSON := FindJSONObjectByString(Components, 'name',
+        'optional-tool');
+      PeerJSON := FindJSONObjectByString(Components, 'name', 'peer-tool');
+      ResolvedJSON := FindJSONObjectByString(Components, 'name',
+        'locked-tool');
+      MergedJSON := FindJSONObjectByString(Components, 'name', 'merged-tool');
+      BuildJSON := FindJSONObjectByString(Components, 'name', 'libbuild.so.1');
+      BinaryJSON := FindJSONObjectByString(Components, 'name', 'demo-tool');
+      SecondBinaryJSON := FindJSONObjectByString(Components, 'name',
+        'demo-copy');
+      LibcJSON := FindJSONObjectByString(Components, 'name', 'libc.so.6');
+      DottedJSON := FindJSONObjectByString(Components, 'name',
+        'libdemo.so.1.2.3');
+      SharedJSON := FindJSONObjectByString(Components, 'name',
+        'libshared.so.7');
+      ComponentJSON := FindJSONObjectByString(Components, 'name',
+        'libsystem.so.2');
+      AssertTrue((RuntimeJSON <> nil) and (RangeJSON <> nil) and
+        (OptionalJSON <> nil) and (PeerJSON <> nil) and
+        (ResolvedJSON <> nil) and (MergedJSON <> nil) and
+        (BuildJSON <> nil) and (BinaryJSON <> nil) and
+        (SecondBinaryJSON <> nil) and (LibcJSON <> nil) and
+        (DottedJSON <> nil) and (SharedJSON <> nil) and
+        (ComponentJSON <> nil), 'CycloneDX fixture components are incomplete');
+
+      AssertTrue(RangeJSON.Find('version') = nil,
+        'requested range leaked into the CycloneDX version field');
+      AssertEqual('excluded', JSONString(RangeJSON, 'scope'),
+        'development dependency scope differs');
+      AssertTrue(FindCycloneProperty(RangeJSON,
+        'purpleray-sbom-analyzer:requested-range', PropertyValue),
+        'requested-range property is missing');
+      AssertEqual('^2.0.0', PropertyValue,
+        'requested-range property value differs');
+      AssertTrue(FindCycloneProperty(RangeJSON,
+        'purpleray-sbom-analyzer:dependency-scope', PropertyValue),
+        'custom dependency-scope property was lost');
+      AssertEqual('development', PropertyValue,
+        'custom development scope differs');
+      AssertEqual('optional', JSONString(OptionalJSON, 'scope'),
+        'optional dependency scope differs');
+      AssertEqual('optional', JSONString(PeerJSON, 'scope'),
+        'peer dependency must map to optional');
+      AssertTrue(ResolvedJSON.Find('scope') = nil,
+        'resolved dependency must use the required default');
+      AssertTrue(MergedJSON.Find('scope') = nil,
+        'runtime plus development must remain required');
+      AssertTrue(RuntimeJSON.Find('scope') = nil,
+        'runtime must use the required default');
+      AssertTrue(BuildJSON.Find('scope') = nil,
+        'build dependency must use the required default');
+
+      AssertTrue(LibcJSON.Find('version') = nil,
+        'bare SONAME ABI leaked into version');
+      AssertTrue(FindCycloneProperty(LibcJSON,
+        'purpleray-sbom-analyzer:soname-abi-version', PropertyValue),
+        'SONAME ABI property is missing');
+      AssertEqual('6', PropertyValue, 'SONAME ABI property differs');
+      AssertTrue(not FindCycloneProperty(LibcJSON,
+        'purpleray-sbom-analyzer:requested-range', PropertyValue),
+        'persisted SONAME ABI was mislabeled as a requested range');
+      AssertEqual('1.2.3', JSONString(DottedJSON, 'version'),
+        'dotted native product version was lost');
+
+      RuntimeReference := JSONString(RuntimeJSON, 'bom-ref');
+      RangeReference := JSONString(RangeJSON, 'bom-ref');
+      OptionalReference := JSONString(OptionalJSON, 'bom-ref');
+      PeerReference := JSONString(PeerJSON, 'bom-ref');
+      ResolvedReference := JSONString(ResolvedJSON, 'bom-ref');
+      MergedReference := JSONString(MergedJSON, 'bom-ref');
+      BinaryReference := JSONString(BinaryJSON, 'bom-ref');
+      SecondBinaryReference := JSONString(SecondBinaryJSON, 'bom-ref');
+      LibcReference := JSONString(LibcJSON, 'bom-ref');
+      DottedReference := JSONString(DottedJSON, 'bom-ref');
+      SharedReference := JSONString(SharedJSON, 'bom-ref');
+      SystemReference := JSONString(ComponentJSON, 'bom-ref');
+
+      Dependencies := JSONArray(Root, 'dependencies');
+      AssertTrue(Dependencies <> nil, 'CycloneDX dependency graph is missing');
+      AssertEqual(3, Dependencies.Count,
+        'dependency graph must contain root and two binary owners');
+      AssertEqual(RootReference,
+        JSONString(TJSONObject(Dependencies.Items[0]), 'ref'),
+        'metadata root must be the first dependency entry');
+      RootDependency := FindJSONObjectByString(Dependencies, 'ref',
+        RootReference);
+      DependsOn := JSONArray(RootDependency, 'dependsOn');
+      AssertEqual(6, DependsOn.Count,
+        'root direct-manifest dependency count differs');
+      AssertTrue(JSONArrayContainsString(DependsOn, RuntimeReference) and
+        JSONArrayContainsString(DependsOn, RangeReference) and
+        JSONArrayContainsString(DependsOn, OptionalReference) and
+        JSONArrayContainsString(DependsOn, PeerReference) and
+        JSONArrayContainsString(DependsOn, ResolvedReference) and
+        JSONArrayContainsString(DependsOn, MergedReference),
+        'root manifest dependency edges are incomplete');
+      AssertTrue(not JSONArrayContainsString(DependsOn, BinaryReference) and
+        not JSONArrayContainsString(DependsOn, LibcReference),
+        'root graph inferred unsupported native edges');
+
+      BinaryDependency := FindJSONObjectByString(Dependencies, 'ref',
+        BinaryReference);
+      DependsOn := JSONArray(BinaryDependency, 'dependsOn');
+      AssertEqual(4, DependsOn.Count,
+        'first binary direct-dependency count differs');
+      AssertTrue(JSONArrayContainsString(DependsOn, LibcReference) and
+        JSONArrayContainsString(DependsOn, DottedReference) and
+        JSONArrayContainsString(DependsOn, SharedReference) and
+        JSONArrayContainsString(DependsOn, SystemReference),
+        'first binary dependency-table edges are incomplete');
+      SecondBinaryDependency := FindJSONObjectByString(Dependencies, 'ref',
+        SecondBinaryReference);
+      DependsOn := JSONArray(SecondBinaryDependency, 'dependsOn');
+      AssertEqual(1, DependsOn.Count,
+        'second binary must have only the merged shared dependency');
+      AssertTrue(JSONArrayContainsString(DependsOn, SharedReference),
+        'merged cross-artifact evidence lost the second binary edge');
+      AssertTrue(FindJSONObjectByString(Dependencies, 'ref', LibcReference) = nil,
+        'leaf dependency received an inferred transitive graph entry');
+    finally
+      Data.Free;
+    end;
+  finally
+    Task.Free;
+  end;
+end;
+
+{**
+  Verifies binary graph edges survive production component normalization.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when a scanned library header merged with another binary's direct
+    dependency evidence loses its owner edge or creates a transitive edge.
+}
+procedure TestCycloneDXNormalizedBinaryGraph;
+var
+  RawTask, Task: TScanTask;
+  Artifact: TArtifact;
+  Component: uModels.TComponent;
+  SBOM: UTF8String;
+  Data: TJSONData;
+  Root, ComponentJSON, AppDependency, LibraryDependency: TJSONObject;
+  Components, Dependencies, DependsOn: TJSONArray;
+  AppReference, LibraryReference, LibcReference: string;
+begin
+  RawTask := TScanTask.Create;
+  Task := TScanTask.Create;
+  try
+    Task.TargetDirectory := '/private/normalized-binary-graph';
+    Task.TargetRootName := 'normalized-binary-graph';
+    Task.ScannerVersion := AppVersion;
+
+    AddFixtureComponent(RawTask, 'app', '', 'native', '', 'bin/app',
+      'binary-header', '', 'application');
+    AddFixtureComponent(RawTask, 'libfoo.so.1.2.3', '1.2.3', 'native', '',
+      'bin/app', 'binary-dependency-table', 'runtime', 'library');
+    AddFixtureComponent(RawTask, 'libfoo.so.1.2.3', '1.2.3', 'native', '',
+      'lib/libfoo.so.1.2.3', 'binary-header', '', 'library');
+    AddFixtureComponent(RawTask, 'libc.so.6', '', 'native', '',
+      'lib/libfoo.so.1.2.3', 'binary-dependency-table', 'runtime', 'library');
+    NormalizeComponents(RawTask.Components, Task.Components);
+    AssertEqual(3, Task.Components.Count,
+      'binary normalization fixture did not merge exactly one identity');
+    Component := FindComponent(Task.Components, 'libfoo.so.1.2.3');
+    AssertTrue(Component <> nil, 'normalized library component is missing');
+    AssertEqual('binary-dependency-table', Component.SourceParser,
+      'regression fixture did not collapse the binary-header parser pair');
+    AssertEqual(2, Component.EvidencePaths.Count,
+      'normalized library did not retain both binary evidence paths');
+
+    Artifact := TArtifact.Create;
+    Artifact.RelativePath := 'bin/app';
+    Artifact.ArtifactType := 'ELF executable';
+    Artifact.ParserName := 'binary-header';
+    Artifact.Status := arsParsed;
+    Task.Artifacts.Add(Artifact);
+    Artifact := TArtifact.Create;
+    Artifact.RelativePath := 'lib/libfoo.so.1.2.3';
+    Artifact.ArtifactType := 'ELF library';
+    Artifact.ParserName := 'binary-header';
+    Artifact.Status := arsParsed;
+    Task.Artifacts.Add(Artifact);
+
+    SBOM := GenerateCycloneDX(Task);
+    Data := GetJSON(string(SBOM));
+    try
+      Root := TJSONObject(Data);
+      Components := JSONArray(Root, 'components');
+      ComponentJSON := FindJSONObjectByString(Components, 'name', 'app');
+      AssertTrue(ComponentJSON <> nil, 'binary application node is missing');
+      AppReference := JSONString(ComponentJSON, 'bom-ref');
+      ComponentJSON := FindJSONObjectByString(Components, 'name',
+        'libfoo.so.1.2.3');
+      AssertTrue(ComponentJSON <> nil, 'binary library owner node is missing');
+      LibraryReference := JSONString(ComponentJSON, 'bom-ref');
+      ComponentJSON := FindJSONObjectByString(Components, 'name', 'libc.so.6');
+      AssertTrue(ComponentJSON <> nil, 'normalized leaf library is missing');
+      LibcReference := JSONString(ComponentJSON, 'bom-ref');
+
+      Dependencies := JSONArray(Root, 'dependencies');
+      AssertEqual(3, Dependencies.Count,
+        'normalized graph must contain root and two binary owners');
+      AppDependency := FindJSONObjectByString(Dependencies, 'ref',
+        AppReference);
+      AssertTrue(AppDependency <> nil,
+        'application dependency entry is missing');
+      DependsOn := JSONArray(AppDependency, 'dependsOn');
+      AssertEqual(1, DependsOn.Count,
+        'application received a lost or inferred dependency edge');
+      AssertTrue(JSONArrayContainsString(DependsOn, LibraryReference),
+        'application-to-library direct edge was lost during normalization');
+      AssertTrue(not JSONArrayContainsString(DependsOn, LibcReference),
+        'application received an inferred transitive libc edge');
+
+      LibraryDependency := FindJSONObjectByString(Dependencies, 'ref',
+        LibraryReference);
+      AssertTrue(LibraryDependency <> nil,
+        'scanned library dependency entry is missing after normalization');
+      DependsOn := JSONArray(LibraryDependency, 'dependsOn');
+      AssertEqual(1, DependsOn.Count,
+        'scanned library direct-dependency count differs');
+      AssertTrue(JSONArrayContainsString(DependsOn, LibcReference),
+        'library-to-libc direct edge was lost during normalization');
+    finally
+      Data.Free;
+    end;
+  finally
+    Task.Free;
+    RawTask.Free;
   end;
 end;
 
@@ -1769,7 +2832,7 @@ begin
       'CycloneDX generation is not deterministic');
     AssertTrue(Pos('/secret/work', string(First)) = 0,
       'default CycloneDX output leaked the absolute target path');
-    AssertTrue(Pos('"specVersion" : "1.6"', string(First)) > 0,
+    AssertTrue(Pos('"specVersion" : "1.7"', string(First)) > 0,
       'CycloneDX version is missing');
     AssertTrue(Pos('"name" : "PurpleRay SBOM Analyzer"', string(First)) > 0,
       'renamed scanner identity is missing from CycloneDX output');
@@ -2305,6 +3368,10 @@ begin
   RunTest('settings dialog DPI-stable layout',
     @TestScanSettingsDialogDPIStableLayout);
   RunTest('requirements parser', @TestRequirementsParser);
+  RunTest('Package URL normalization', @TestPackageURLNormalization);
+  RunTest('Gradle and Conda purls', @TestGradleAndCondaPURLs);
+  RunTest('declared version and scope semantics',
+    @TestDeclaredVersionAndScopeSemantics);
   RunTest('package.json parser', @TestPackageJSONParser);
   RunTest('package-lock.json parser', @TestPackageLockParser);
   RunTest('XML dependency parsers', @TestXMLParsers);
@@ -2324,6 +3391,10 @@ begin
   RunTest('component deduplication', @TestComponentDeduplication);
   RunTest('worker exception containment', @TestWorkerExceptionContainment);
   RunTest('manifest and lockfile scan', @TestManifestLockScan);
+  RunTest('CycloneDX synthetic root', @TestCycloneDXSyntheticRoot);
+  RunTest('CycloneDX structure and semantics', @TestCycloneDXStructure);
+  RunTest('CycloneDX normalized binary graph',
+    @TestCycloneDXNormalizedBinaryGraph);
   RunTest('deterministic CycloneDX', @TestDeterministicCycloneDX);
   RunTest('ignore and wildcard matching', @TestIgnoreMatching);
   RunTest('special-file skip', @TestSpecialFileSkip);

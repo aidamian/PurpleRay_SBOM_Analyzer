@@ -67,8 +67,10 @@ function InspectNativeDependencies(const AFileName, AFormatName: string;
   Returns
   -------
   string
-    Numeric dotted version, or an empty string when no unambiguous version is
-    present.
+    Numeric product-version evidence, or an empty string when no unambiguous
+    version is present. A single numeric ELF ``.so`` suffix is treated as an
+    ABI level rather than a component version; existing Mach-O install-name
+    extraction remains supported.
 
   Raises
   ------
@@ -295,6 +297,23 @@ type
   TLoadSegments = array of TLoadSegment;
   TQWordValues = array of QWord;
 
+{**
+  Checks that a version candidate contains only nonempty numeric segments.
+
+  Parameters
+  ----------
+  AValue
+    Candidate containing one or more numeric segments separated by dots.
+
+  Returns
+  -------
+  Boolean
+    True for a bare numeric segment or a well-formed numeric dotted sequence.
+
+  Raises
+  ------
+  None
+}
 function IsNumericDottedVersion(const AValue: string): Boolean;
 var
   I: Integer;
@@ -322,16 +341,21 @@ function NativeDependencyVersion(const ADeclaration: string): string;
 var
   FileNameValue, LowerName, Stem, Candidate: string;
   Marker, SeparatorAt: SizeInt;
+  RequireDottedCandidate: Boolean;
 begin
   Result := '';
   FileNameValue := ExtractFileName(StringReplace(Trim(ADeclaration), '\',
     DirectorySeparator, [rfReplaceAll]));
   LowerName := LowerCase(FileNameValue);
   Candidate := '';
+  RequireDottedCandidate := False;
 
   Marker := Pos('.so.', LowerName);
   if Marker > 0 then
-    Candidate := Copy(FileNameValue, Marker + Length('.so.'), MaxInt)
+  begin
+    Candidate := Copy(FileNameValue, Marker + Length('.so.'), MaxInt);
+    RequireDottedCandidate := True;
+  end
   else if (Length(LowerName) > Length('.dylib')) and
     (Copy(LowerName, Length(LowerName) - Length('.dylib') + 1,
       MaxInt) = '.dylib') then
@@ -344,8 +368,11 @@ begin
   { DLL suffixes are deliberately not interpreted. Names such as
     api-ms-win-core-file-l1-1-0.dll contain numeric tokens that are not a
     component version; the Windows version-resource API is authoritative. }
+  { A bare ELF suffix is an ABI level. The caller retains it in the complete
+    SONAME component name, so suppressing Version does not discard evidence. }
 
-  if IsNumericDottedVersion(Candidate) then
+  if IsNumericDottedVersion(Candidate) and
+    (not RequireDottedCandidate or (Pos('.', Candidate) > 0)) then
     Result := Candidate;
 end;
 

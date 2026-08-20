@@ -1,11 +1,12 @@
 # PurpleRay SBOM Analyzer
 
-PurpleRay SBOM Analyzer is a small, native desktop application that inventories local
-software artifacts and produces deterministic CycloneDX 1.6 JSON. It scans
-without network access and never executes files from the selected folder. Its
-native parsers are supplemented, when applicable, by bounded static-inspection
-facilities already present on the operating system; it never downloads or
-requires a separate scanner.
+PurpleRay SBOM Analyzer is a small, native desktop application that inventories
+local software artifacts and produces deterministic CycloneDX 1.7 JSON. The
+serializer retains tested CycloneDX 1.6 compatibility. It scans without network
+access and never executes files from the selected folder. Its native parsers
+are supplemented, when applicable, by bounded static-inspection facilities
+already present on the operating system; it never downloads or requires a
+separate scanner.
 
 The application uses one Object Pascal/Lazarus LCL codebase for Windows x64
 (Win32), Linux x64 (GTK3), and macOS x64 (Cocoa).
@@ -34,8 +35,9 @@ only feature currently exposed, so no unfinished placeholder is shown.
 - Reads ELF dynamic entries, PE normal and delay-load imports, and Mach-O load
   commands directly, including dependency declarations in universal Mach-O
   slices.
-- Normalizes and deduplicates components, merges evidence paths, and emits
-  stable CycloneDX 1.6 JSON.
+- Normalizes and deduplicates components, canonicalizes supported Package URLs,
+  merges evidence paths, and emits stable CycloneDX 1.7 JSON with a primary
+  component and directly evidenced dependency graph.
 - Persists scan history and settings as recoverable atomic JSON files.
 - Excludes absolute filesystem paths from the SBOM unless the user explicitly
   enables them for that scan.
@@ -219,12 +221,16 @@ component deduplication,
 worker exception containment, bounded manifest parsing, case-preserving and
 glob-safe enumeration, special-file and permission handling,
 application-shell/frame ownership and Lazarus resource registration,
-deterministic/path-safe CycloneDX generation, ignore matching, symbolic-link
-loops, and cancellation. Platform-inapplicable cases are reported explicitly
-as `SKIP`: Linux exercises literal wildcard and case-variant filenames, FIFOs,
-and `chmod`-based denial, while Windows exercises device/offline attribute and
-directory-enumeration error classification. The suite does not claim a Windows
-ACL-denial integration test. Tests require no network or downloaded scanner.
+deterministic/path-safe CycloneDX 1.6/1.7 generation, root-component promotion,
+observed dependency edges, honest version/scope fields, Package URL
+normalization, ignore matching, symbolic-link loops, and cancellation.
+Platform-inapplicable cases are reported explicitly as `SKIP`: Linux exercises
+literal wildcard and case-variant filenames, FIFOs, and `chmod`-based denial,
+while Windows exercises device/offline attribute and directory-enumeration
+error classification. The suite does not claim a Windows ACL-denial integration
+test. The core tests require no network or downloaded scanner. The Linux CI job
+additionally validates generated 1.6 and 1.7 fixtures against checksum-pinned
+[official CycloneDX schemas](https://github.com/CycloneDX/specification).
 
 For an explicit local invocation:
 
@@ -277,12 +283,15 @@ without guessing; otherwise the artifact is marked unsupported. `LICENSE`,
 `COPYING`, and `NOTICE` variants are recorded only as possible license
 evidence—no license is inferred from a filename.
 
-Component versions are written to CycloneDX whenever the scanned evidence
-actually supplies one: resolved lock-file versions, declared manifest versions,
-numeric ELF SONAME or Mach-O library-name versions, ELF SONAME evidence, and
-Windows PE version resources. An unversioned import such as `kernel32.dll` has
-no defensible component version, so its `version` member is intentionally
-omitted rather than filled with a guessed or misleading value.
+Component versions are written to CycloneDX only when the scanned evidence
+identifies one exact version, such as a resolved lock-file version, an exact
+manifest version, a dotted native library-name version, or a Windows PE version
+resource. Unresolved manifest constraints remain visible in the
+`purpleray-sbom-analyzer:requested-range` property but are not misrepresented as
+installed versions. A bare ELF SONAME suffix such as the `6` in `libc.so.6` is
+preserved as `purpleray-sbom-analyzer:soname-abi-version`, not emitted as a
+product version. An unversioned import such as `kernel32.dll` has no defensible
+component version, so its `version` member is intentionally omitted.
 
 For native binaries, bounded internal parsing is the portable baseline. It
 reads ELF `DT_NEEDED` entries, PE import and delay-import tables, and Mach-O
@@ -335,8 +344,10 @@ scripts/write-version.sh
 
 The writer always reads the root `VERSION`; a supplied version is accepted only
 when it matches that file. Its commit defaults to `unknown` for checked-in local
-fallbacks. CI first runs the non-mutating check against the tracked fallbacks,
-then generates build-only metadata with the full commit SHA.
+fallbacks. The non-mutating checker is a local consistency aid; CI does not
+require the operator to run either helper. CI validates `VERSION` directly,
+then generates build-only metadata with the full commit SHA before testing and
+compiling.
 
 The checked-in `src/app_icon.res` embeds the Windows/LCL icon. After changing
 `assets/app-icon.ico`, regenerate it with:

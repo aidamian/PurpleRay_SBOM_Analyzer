@@ -1,5 +1,4 @@
 # Deterministic parser fixture
 requests==2.32.3
 urllib3>=2.2
-typing-extensions[tests]===4.12.2 ; python_version < "3.11"
-
+Typing_Extensions[tests]===4.12.2 ; python_version < "3.11"
