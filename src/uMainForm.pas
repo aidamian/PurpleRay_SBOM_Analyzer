@@ -141,6 +141,7 @@ type
     procedure FeatureSelectionChanged(Sender: TObject);
   private
     FAnalyzerFrame: TSBOMAnalyzerFrame;
+    FCloseReissueQueued: Boolean;
 
     {**
       Creates and embeds the statically registered SBOM Analyzer feature.
@@ -181,6 +182,42 @@ type
       None
     }
     procedure AnalyzerActivityChanged(Sender: TObject; AScanActive: Boolean);
+
+    {**
+      Queues a second close request after asynchronous scan cancellation.
+
+      Parameters
+      ----------
+      Sender
+        Analyzer frame whose close preparation has completed.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure AnalyzerCloseReady(Sender: TObject);
+
+    {**
+      Reissues the native form close outside the worker-completion callback.
+
+      Parameters
+      ----------
+      Data
+        Unused asynchronous callback payload.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure ReissueClose(Data: PtrInt);
   public
     {**
       Creates the LFM-backed shell and its application-lifetime feature frame.
@@ -249,6 +286,7 @@ begin
   if FAnalyzerFrame <> nil then
   begin
     FAnalyzerFrame.OnActivityChanged := nil;
+    FAnalyzerFrame.OnCloseReady := nil;
     FAnalyzerFrame.PrepareForClose;
   end;
   inherited Destroy;
@@ -260,6 +298,7 @@ begin
   FAnalyzerFrame.Parent := AnalyzerPage;
   FAnalyzerFrame.Align := alClient;
   FAnalyzerFrame.OnActivityChanged := @AnalyzerActivityChanged;
+  FAnalyzerFrame.OnCloseReady := @AnalyzerCloseReady;
   AnalyzerActivityChanged(FAnalyzerFrame, FAnalyzerFrame.ScanActive);
 end;
 
@@ -273,7 +312,7 @@ end;
 
 procedure TMainForm.FormCloseRequested(Sender: TObject; var CanClose: Boolean);
 begin
-  CanClose := (FAnalyzerFrame = nil) or FAnalyzerFrame.PrepareForClose;
+  CanClose := (FAnalyzerFrame = nil) or FAnalyzerFrame.RequestClose;
 end;
 
 procedure TMainForm.FormDropFiles(Sender: TObject;
@@ -315,6 +354,20 @@ begin
     FeatureSelector.Hint := 'SBOM Analyzer';
     FeatureSelector.Font.Style := [];
   end;
+end;
+
+procedure TMainForm.AnalyzerCloseReady(Sender: TObject);
+begin
+  if (Sender <> FAnalyzerFrame) or FCloseReissueQueued then
+    Exit;
+  FCloseReissueQueued := True;
+  Application.QueueAsyncCall(@ReissueClose, 0);
+end;
+
+procedure TMainForm.ReissueClose(Data: PtrInt);
+begin
+  FCloseReissueQueued := False;
+  Close;
 end;
 
 end.

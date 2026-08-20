@@ -172,12 +172,35 @@ begin
   end;
 end;
 
+{**
+  Merges declaration and provenance evidence from one equal component.
+
+  Parameters
+  ----------
+  ATarget
+    Normalized component that receives deterministic merged values.
+  ASource
+    Equal source component whose ownership is unchanged.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if a merged list value cannot be allocated.
+}
 procedure MergeComponent(ATarget, ASource: uModels.TComponent);
 var
   I: Integer;
 begin
   for I := 0 to ASource.EvidencePaths.Count - 1 do
     ATarget.EvidencePaths.Add(ASource.EvidencePaths[I]);
+  for I := 0 to ASource.DeclaredLicenses.Count - 1 do
+    ATarget.DeclaredLicenses.Add(ASource.DeclaredLicenses[I]);
+  for I := 0 to ASource.DeclaredPublishers.Count - 1 do
+    ATarget.DeclaredPublishers.Add(ASource.DeclaredPublishers[I]);
   if (ATarget.SourceArtifact = '') or
     ((ASource.SourceArtifact <> '') and
     (CompareStr(ASource.SourceArtifact, ATarget.SourceArtifact) < 0)) then

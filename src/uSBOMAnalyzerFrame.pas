@@ -75,27 +75,27 @@ type
     FTaskList: TListView;
     MainSplitter: TSplitter;
     DetailPane: TPanel;
+    FDetailEmptyLabel: TLabel;
     FPages: TPageControl;
     SummaryPage: TTabSheet;
-    FSummaryMemo: TMemo;
+    FSummaryList: TListView;
+    FSummaryNotes: TMemo;
     ComponentsPage: TTabSheet;
     ComponentFiltersPanel: TPanel;
     ComponentSearchLabel: TLabel;
     FComponentSearch: TEdit;
-    ComponentEcosystemLabel: TLabel;
     FComponentEcosystem: TComboBox;
-    ComponentStatusLabel: TLabel;
     FComponentStatus: TComboBox;
     FComponentList: TListView;
+    FComponentEmptyLabel: TLabel;
     ArtifactsPage: TTabSheet;
     ArtifactFiltersPanel: TPanel;
     ArtifactSearchLabel: TLabel;
     FArtifactSearch: TEdit;
-    ArtifactTypeLabel: TLabel;
     FArtifactType: TComboBox;
-    ArtifactStatusLabel: TLabel;
     FArtifactStatus: TComboBox;
     FArtifactList: TListView;
+    FArtifactEmptyLabel: TLabel;
     SBOMPage: TTabSheet;
     FSBOMMemo: TMemo;
     MessagesPage: TTabSheet;
@@ -104,6 +104,10 @@ type
     FProgressPath: TLabel;
     FProgressStats: TLabel;
     FProgressBar: TProgressBar;
+    FExportFeedbackPanel: TPanel;
+    FOpenExportFolderButton: TButton;
+    FCopyExportPathButton: TButton;
+    ClosePollTimer: TTimer;
     FCopyMenu: TPopupMenu;
     CopySelectedMenuItem: TMenuItem;
 
@@ -127,7 +131,8 @@ type
     procedure NewScanClicked(Sender: TObject);
 
     {**
-      Requests cooperative cancellation of the selected active scan.
+      Requests cooperative cancellation of the running scan, independently of
+      the selected history row.
 
       Parameters
       ----------
@@ -363,6 +368,63 @@ type
         Clipboard backend failures may propagate.
     }
     procedure CopySelectedClicked(Sender: TObject);
+
+    {**
+      Opens the directory containing the most recently exported file.
+
+      Parameters
+      ----------
+      Sender
+        Footer action button; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+        Launch failures are reported through the analyzer error dialog.
+    }
+    procedure OpenExportFolderClicked(Sender: TObject);
+
+    {**
+      Copies the most recently exported path to the system clipboard.
+
+      Parameters
+      ----------
+      Sender
+        Footer action button; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+        Clipboard failures are reported through the analyzer error dialog.
+    }
+    procedure CopyExportPathClicked(Sender: TObject);
+
+    {**
+      Completes an accepted asynchronous close after the worker has finished.
+
+      Parameters
+      ----------
+      Sender
+        LFM-backed polling timer; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+        Finalization failures keep the close request pending and retryable.
+    }
+    procedure ClosePollTimerTick(Sender: TObject);
   private
     FTasks: TObjectList;
     FHistoryStore: TTaskHistoryStore;
@@ -370,15 +432,20 @@ type
     FSettings: TScanSettings;
     FWorker: TScanWorker;
     FActiveTaskID: string;
+    FCancelRequested: Boolean;
     FClosing: Boolean;
+    FClosePending: Boolean;
     FClosePrepared: Boolean;
+    FUsesDefaultDataDirectory: Boolean;
     FStartupWarning: string;
     FUpdatingDetails: Boolean;
     FComponentSortColumn: Integer;
     FComponentSortAscending: Boolean;
     FArtifactSortColumn: Integer;
     FArtifactSortAscending: Boolean;
+    FLastExportPath: string;
     FOnActivityChanged: TAnalyzerActivityEvent;
+    FOnCloseReady: TNotifyEvent;
 
     {**
       Reports whether a worker-backed scan currently owns the workspace.
@@ -416,6 +483,156 @@ type
         An exception from an assigned activity callback may propagate.
     }
     procedure SetActiveTaskID(const AValue: string);
+
+    {**
+      Expands the footer into its active-scan progress layout.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure SetActiveFooter;
+
+    {**
+      Collapses the footer to one idle or terminal status line.
+
+      Parameters
+      ----------
+      AText
+        Single-line status text shown after the progress controls are hidden.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure SetCompactFooter(const AText: string);
+
+    {**
+      Exposes non-modal open-folder and copy-path actions after an export.
+
+      Parameters
+      ----------
+      APath
+        Successfully exported file path retained for footer actions.
+      ADescription
+        Short export description displayed in the compact footer.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure ShowExportFeedback(const APath, ADescription: string);
+
+    {**
+      Requests cancellation of the active task independently of UI selection.
+
+      Parameters
+      ----------
+      AConfirm
+        True to ask the user before cancelling; False when confirmation was
+        already obtained by the close workflow.
+
+      Returns
+      -------
+      Boolean
+        True when cancellation is already pending or was requested now.
+
+      Raises
+      ------
+      None
+    }
+    function RequestActiveCancellation(AConfirm: Boolean): Boolean;
+
+    {**
+      Copies the worker-owned terminal task into persistent frame state.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      EOutOfMemory
+        May propagate while cloning worker result collections.
+    }
+    procedure AdoptWorkerResult;
+
+    {**
+      Adopts and releases a worker only after its thread has finished.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      Boolean
+        True when no worker remains; False while a worker is still running.
+
+      Raises
+      ------
+      None
+        Result persistence failures are presented through existing UI state.
+    }
+    function FinalizeFinishedWorker: Boolean;
+
+    {**
+      Performs a synchronous emergency shutdown during object destruction.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+        This fallback contains failures because normal UI closure is async.
+    }
+    procedure ForceShutdown;
+
+    {**
+      Initializes controls, stores, models, and persisted state after LFM load.
+
+      Parameters
+      ----------
+      ADataDirectory
+        Optional explicit persistence directory used by isolated UI probes;
+        blank selects the standard per-user application directory.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      EOutOfMemory, EInOutError
+        May propagate while creating stores or loading persisted state.
+    }
+    procedure InitializeFrame(const ADataDirectory: string);
 
     {**
       Loads settings and history, combines startup warnings, and selects a task.
@@ -796,6 +1013,8 @@ type
       ----------
       ADirectory
         Existing target directory selected by the user.
+      ASettings
+        Accepted per-scan settings copied into the new task.
 
       Returns
       -------
@@ -806,10 +1025,10 @@ type
       EOutOfMemory
         May propagate if the task or worker cannot be allocated.
     }
-    procedure StartScan(const ADirectory: string);
+    procedure StartScan(const ADirectory: string; ASettings: TScanSettings);
 
     {**
-      Collects modal settings, persists them, and starts the requested scan.
+      Collects per-scan settings, persists safe defaults, and starts the scan.
 
       Parameters
       ----------
@@ -910,6 +1129,31 @@ type
     constructor Create(TheOwner: Classes.TComponent); override;
 
     {**
+      Creates the feature frame with an explicit isolated persistence root.
+
+      Parameters
+      ----------
+      TheOwner
+        Optional LCL component owner.
+      ADataDirectory
+        Directory used for settings, history, backups, and generated SBOMs.
+
+      Returns
+      -------
+      TSBOMAnalyzerFrame
+        Initialized analyzer workspace using ADataDirectory.
+
+      Raises
+      ------
+      EResNotFound, EReadError
+        May propagate when the embedded LFM resource cannot be loaded.
+      EOutOfMemory, EInOutError
+        May propagate while initializing model or persistence state.
+    }
+    constructor CreateForDataDirectory(TheOwner: Classes.TComponent;
+      const ADataDirectory: string);
+
+    {**
       Stops worker activity and releases analyzer models and persistent stores.
 
       Parameters
@@ -987,7 +1231,9 @@ type
     function HandleShortcut(var AKey: Word; AShift: TShiftState): Boolean;
 
     {**
-      Safely stops any worker and persists its final result before destruction.
+      Finalizes an already-finished worker and persists state before
+      destruction. A running worker is never waited on here; interactive
+      callers use RequestClose for asynchronous cancellation.
 
       Parameters
       ----------
@@ -1004,6 +1250,25 @@ type
         History persistence errors are converted to non-modal shutdown state.
     }
     function PrepareForClose: Boolean;
+
+    {**
+      Starts or completes the non-blocking user-requested close workflow.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      Boolean
+        True only when cleanup is complete and the shell may close now.
+
+      Raises
+      ------
+      None
+        Cancellation and persistence failures remain contained in the frame.
+    }
+    function RequestClose: Boolean;
 
     {**
       Refreshes analyzer action state when the shell selects this feature.
@@ -1025,42 +1290,16 @@ type
     property ScanActive: Boolean read GetScanActive;
     property OnActivityChanged: TAnalyzerActivityEvent
       read FOnActivityChanged write FOnActivityChanged;
+    property OnCloseReady: TNotifyEvent read FOnCloseReady write FOnCloseReady;
   end;
 
 implementation
 
 uses
-  Clipbrd, LCLType, uVersionInfo, uTimeUtils, uPlatform,
-  uScanSettingsDialog, uExportUtils;
+  Clipbrd, Graphics, LCLIntf, LCLType, uVersionInfo, uTimeUtils, uPlatform,
+  uScanSettingsDialog, uExportUtils, uPresentation;
 
 {$R *.lfm}
-
-{**
-  Converts an ISO-style UTC timestamp into compact history-list text.
-
-  Parameters
-  ----------
-  AValue
-    Timestamp text, normally in the project's UTC serialization format.
-
-  Returns
-  -------
-  string
-    Timestamp with the date/time separator normalized and fractions removed.
-
-  Raises
-  ------
-  EOutOfMemory
-    May propagate while creating the normalized result string.
-}
-function DisplayTimestamp(const AValue: string): string;
-begin
-  Result := StringReplace(AValue, 'T', ' ', []);
-  if Pos('.', Result) > 0 then
-    Result := Copy(Result, 1, Pos('.', Result) - 1);
-  if (Length(Result) > 0) and (Result[Length(Result)] = 'Z') then
-    Delete(Result, Length(Result), 1);
-end;
 
 {**
   Performs a case-insensitive substring match with empty-query semantics.
@@ -1114,12 +1353,97 @@ begin
   {$ENDIF}
 end;
 
+{**
+  Expands a selected directory without collapsing filesystem roots.
+
+  Parameters
+  ----------
+  ADirectory
+    User-selected native directory path.
+
+  Returns
+  -------
+  string
+    Absolute path without a redundant trailing delimiter, except when the path
+    itself is a Unix, drive, or UNC root.
+
+  Raises
+  ------
+  None
+}
+function NormalizedScanTarget(const ADirectory: string): string;
+var
+  RootValue: string;
+begin
+  Result := ExpandFileName(ADirectory);
+  RootValue := IncludeTrailingPathDelimiter(ExtractFileDrive(Result));
+  if (RootValue = '') or not SameFileName(Result, RootValue) then
+    Result := ExcludeTrailingPathDelimiter(Result);
+end;
+
+{**
+  Joins a string collection for compact, deterministic table presentation.
+
+  Parameters
+  ----------
+  AValues
+    Ordered values to render; nil is treated as an empty collection.
+
+  Returns
+  -------
+  string
+    Values separated by semicolon and space, or an empty string.
+
+  Raises
+  ------
+  EOutOfMemory
+    May propagate while constructing the result.
+}
+function JoinedValues(AValues: TStrings): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  if AValues = nil then
+    Exit;
+  for I := 0 to AValues.Count - 1 do
+  begin
+    if Result <> '' then
+      Result := Result + '; ';
+    Result := Result + AValues[I];
+  end;
+end;
+
 constructor TSBOMAnalyzerFrame.Create(TheOwner: Classes.TComponent);
 begin
   inherited Create(TheOwner);
+  InitializeFrame('');
+end;
+
+constructor TSBOMAnalyzerFrame.CreateForDataDirectory(
+  TheOwner: Classes.TComponent; const ADataDirectory: string);
+begin
+  inherited Create(TheOwner);
+  InitializeFrame(ADataDirectory);
+end;
+
+procedure TSBOMAnalyzerFrame.InitializeFrame(const ADataDirectory: string);
+begin
+  FUsesDefaultDataDirectory := ADataDirectory = '';
+  FSBOMMemo.Font.Pitch := fpFixed;
+  {$IFDEF Windows}
+  FSBOMMemo.Font.Name := 'Consolas';
+  {$ELSE}
+  {$IFDEF Darwin}
+  FSBOMMemo.Font.Name := 'Menlo';
+  {$ELSE}
+  FSBOMMemo.Font.Name := 'Monospace';
+  {$ENDIF}
+  {$ENDIF}
+  SetCompactFooter('Ready — drop a folder here or choose New Scan.');
   FTasks := TObjectList.Create(True);
-  FHistoryStore := TTaskHistoryStore.Create;
-  FSettingsStore := TSettingsStore.Create;
+  FHistoryStore := TTaskHistoryStore.Create(ADataDirectory);
+  FSettingsStore := TSettingsStore.Create(ADataDirectory);
   FComponentSortColumn := 0;
   FComponentSortAscending := True;
   FArtifactSortColumn := 0;
@@ -1130,12 +1454,90 @@ end;
 destructor TSBOMAnalyzerFrame.Destroy;
 begin
   FOnActivityChanged := nil;
-  PrepareForClose;
+  FOnCloseReady := nil;
+  ClosePollTimer.Enabled := False;
+  if not FClosePrepared then
+    ForceShutdown;
   FreeAndNil(FSettings);
   FreeAndNil(FSettingsStore);
   FreeAndNil(FHistoryStore);
   FreeAndNil(FTasks);
   inherited Destroy;
+end;
+
+function TSBOMAnalyzerFrame.RequestActiveCancellation(
+  AConfirm: Boolean): Boolean;
+var
+  Task: TScanTask;
+begin
+  Result := False;
+  Task := FindTask(FActiveTaskID);
+  if (FWorker = nil) or (Task = nil) or
+    not (Task.Status in [tsPending, tsRunning]) then
+    Exit;
+  if FCancelRequested then
+    Exit(True);
+  if AConfirm and (MessageDlg(AppName, 'Cancel the running scan of "' +
+    Task.TargetRootName + '"?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes) then
+    Exit;
+  FCancelRequested := True;
+  FWorker.Cancel;
+  FCancelButton.Enabled := False;
+  FProgressPath.Caption := 'Cancelling scan of ' + Task.TargetRootName +
+    ' safely...';
+  Result := True;
+end;
+
+procedure TSBOMAnalyzerFrame.AdoptWorkerResult;
+var
+  Task: TScanTask;
+begin
+  if (FWorker = nil) or (FWorker.ResultTask = nil) then
+    Exit;
+  Task := FindTask(FWorker.ResultTask.ID);
+  if Task <> nil then
+  begin
+    Task.Assign(FWorker.ResultTask);
+    UpdateTaskRow(Task);
+  end;
+end;
+
+function TSBOMAnalyzerFrame.FinalizeFinishedWorker: Boolean;
+begin
+  Result := FWorker = nil;
+  if Result or not FWorker.Finished then
+    Exit;
+  FWorker.OnProgress := nil;
+  FWorker.OnComplete := nil;
+  AdoptWorkerResult;
+  SetActiveTaskID('');
+  FCancelRequested := False;
+  SaveHistory;
+  FreeAndNil(FWorker);
+  Result := True;
+end;
+
+procedure TSBOMAnalyzerFrame.ForceShutdown;
+begin
+  FClosing := True;
+  try
+    if FWorker <> nil then
+    begin
+      FWorker.OnProgress := nil;
+      FWorker.OnComplete := nil;
+      FWorker.Cancel;
+      if not FWorker.Finished then
+        FWorker.WaitFor;
+      AdoptWorkerResult;
+    end;
+    SetActiveTaskID('');
+    if (FHistoryStore <> nil) and (FTasks <> nil) then
+      SaveHistory;
+    FreeAndNil(FWorker);
+    FClosePrepared := True;
+  except
+    FreeAndNil(FWorker);
+  end;
 end;
 
 function TSBOMAnalyzerFrame.GetScanActive: Boolean;
@@ -1154,11 +1556,46 @@ begin
     FOnActivityChanged(Self, IsActive);
 end;
 
+procedure TSBOMAnalyzerFrame.SetActiveFooter;
+begin
+  StatusPanel.Height := 62;
+  FProgressPath.Align := alTop;
+  FProgressPath.Height := 20;
+  FProgressStats.Visible := True;
+  FProgressBar.Visible := True;
+  FProgressBar.Position := 0;
+  FProgressBar.Style := pbstMarquee;
+  FExportFeedbackPanel.Visible := False;
+  FLastExportPath := '';
+end;
+
+procedure TSBOMAnalyzerFrame.SetCompactFooter(const AText: string);
+begin
+  StatusPanel.Height := 28;
+  FProgressBar.Style := pbstNormal;
+  FProgressBar.Position := 0;
+  FProgressBar.Visible := False;
+  FProgressStats.Visible := False;
+  FProgressPath.Align := alClient;
+  FProgressPath.Caption := AText;
+  FExportFeedbackPanel.Visible := False;
+end;
+
+procedure TSBOMAnalyzerFrame.ShowExportFeedback(const APath,
+  ADescription: string);
+begin
+  FLastExportPath := ExpandFileName(APath);
+  SetCompactFooter(ADescription + ': ' + FLastExportPath);
+  FExportFeedbackPanel.Visible := True;
+end;
+
 procedure TSBOMAnalyzerFrame.LoadState;
 var
   HistoryWarning, SettingsWarning, MigrationWarning: string;
 begin
-  MigrationWarning := ApplicationDataMigrationWarning;
+  MigrationWarning := '';
+  if FUsesDefaultDataDirectory then
+    MigrationWarning := ApplicationDataMigrationWarning;
   FSettings := FSettingsStore.Load(SettingsWarning);
   FHistoryStore.Load(FTasks, HistoryWarning);
   FStartupWarning := MigrationWarning;
@@ -1238,11 +1675,11 @@ begin
   Item := FindTaskItem(ATask);
   if Item = nil then
     Exit;
-  Item.Caption := DisplayTimestamp(ATask.CreatedUTC);
+  Item.Caption := LocalTimestampText(ATask.CreatedUTC);
   while Item.SubItems.Count < 5 do
     Item.SubItems.Add('');
   Item.SubItems[0] := ATask.TargetRootName;
-  Item.SubItems[1] := TaskStatusToString(ATask.Status);
+  Item.SubItems[1] := TaskStatusDisplayText(ATask);
   Item.SubItems[2] := IntToStr(ATask.ArtifactsDetected);
   Item.SubItems[3] := IntToStr(ATask.ComponentsIdentified);
   Item.SubItems[4] := FormatDuration(ATask.DurationMS);
@@ -1286,63 +1723,93 @@ var
 begin
   if ATask = nil then
     Exit(False);
-  Searchable := ATask.CreatedUTC + ' ' + ATask.TargetRootName + ' ' +
-    ATask.TargetDirectory + ' ' + TaskStatusToString(ATask.Status) + ' ' +
-    ATask.ID;
+  Searchable := ATask.CreatedUTC + ' ' + LocalTimestampText(ATask.CreatedUTC) +
+    ' ' + ATask.TargetRootName + ' ' + ATask.TargetDirectory + ' ' +
+    TaskStatusToString(ATask.Status) + ' ' + TaskStatusDisplayText(ATask) +
+    ' ' + ATask.ID;
   Result := ContainsTextValue(Searchable, Trim(FTaskSearch.Text));
 end;
 
 procedure TSBOMAnalyzerFrame.PopulateSummary(ATask: TScanTask);
+var
+  Item: TListItem;
+
+  procedure AddRow(const AField, AValue: string);
+  begin
+    Item := FSummaryList.Items.Add;
+    Item.Caption := AField;
+    Item.SubItems.Add(AValue);
+  end;
+
+  procedure AddSection(const ACaption: string);
+  begin
+    AddRow('[' + ACaption + ']', '');
+  end;
+
 begin
-  FSummaryMemo.Lines.BeginUpdate;
+  FSummaryList.Items.BeginUpdate;
+  FSummaryNotes.Lines.BeginUpdate;
   try
-    FSummaryMemo.Clear;
+    FSummaryList.Items.Clear;
+    FSummaryNotes.Clear;
     if ATask = nil then
-    begin
-      FSummaryMemo.Lines.Add('Select a scan task to view its details.');
       Exit;
-    end;
-    FSummaryMemo.Lines.Add('Target folder: ' + ATask.TargetDirectory);
-    FSummaryMemo.Lines.Add('Created (UTC): ' + ATask.CreatedUTC);
-    FSummaryMemo.Lines.Add('Started (UTC): ' + ATask.StartedUTC);
-    FSummaryMemo.Lines.Add('Completed (UTC): ' + ATask.CompletedUTC);
-    FSummaryMemo.Lines.Add('Status: ' + TaskStatusToString(ATask.Status));
-    FSummaryMemo.Lines.Add('Duration: ' + FormatDuration(ATask.DurationMS));
-    FSummaryMemo.Lines.Add('Files inspected: ' + IntToStr(ATask.FilesInspected));
-    FSummaryMemo.Lines.Add('Total bytes inspected: ' +
-      FormatByteSize(ATask.BytesInspected) + ' (' +
+
+    AddSection('Result');
+    AddRow('Status', TaskStatusDisplayText(ATask));
+    AddRow('Duration', FormatDuration(ATask.DurationMS));
+    AddRow('Warnings', IntToStr(ATask.Warnings.Count));
+    AddRow('Errors', IntToStr(ATask.Errors.Count));
+    AddRow('Files inspected', IntToStr(ATask.FilesInspected));
+    AddRow('Bytes inspected', FormatByteSize(ATask.BytesInspected) + ' (' +
       IntToStr(ATask.BytesInspected) + ')');
-    FSummaryMemo.Lines.Add('Artifacts detected: ' +
-      IntToStr(ATask.ArtifactsDetected));
-    FSummaryMemo.Lines.Add('Artifacts parsed: ' +
-      IntToStr(ATask.ArtifactsParsed));
-    FSummaryMemo.Lines.Add('Artifacts partially parsed: ' +
+    AddRow('Artifacts detected', IntToStr(ATask.ArtifactsDetected));
+    AddRow('Artifacts parsed', IntToStr(ATask.ArtifactsParsed));
+    AddRow('Artifacts partially parsed',
       IntToStr(ATask.ArtifactsPartiallyParsed));
-    FSummaryMemo.Lines.Add('Unsupported artifacts: ' +
-      IntToStr(ATask.UnsupportedArtifacts));
-    FSummaryMemo.Lines.Add('Failed artifacts: ' +
-      IntToStr(ATask.FailedArtifacts));
-    FSummaryMemo.Lines.Add('Components identified: ' +
-      IntToStr(ATask.ComponentsIdentified));
+    AddRow('Unsupported artifacts', IntToStr(ATask.UnsupportedArtifacts));
+    AddRow('Failed artifacts', IntToStr(ATask.FailedArtifacts));
+    AddRow('Components identified', IntToStr(ATask.ComponentsIdentified));
+
+    AddSection('Input');
+    AddRow('Target folder', ATask.TargetDirectory);
+    AddRow('Created (UTC)', ATask.CreatedUTC);
+    AddRow('Started (UTC)', ATask.StartedUTC);
+    AddRow('Completed (UTC)', ATask.CompletedUTC);
+
+    AddSection('Evidence and output');
     if ATask.InspectionTools.Count > 0 then
-      FSummaryMemo.Lines.Add('Operating-system evidence: ' +
-        StringReplace(ATask.InspectionTools.CommaText, ',', ', ',
-          [rfReplaceAll]))
+      AddRow('Operating-system evidence', JoinedValues(ATask.InspectionTools))
     else
-      FSummaryMemo.Lines.Add('Operating-system evidence: no approved tool ' +
-        'was available or applicable');
-    FSummaryMemo.Lines.Add('Generated SBOM: ' + ATask.GeneratedSBOMPath);
-    FSummaryMemo.Lines.Add('Generated SBOM SHA-256: ' +
-      ATask.GeneratedSBOMSHA256);
-    FSummaryMemo.Lines.Add('Scan settings: ' + ATask.Settings.AsSummary);
-    FSummaryMemo.Lines.Add('');
-    FSummaryMemo.Lines.Add('Completeness warning: Results combine internal ' +
+      AddRow('Operating-system evidence',
+        'No approved tool was available or applicable');
+    AddRow('Generated SBOM', ATask.GeneratedSBOMPath);
+    AddRow('Generated SBOM SHA-256', ATask.GeneratedSBOMSHA256);
+
+    AddSection('Settings');
+    AddRow('Scan settings', ATask.Settings.AsSummary);
+    if Trim(ATask.Settings.SBOMAuthorOrganization) <> '' then
+      AddRow('SBOM author organization',
+        ATask.Settings.SBOMAuthorOrganization);
+    if Trim(ATask.Settings.SBOMAuthorEmail) <> '' then
+      AddRow('SBOM author email', ATask.Settings.SBOMAuthorEmail);
+
+    FSummaryNotes.Lines.Add('Completeness notice');
+    FSummaryNotes.Lines.Add('Results combine internal ' +
       'static inspection with safe evidence from applicable operating-system ' +
       'tools. Direct linked-library declarations may be identified, but ' +
       'runtime-loaded or undeclared dependencies can still be missed. This is ' +
       'not a vulnerability or license-compliance assessment.');
+    if ATask.FilesInspected = 0 then
+    begin
+      FSummaryNotes.Lines.Add('');
+      FSummaryNotes.Lines.Add('Caution: No regular files were inspected. ' +
+        'Review the selected folder, permissions, symbolic-link policy, and ' +
+        'ignore patterns before relying on this result.');
+    end;
   finally
-    FSummaryMemo.Lines.EndUpdate;
+    FSummaryNotes.Lines.EndUpdate;
+    FSummaryList.Items.EndUpdate;
   end;
 end;
 
@@ -1439,7 +1906,7 @@ var
   Sorted: TStringList;
   I, StartAt, EndAt: Integer;
   Component: uModels.TComponent;
-  SearchValue, StatusValue, SortValue: string;
+  LicenseValue, PublisherValue, SearchValue, StatusValue, SortValue: string;
   Item: TListItem;
 begin
   FComponentList.Items.BeginUpdate;
@@ -1447,7 +1914,12 @@ begin
   try
     FComponentList.Items.Clear;
     if ATask = nil then
+    begin
+      ComponentFiltersPanel.Visible := False;
+      FComponentList.Visible := False;
+      FComponentEmptyLabel.Visible := False;
       Exit;
+    end;
     Sorted.Sorted := True;
     Sorted.Duplicates := dupAccept;
     SearchValue := Trim(FComponentSearch.Text);
@@ -1455,6 +1927,8 @@ begin
     begin
       Component := uModels.TComponent(ATask.Components[I]);
       StatusValue := ComponentArtifactStatus(ATask, Component);
+      LicenseValue := JoinedValues(Component.DeclaredLicenses);
+      PublisherValue := JoinedValues(Component.DeclaredPublishers);
       if (FComponentEcosystem.ItemIndex > 0) and
         not SameText(FComponentEcosystem.Text, Component.Ecosystem) then
         Continue;
@@ -1463,14 +1937,19 @@ begin
         Continue;
       if not ContainsTextValue(Component.Name + ' ' + Component.Version + ' ' +
         Component.Ecosystem + ' ' + Component.ComponentType + ' ' +
-        Component.DependencyScope + ' ' + Component.SourceArtifact, SearchValue) then
+        StatusValue + ' ' + LicenseValue + ' ' + PublisherValue + ' ' +
+        Component.DependencyScope + ' ' + Component.SourceArtifact,
+        SearchValue) then
         Continue;
       case FComponentSortColumn of
         1: SortValue := Component.Version;
         2: SortValue := Component.Ecosystem;
         3: SortValue := Component.ComponentType;
-        4: SortValue := Component.DependencyScope;
-        5: SortValue := Component.SourceArtifact;
+        4: SortValue := StatusValue;
+        5: SortValue := LicenseValue;
+        6: SortValue := PublisherValue;
+        7: SortValue := Component.DependencyScope;
+        8: SortValue := Component.SourceArtifact;
       else
         SortValue := Component.Name;
       end;
@@ -1499,6 +1978,10 @@ begin
       Item.SubItems.Add(Component.Version);
       Item.SubItems.Add(Component.Ecosystem);
       Item.SubItems.Add(Component.ComponentType);
+      Item.SubItems.Add(StatusDisplayText(ComponentArtifactStatus(ATask,
+        Component)));
+      Item.SubItems.Add(JoinedValues(Component.DeclaredLicenses));
+      Item.SubItems.Add(JoinedValues(Component.DeclaredPublishers));
       Item.SubItems.Add(Component.DependencyScope);
       Item.SubItems.Add(Component.SourceArtifact);
       if FComponentSortAscending then Inc(I) else Dec(I);
@@ -1507,6 +1990,15 @@ begin
     Sorted.Free;
     FComponentList.Items.EndUpdate;
   end;
+  ComponentFiltersPanel.Visible := ATask.Components.Count > 0;
+  FComponentList.Visible := FComponentList.Items.Count > 0;
+  FComponentEmptyLabel.Visible := FComponentList.Items.Count = 0;
+  if ATask.Components.Count = 0 then
+    FComponentEmptyLabel.Caption :=
+      'No components were identified for this scan.'
+  else
+    FComponentEmptyLabel.Caption :=
+      'No components match the current filters.';
 end;
 
 procedure TSBOMAnalyzerFrame.PopulateArtifacts(ATask: TScanTask);
@@ -1522,7 +2014,12 @@ begin
   try
     FArtifactList.Items.Clear;
     if ATask = nil then
+    begin
+      ArtifactFiltersPanel.Visible := False;
+      FArtifactList.Visible := False;
+      FArtifactEmptyLabel.Visible := False;
       Exit;
+    end;
     Sorted.Sorted := True;
     Sorted.Duplicates := dupAccept;
     SearchValue := Trim(FArtifactSearch.Text);
@@ -1542,11 +2039,11 @@ begin
         Continue;
       case FArtifactSortColumn of
         1: SortValue := Artifact.ArtifactType;
-        2: SortValue := Artifact.Ecosystem;
-        3: SortValue := StatusValue;
+        2: SortValue := StatusValue;
+        3: SortValue := Artifact.MessageText;
         4: SortValue := Format('%.20d', [Artifact.FileSize]);
-        5: SortValue := Artifact.SHA256;
-        6: SortValue := Artifact.MessageText;
+        5: SortValue := Artifact.Ecosystem;
+        6: SortValue := Artifact.SHA256;
       else
         SortValue := Artifact.RelativePath;
       end;
@@ -1573,17 +2070,24 @@ begin
       Item.Data := Artifact;
       Item.Caption := Artifact.RelativePath;
       Item.SubItems.Add(Artifact.ArtifactType);
-      Item.SubItems.Add(Artifact.Ecosystem);
-      Item.SubItems.Add(ArtifactStatusToString(Artifact.Status));
-      Item.SubItems.Add(FormatByteSize(Artifact.FileSize));
-      Item.SubItems.Add(Artifact.SHA256);
+      Item.SubItems.Add(ArtifactStatusDisplayText(Artifact.Status));
       Item.SubItems.Add(Artifact.MessageText);
+      Item.SubItems.Add(FormatByteSize(Artifact.FileSize));
+      Item.SubItems.Add(Artifact.Ecosystem);
+      Item.SubItems.Add(ShortDigest(Artifact.SHA256));
       if FArtifactSortAscending then Inc(I) else Dec(I);
     end;
   finally
     Sorted.Free;
     FArtifactList.Items.EndUpdate;
   end;
+  ArtifactFiltersPanel.Visible := ATask.Artifacts.Count > 0;
+  FArtifactList.Visible := FArtifactList.Items.Count > 0;
+  FArtifactEmptyLabel.Visible := FArtifactList.Items.Count = 0;
+  if ATask.Artifacts.Count = 0 then
+    FArtifactEmptyLabel.Caption := 'No artifacts were detected for this scan.'
+  else
+    FArtifactEmptyLabel.Caption := 'No artifacts match the current filters.';
 end;
 
 procedure TSBOMAnalyzerFrame.PopulateSBOM(ATask: TScanTask);
@@ -1608,41 +2112,53 @@ end;
 
 procedure TSBOMAnalyzerFrame.PopulateMessages(ATask: TScanTask);
 var
-  I: Integer;
+  ArtifactNoteCount, I: Integer;
   Artifact: TArtifact;
+  FirstSection: Boolean;
+
+  procedure AddSection(const ACaption: string);
+  begin
+    if not FirstSection then
+      FMessagesMemo.Lines.Add('');
+    FMessagesMemo.Lines.Add(ACaption);
+    FirstSection := False;
+  end;
+
 begin
   FMessagesMemo.Lines.BeginUpdate;
   try
     FMessagesMemo.Clear;
     if ATask = nil then
       Exit;
-    FMessagesMemo.Lines.Add('Best-effort completeness notice: internal static ' +
+    FirstSection := True;
+    AddSection('Completeness notice');
+    FMessagesMemo.Lines.Add('Internal static ' +
       'inspection is enriched by applicable safe operating-system tools, but ' +
       'runtime-loaded or undeclared dependencies can still be missed.');
     if ATask.Warnings.Count > 0 then
     begin
-      FMessagesMemo.Lines.Add('');
-      FMessagesMemo.Lines.Add('Warnings');
+      AddSection('Warnings (' + IntToStr(ATask.Warnings.Count) + ')');
       for I := 0 to ATask.Warnings.Count - 1 do
         FMessagesMemo.Lines.Add('- ' + ATask.Warnings[I]);
     end;
     if ATask.Errors.Count > 0 then
     begin
-      FMessagesMemo.Lines.Add('');
-      FMessagesMemo.Lines.Add('Errors');
+      AddSection('Errors (' + IntToStr(ATask.Errors.Count) + ')');
       for I := 0 to ATask.Errors.Count - 1 do
         FMessagesMemo.Lines.Add('- ' + ATask.Errors[I]);
     end;
+    ArtifactNoteCount := 0;
+    for I := 0 to ATask.Artifacts.Count - 1 do
+      if Trim(TArtifact(ATask.Artifacts[I]).MessageText) <> '' then
+        Inc(ArtifactNoteCount);
+    if ArtifactNoteCount > 0 then
+      AddSection('Artifact notes (' + IntToStr(ArtifactNoteCount) + ')');
     for I := 0 to ATask.Artifacts.Count - 1 do
     begin
       Artifact := TArtifact(ATask.Artifacts[I]);
-      if Artifact.MessageText <> '' then
-      begin
-        if I = 0 then
-          FMessagesMemo.Lines.Add('');
+      if Trim(Artifact.MessageText) <> '' then
         FMessagesMemo.Lines.Add(Artifact.RelativePath + ': ' +
           Artifact.MessageText);
-      end;
     end;
   finally
     FMessagesMemo.Lines.EndUpdate;
@@ -1654,6 +2170,25 @@ var
   Task: TScanTask;
 begin
   Task := SelectedTask;
+  FDetailEmptyLabel.Visible := Task = nil;
+  FPages.Visible := Task <> nil;
+  if Task = nil then
+  begin
+    SummaryPage.Caption := 'Summary';
+    ComponentsPage.Caption := 'Components';
+    ArtifactsPage.Caption := 'Artifacts';
+    MessagesPage.Caption := 'Messages';
+  end
+  else
+  begin
+    SummaryPage.Caption := 'Summary';
+    ComponentsPage.Caption := 'Components (' +
+      IntToStr(Task.Components.Count) + ')';
+    ArtifactsPage.Caption := 'Artifacts (' +
+      IntToStr(Task.Artifacts.Count) + ')';
+    MessagesPage.Caption := 'Messages (' +
+      IntToStr(TaskMessageCount(Task)) + ')';
+  end;
   FUpdatingDetails := True;
   try
     PopulateSummary(Task);
@@ -1674,17 +2209,18 @@ end;
 
 procedure TSBOMAnalyzerFrame.UpdateButtons;
 var
-  Task: TScanTask;
+  Task, ActiveTask: TScanTask;
   IsScanActive: Boolean;
 begin
   Task := SelectedTask;
+  ActiveTask := FindTask(FActiveTaskID);
   IsScanActive := FActiveTaskID <> '';
   FNewButton.Enabled := not IsScanActive;
   FRefreshButton.Enabled := not IsScanActive;
   FRescanButton.Enabled := (not IsScanActive) and (Task <> nil) and
     DirectoryExists(Task.TargetDirectory);
-  FCancelButton.Enabled := IsScanActive and (Task <> nil) and
-    (Task.ID = FActiveTaskID) and (Task.Status = tsRunning);
+  FCancelButton.Enabled := IsScanActive and (ActiveTask <> nil) and
+    (ActiveTask.Status in [tsPending, tsRunning]) and not FCancelRequested;
   FExportButton.Enabled := (Task <> nil) and
     (Task.Status = tsCompleted) and FileExists(Task.GeneratedSBOMPath);
   FExportDatabaseButton.Enabled := (not IsScanActive) and (FTasks.Count > 0) and
@@ -1693,11 +2229,11 @@ end;
 
 procedure TSBOMAnalyzerFrame.FreeFinishedWorker;
 begin
-  if (FWorker <> nil) and FWorker.Finished then
-    FreeAndNil(FWorker);
+  FinalizeFinishedWorker;
 end;
 
-procedure TSBOMAnalyzerFrame.StartScan(const ADirectory: string);
+procedure TSBOMAnalyzerFrame.StartScan(const ADirectory: string;
+  ASettings: TScanSettings);
 var
   Task: TScanTask;
   Target: string;
@@ -1705,7 +2241,7 @@ begin
   FreeFinishedWorker;
   if FWorker <> nil then
     Exit;
-  Target := ExcludeTrailingPathDelimiter(ExpandFileName(ADirectory));
+  Target := NormalizedScanTarget(ADirectory);
   if not DirectoryExists(Target) then
   begin
     ShowError('The selected folder does not exist: ' + Target);
@@ -1716,7 +2252,7 @@ begin
   Task.TargetRootName := ExtractFileName(Target);
   if Task.TargetRootName = '' then
     Task.TargetRootName := Target;
-  Task.Settings.Assign(FSettings);
+  Task.Settings.Assign(ASettings);
   Task.Status := tsPending;
   FTaskSearch.Clear;
   FTasks.Insert(0, Task);
@@ -1724,9 +2260,10 @@ begin
   SelectTask(Task);
   SaveHistory;
   Task.Status := tsRunning;
+  FCancelRequested := False;
   SetActiveTaskID(Task.ID);
   UpdateTaskRow(Task);
-  FProgressBar.Style := pbstMarquee;
+  SetActiveFooter;
   FProgressPath.Caption := 'Starting scan of ' + Task.TargetRootName + '...';
   FProgressStats.Caption := 'Preparing worker thread';
   FWorker := TScanWorker.Create(Task, FHistoryStore.DataDirectory);
@@ -1738,18 +2275,41 @@ begin
 end;
 
 procedure TSBOMAnalyzerFrame.ConfigureAndStartScan(const ADirectory: string);
+var
+  WorkingSettings, PersistedSettings: TScanSettings;
+  Target: string;
 begin
   if FActiveTaskID <> '' then
     Exit;
-  if not TScanSettingsDialog.Execute(FSettings) then
-    Exit;
+  Target := NormalizedScanTarget(ADirectory);
+  WorkingSettings := FSettings.Clone;
+  PersistedSettings := nil;
   try
-    FSettingsStore.Save(FSettings);
-  except
-    on E: Exception do
-      ShowError('Scan settings could not be saved: ' + E.Message);
+    if not WorkingSettings.RememberPrivacyChoices then
+    begin
+      WorkingSettings.IncludeAbsolutePaths := False;
+      WorkingSettings.AllowOutsideRoot := False;
+    end;
+    if not TScanSettingsDialog.Execute(WorkingSettings, Target) then
+      Exit;
+    PersistedSettings := WorkingSettings.Clone;
+    if not PersistedSettings.RememberPrivacyChoices then
+    begin
+      PersistedSettings.IncludeAbsolutePaths := False;
+      PersistedSettings.AllowOutsideRoot := False;
+    end;
+    FSettings.Assign(PersistedSettings);
+    try
+      FSettingsStore.Save(FSettings);
+    except
+      on E: Exception do
+        ShowError('Scan settings could not be saved: ' + E.Message);
+    end;
+    StartScan(Target, WorkingSettings);
+  finally
+    PersistedSettings.Free;
+    WorkingSettings.Free;
   end;
-  StartScan(ADirectory);
 end;
 
 procedure TSBOMAnalyzerFrame.ShowError(const AMessage: string);
@@ -1768,36 +2328,70 @@ begin
 end;
 
 function TSBOMAnalyzerFrame.PrepareForClose: Boolean;
-var
-  Task: TScanTask;
 begin
   if FClosePrepared then
     Exit(True);
   Result := False;
+  if not FinalizeFinishedWorker then
+    Exit;
   FClosing := True;
   try
-    if FWorker <> nil then
-    begin
-      FWorker.OnProgress := nil;
-      FWorker.OnComplete := nil;
-      FWorker.Cancel;
-      if not FWorker.Finished then
-        FWorker.WaitFor;
-      Task := nil;
-      if FWorker.ResultTask <> nil then
-        Task := FindTask(FWorker.ResultTask.ID);
-      if (Task <> nil) and (FWorker.ResultTask <> nil) then
-        Task.Assign(FWorker.ResultTask);
-    end;
+    ClosePollTimer.Enabled := False;
     SetActiveTaskID('');
     if (FHistoryStore <> nil) and (FTasks <> nil) then
       SaveHistory;
-    FreeAndNil(FWorker);
     FClosePrepared := True;
     Result := True;
   except
+    FClosing := False;
     Result := False;
   end;
+end;
+
+function TSBOMAnalyzerFrame.RequestClose: Boolean;
+var
+  Task: TScanTask;
+  TargetName: string;
+begin
+  if FClosePrepared then
+    Exit(True);
+  if FinalizeFinishedWorker then
+    Exit(PrepareForClose);
+  Result := False;
+  if FClosePending then
+    Exit;
+  Task := FindTask(FActiveTaskID);
+  if Task <> nil then
+    TargetName := Task.TargetRootName
+  else
+    TargetName := 'the selected folder';
+  if MessageDlg(AppName, 'A scan of "' + TargetName +
+    '" is running. Cancel it and quit?', mtConfirmation,
+    [mbYes, mbNo], 0) <> mrYes then
+    Exit;
+  if FinalizeFinishedWorker then
+    Exit(PrepareForClose);
+  FClosePending := True;
+  if (FActiveTaskID <> '') and not RequestActiveCancellation(False) then
+  begin
+    FClosePending := False;
+    Exit;
+  end;
+  ClosePollTimer.Enabled := True;
+end;
+
+procedure TSBOMAnalyzerFrame.ClosePollTimerTick(Sender: TObject);
+begin
+  if not FClosePending then
+  begin
+    ClosePollTimer.Enabled := False;
+    Exit;
+  end;
+  if not FinalizeFinishedWorker then
+    Exit;
+  ClosePollTimer.Enabled := False;
+  if PrepareForClose and Assigned(FOnCloseReady) then
+    FOnCloseReady(Self);
 end;
 
 procedure TSBOMAnalyzerFrame.HandleDroppedFiles(
@@ -1806,7 +2400,11 @@ var
   I: Integer;
 begin
   if FActiveTaskID <> '' then
+  begin
+    MessageDlg(AppName, 'A scan is already running. Wait for it to finish or ' +
+      'cancel it before dropping another folder.', mtInformation, [mbOK], 0);
     Exit;
+  end;
   for I := Low(AFileNames) to High(AFileNames) do
     if DirectoryExists(AFileNames[I]) then
     begin
@@ -1837,8 +2435,13 @@ begin
   end
   else if AKey = VK_ESCAPE then
   begin
-    CancelClicked(Self);
-    AKey := 0;
+    if (Screen.ActiveControl is TCustomEdit) or
+      (Screen.ActiveControl is TCustomComboBox) then
+      Result := False
+    else if RequestActiveCancellation(True) then
+      AKey := 0
+    else
+      Result := False;
   end
   else
     Result := False;
@@ -1858,7 +2461,11 @@ var
   Dialog: TSelectDirectoryDialog;
 begin
   if FActiveTaskID <> '' then
+  begin
+    MessageDlg(AppName, 'A scan is already running. Wait for it to finish or ' +
+      'cancel it before starting another scan.', mtInformation, [mbOK], 0);
     Exit;
+  end;
   Dialog := TSelectDirectoryDialog.Create(Self);
   try
     Dialog.Title := 'Select a folder to scan';
@@ -1870,17 +2477,8 @@ begin
 end;
 
 procedure TSBOMAnalyzerFrame.CancelClicked(Sender: TObject);
-var
-  Task: TScanTask;
 begin
-  Task := SelectedTask;
-  if (FWorker <> nil) and (Task <> nil) and
-    (Task.ID = FActiveTaskID) then
-  begin
-    FWorker.Cancel;
-    FCancelButton.Enabled := False;
-    FProgressPath.Caption := 'Cancelling safely...';
-  end;
+  RequestActiveCancellation(True);
 end;
 
 procedure TSBOMAnalyzerFrame.RescanClicked(Sender: TObject);
@@ -1925,13 +2523,14 @@ begin
     Dialog.Filter := 'CycloneDX JSON (*.cdx.json)|*.cdx.json|JSON files (*.json)|*.json|All files|*';
     Dialog.DefaultExt := 'cdx.json';
     Dialog.FileName := TaskSBOMExportFileName(Task);
+    Dialog.Options := Dialog.Options + [ofOverwritePrompt];
     if Dialog.Execute then
     begin
       try
         if not SameFileName(ExpandFileName(Dialog.FileName),
           ExpandFileName(Task.GeneratedSBOMPath)) then
           CopyFileContents(Task.GeneratedSBOMPath, Dialog.FileName);
-        FProgressPath.Caption := 'SBOM exported to ' + Dialog.FileName;
+        ShowExportFeedback(Dialog.FileName, 'SBOM exported');
       except
         on E: Exception do
           ShowError('The SBOM could not be exported: ' + E.Message);
@@ -1950,15 +2549,16 @@ begin
     Exit;
   Dialog := TSaveDialog.Create(Self);
   try
-    Dialog.Title := 'Export all tasks and results';
+    Dialog.Title := 'Back up all tasks and results';
     Dialog.Filter := 'ZIP archives (*.zip)|*.zip|All files|*';
     Dialog.DefaultExt := 'zip';
     Dialog.FileName := DatabaseArchiveFileName;
+    Dialog.Options := Dialog.Options + [ofOverwritePrompt];
     if Dialog.Execute then
     begin
       try
         ExportDatabaseArchive(FHistoryStore.DataDirectory, Dialog.FileName);
-        FProgressPath.Caption := 'Database exported to ' + Dialog.FileName;
+        ShowExportFeedback(Dialog.FileName, 'Data backup created');
       except
         on E: Exception do
           ShowError('The task database could not be exported: ' + E.Message);
@@ -2046,21 +2646,81 @@ end;
 
 procedure TSBOMAnalyzerFrame.CopySelectedClicked(Sender: TObject);
 var
+  Artifact: TArtifact;
+  Component: uModels.TComponent;
   List: TListView;
   I: Integer;
+  Task: TScanTask;
   Value: string;
 begin
   List := nil;
-  if (Sender = FComponentList) or (FCopyMenu.PopupComponent = FComponentList) then
+  if (Sender = FSummaryList) or (FCopyMenu.PopupComponent = FSummaryList) then
+    List := FSummaryList
+  else if (Sender = FComponentList) or
+    (FCopyMenu.PopupComponent = FComponentList) then
     List := FComponentList
-  else if (Sender = FArtifactList) or (FCopyMenu.PopupComponent = FArtifactList) then
+  else if (Sender = FArtifactList) or
+    (FCopyMenu.PopupComponent = FArtifactList) then
     List := FArtifactList;
   if (List = nil) or (List.Selected = nil) then
     Exit;
-  Value := List.Selected.Caption;
-  for I := 0 to List.Selected.SubItems.Count - 1 do
-    Value := Value + #9 + List.Selected.SubItems[I];
+  if (List = FArtifactList) and (List.Selected.Data <> nil) then
+  begin
+    Artifact := TArtifact(List.Selected.Data);
+    Value := Artifact.RelativePath + #9 + Artifact.ArtifactType + #9 +
+      ArtifactStatusDisplayText(Artifact.Status) + #9 + Artifact.MessageText +
+      #9 + FormatByteSize(Artifact.FileSize) + #9 + Artifact.Ecosystem + #9 +
+      Artifact.SHA256;
+  end
+  else if (List = FComponentList) and (List.Selected.Data <> nil) then
+  begin
+    Component := uModels.TComponent(List.Selected.Data);
+    Task := SelectedTask;
+    Value := Component.Name + #9 + Component.Version + #9 +
+      Component.Ecosystem + #9 + Component.ComponentType + #9;
+    if Task <> nil then
+      Value := Value + StatusDisplayText(ComponentArtifactStatus(Task,
+        Component));
+    Value := Value + #9 + JoinedValues(Component.DeclaredLicenses) + #9 +
+      JoinedValues(Component.DeclaredPublishers) + #9 +
+      Component.DependencyScope + #9 + Component.SourceArtifact;
+  end
+  else
+  begin
+    Value := List.Selected.Caption;
+    for I := 0 to List.Selected.SubItems.Count - 1 do
+      Value := Value + #9 + List.Selected.SubItems[I];
+  end;
   Clipboard.AsText := Value;
+end;
+
+procedure TSBOMAnalyzerFrame.OpenExportFolderClicked(Sender: TObject);
+var
+  DirectoryName: string;
+begin
+  if FLastExportPath = '' then
+    Exit;
+  DirectoryName := ExtractFileDir(FLastExportPath);
+  try
+    if (DirectoryName = '') or not OpenDocument(DirectoryName) then
+      ShowError('The exported file folder could not be opened: ' +
+        DirectoryName);
+  except
+    on E: Exception do
+      ShowError('The exported file folder could not be opened: ' + E.Message);
+  end;
+end;
+
+procedure TSBOMAnalyzerFrame.CopyExportPathClicked(Sender: TObject);
+begin
+  if FLastExportPath = '' then
+    Exit;
+  try
+    Clipboard.AsText := FLastExportPath;
+  except
+    on E: Exception do
+      ShowError('The exported path could not be copied: ' + E.Message);
+  end;
 end;
 
 procedure TSBOMAnalyzerFrame.WorkerProgress(Sender: TObject;
@@ -2090,6 +2750,7 @@ end;
 
 procedure TSBOMAnalyzerFrame.WorkerComplete(Sender: TObject; AResult: TScanTask);
 var
+  FooterText: string;
   Task: TScanTask;
 begin
   if FClosing then
@@ -2101,29 +2762,26 @@ begin
     UpdateTaskRow(Task);
   end;
   SetActiveTaskID('');
-  FProgressBar.Style := pbstNormal;
+  FCancelRequested := False;
   if AResult.Status = tsCompleted then
-  begin
-    FProgressBar.Position := 100;
-    FProgressPath.Caption := 'Scan completed: ' + AResult.TargetRootName +
-      ' [' + Copy(AResult.ID, 1, 8) + ']';
-  end
+    FooterText := 'Scan completed: '
   else
-  begin
-    FProgressBar.Position := 0;
-    FProgressPath.Caption := 'Scan ' + TaskStatusToString(AResult.Status) +
-      ': ' + AResult.TargetRootName + ' [' + Copy(AResult.ID, 1, 8) + ']';
-  end;
-  FProgressStats.Caption := Format('%d files  •  %s  •  %d artifacts  •  '+
-    '%d components  •  %s', [AResult.FilesInspected,
+    FooterText := 'Scan ' + TaskStatusToString(AResult.Status) + ': ';
+  FooterText := FooterText + AResult.TargetRootName + ' [' +
+    Copy(AResult.ID, 1, 8) + '] ' + #$E2#$80#$94 + Format(
+    ' %d files  •  %s  •  %d artifacts  •  %d components  •  %s',
+    [AResult.FilesInspected,
     FormatByteSize(AResult.BytesInspected), AResult.ArtifactsDetected,
     AResult.ComponentsIdentified, FormatDuration(AResult.DurationMS)]);
+  SetCompactFooter(FooterText);
   SaveHistory;
   if Task <> nil then
     SelectTask(Task)
   else
     UpdateDetails;
   UpdateButtons;
+  if FClosePending then
+    ClosePollTimer.Enabled := True;
 end;
 
 end.

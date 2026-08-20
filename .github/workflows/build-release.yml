@@ -322,8 +322,10 @@ jobs:
         run: >-
           python3 scripts/validate-cyclonedx.py --self-test
           --timeout-seconds 15
-          "$RUNNER_TEMP/cyclonedx-fixtures/fixture-1.6.cdx.json"
-          "$RUNNER_TEMP/cyclonedx-fixtures/fixture-1.7.cdx.json"
+          "$RUNNER_TEMP/cyclonedx-fixtures/structure-1.6.cdx.json"
+          "$RUNNER_TEMP/cyclonedx-fixtures/structure-1.7.cdx.json"
+          "$RUNNER_TEMP/cyclonedx-fixtures/compliance-1.6.cdx.json"
+          "$RUNNER_TEMP/cyclonedx-fixtures/compliance-1.7.cdx.json"
 
       - name: Build native application
         run: >-

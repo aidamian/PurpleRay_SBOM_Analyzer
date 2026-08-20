@@ -1,112 +1,250 @@
 object ScanSettingsDialog: TScanSettingsDialog
-  Left = 360
-  Height = 450
-  Top = 180
-  Width = 540
+  Left = 330
+  Height = 680
+  Top = 100
+  Width = 620
   BorderStyle = bsDialog
   Caption = 'Scan settings'
-  ClientHeight = 450
-  ClientWidth = 540
-  Constraints.MinHeight = 400
-  Constraints.MinWidth = 470
+  ClientHeight = 680
+  ClientWidth = 620
+  Constraints.MinHeight = 620
+  Constraints.MinWidth = 540
   Position = poScreenCenter
   LCLVersion = '3.0.0.3'
-  object DescriptionTopSpacer: TPanel
+  object SettingsContentPanel: TPanel
     Left = 0
-    Height = 12
+    Height = 634
     Top = 0
-    Width = 540
-    Align = alTop
+    Width = 620
+    Align = alClient
     BevelOuter = bvNone
-    ClientHeight = 12
-    ClientWidth = 540
-    TabOrder = 6
-  end
-  object DescriptionLabel: TLabel
-    Left = 12
-    Height = 48
-    Top = 12
-    Width = 516
-    Align = alTop
-    AutoSize = False
-    BorderSpacing.Left = 12
-    BorderSpacing.Right = 12
-    BorderSpacing.Bottom = 12
-    Caption = 'Choose how this scan treats paths, symbolic links, hashes, and ignored files. Absolute paths are excluded from exported CycloneDX data by default.'
-    WordWrap = True
-  end
-  object FIncludeAbsolutePaths: TCheckBox
-    Left = 12
-    Height = 23
-    Top = 72
-    Width = 516
-    Align = alTop
-    BorderSpacing.Left = 12
-    BorderSpacing.Right = 12
-    BorderSpacing.Bottom = 6
-    Caption = 'Include absolute paths in exported SBOM'
+    ClientHeight = 634
+    ClientWidth = 620
     TabOrder = 0
-  end
-  object FFollowSymbolicLinks: TCheckBox
-    Left = 12
-    Height = 23
-    Top = 101
-    Width = 516
-    Align = alTop
-    BorderSpacing.Left = 12
-    BorderSpacing.Right = 12
-    BorderSpacing.Bottom = 6
-    Caption = 'Follow symbolic links'
-    OnChange = FollowLinksChanged
-    TabOrder = 1
-  end
-  object FAllowOutsideRoot: TCheckBox
-    Left = 34
-    Height = 23
-    Top = 130
-    Width = 494
-    Align = alTop
-    BorderSpacing.Left = 34
-    BorderSpacing.Right = 12
-    BorderSpacing.Bottom = 6
-    Caption = 'Allow followed links to leave the selected root'
-    TabOrder = 2
-  end
-  object FCalculateSHA256: TCheckBox
-    Left = 12
-    Height = 23
-    Top = 159
-    Width = 516
-    Align = alTop
-    BorderSpacing.Left = 12
-    BorderSpacing.Right = 12
-    BorderSpacing.Bottom = 8
-    Caption = 'Calculate SHA-256 for manifests and binaries'
-    TabOrder = 3
-  end
-  object IgnorePatternsLabel: TLabel
-    Left = 12
-    Height = 20
-    Top = 190
-    Width = 516
-    Align = alTop
-    BorderSpacing.Left = 12
-    BorderSpacing.Right = 12
-    BorderSpacing.Bottom = 4
-    Caption = 'Ignore patterns (one per line)'
+    object DescriptionTopSpacer: TPanel
+      Left = 0
+      Height = 12
+      Top = 0
+      Width = 620
+      Anchors = [akTop, akLeft, akRight]
+      BevelOuter = bvNone
+      ClientHeight = 12
+      ClientWidth = 620
+      TabOrder = 10
+    end
+    object DescriptionLabel: TLabel
+      Left = 12
+      Height = 44
+      Top = 12
+      Width = 596
+      Anchors = [akTop, akLeft, akRight]
+      AutoSize = False
+      Caption = 'Review the selected target and choose how this scan treats paths, symbolic links, hashes, and ignored files.'
+      WordWrap = True
+    end
+    object TargetFolderLabel: TLabel
+      Left = 12
+      Height = 18
+      Top = 62
+      Width = 596
+      Anchors = [akTop, akLeft, akRight]
+      Caption = 'Target folder'
+    end
+    object FTargetFolder: TEdit
+      Left = 12
+      Height = 27
+      Top = 82
+      Width = 596
+      Anchors = [akTop, akLeft, akRight]
+      AutoSelect = True
+      ReadOnly = True
+      TabOrder = 0
+    end
+    object FIncludeAbsolutePaths: TCheckBox
+      Left = 12
+      Height = 23
+      Top = 115
+      Width = 596
+      Anchors = [akTop, akLeft, akRight]
+      Caption = 'Include absolute paths in exported SBOM'
+      TabOrder = 1
+    end
+    object FFollowSymbolicLinks: TCheckBox
+      Left = 12
+      Height = 23
+      Top = 142
+      Width = 596
+      Anchors = [akTop, akLeft, akRight]
+      Caption = 'Follow symbolic links'
+      OnChange = FollowLinksChanged
+      TabOrder = 2
+    end
+    object FAllowOutsideRoot: TCheckBox
+      Left = 34
+      Height = 23
+      Top = 169
+      Width = 574
+      Anchors = [akTop, akLeft, akRight]
+      Caption = 'Allow followed links to leave the selected root'
+      TabOrder = 3
+    end
+    object FRememberPrivacyChoices: TCheckBox
+      Left = 12
+      Height = 23
+      Top = 196
+      Width = 596
+      Anchors = [akTop, akLeft, akRight]
+      Caption = 'Remember absolute-path and outside-root choices for future scans'
+      Hint = 'When unchecked, both privacy-sensitive choices reset before the next scan.'
+      ShowHint = True
+      TabOrder = 4
+    end
+    object FCalculateSHA256: TCheckBox
+      Left = 12
+      Height = 23
+      Top = 225
+      Width = 596
+      Anchors = [akTop, akLeft, akRight]
+      Caption = 'Calculate SHA-256 for manifests and binaries'
+      TabOrder = 5
+    end
+    object AuthorPersistenceLabel: TLabel
+      Left = 12
+      Height = 44
+      Top = 256
+      Width = 596
+      Anchors = [akTop, akLeft, akRight]
+      AutoSize = False
+      Caption = 'Optional author details persist locally and are included in generated SBOMs and database backups. Other settings persist; privacy choices reset unless remembered.'
+      WordWrap = True
+    end
+    object AuthorOrganizationPanel: TPanel
+      Left = 0
+      Height = 32
+      Top = 306
+      Width = 620
+      Anchors = [akTop, akLeft, akRight]
+      BevelOuter = bvNone
+      ClientHeight = 32
+      ClientWidth = 620
+      TabOrder = 6
+      object AuthorOrganizationLabel: TLabel
+        Left = 12
+        Height = 32
+        Top = 0
+        Width = 180
+        Align = alLeft
+        BorderSpacing.Left = 12
+        Caption = 'Author organization (optional)'
+        Layout = tlCenter
+      end
+      object FAuthorOrganization: TEdit
+        Left = 200
+        Height = 27
+        Top = 2
+        Width = 408
+        Align = alClient
+        BorderSpacing.Left = 8
+        BorderSpacing.Top = 2
+        BorderSpacing.Right = 12
+        BorderSpacing.Bottom = 3
+        MaxLength = 4096
+        TabOrder = 0
+      end
+    end
+    object AuthorEmailPanel: TPanel
+      Left = 0
+      Height = 32
+      Top = 338
+      Width = 620
+      Anchors = [akTop, akLeft, akRight]
+      BevelOuter = bvNone
+      ClientHeight = 32
+      ClientWidth = 620
+      TabOrder = 7
+      object AuthorEmailLabel: TLabel
+        Left = 12
+        Height = 32
+        Top = 0
+        Width = 180
+        Align = alLeft
+        BorderSpacing.Left = 12
+        Caption = 'Author email (optional)'
+        Layout = tlCenter
+      end
+      object FAuthorEmail: TEdit
+        Left = 200
+        Height = 27
+        Top = 2
+        Width = 408
+        Align = alClient
+        BorderSpacing.Left = 8
+        BorderSpacing.Top = 2
+        BorderSpacing.Right = 12
+        BorderSpacing.Bottom = 3
+        MaxLength = 254
+        TabOrder = 0
+      end
+    end
+    object IgnoreHeaderPanel: TPanel
+      Left = 0
+      Height = 32
+      Top = 370
+      Width = 620
+      Anchors = [akTop, akLeft, akRight]
+      BevelOuter = bvNone
+      ClientHeight = 32
+      ClientWidth = 620
+      TabOrder = 8
+      object IgnorePatternsLabel: TLabel
+        Left = 12
+        Height = 32
+        Top = 0
+        Width = 452
+        Align = alClient
+        BorderSpacing.Left = 12
+        Caption = 'Ignore patterns (one per line)'
+        Layout = tlCenter
+      end
+      object RestoreDefaultsButton: TButton
+        Left = 476
+        Height = 28
+        Top = 2
+        Width = 132
+        Align = alRight
+        BorderSpacing.Top = 2
+        BorderSpacing.Right = 12
+        BorderSpacing.Bottom = 2
+        Caption = 'Restore defaults'
+        Hint = 'Restore the built-in ignore patterns only.'
+        OnClick = RestoreDefaultsClicked
+        ShowHint = True
+        TabOrder = 0
+      end
+    end
+    object FIgnorePatterns: TMemo
+      Left = 12
+      Height = 220
+      Top = 402
+      Width = 596
+      Anchors = [akTop, akLeft, akRight, akBottom]
+      ScrollBars = ssAutoVertical
+      TabOrder = 9
+      WordWrap = False
+    end
   end
   object ButtonsPanel: TPanel
     Left = 0
     Height = 46
-    Top = 404
-    Width = 540
+    Top = 634
+    Width = 620
     Align = alBottom
     BevelOuter = bvNone
     ClientHeight = 46
-    ClientWidth = 540
-    TabOrder = 5
+    ClientWidth = 620
+    TabOrder = 1
     object CancelButton: TButton
-      Left = 436
+      Left = 516
       Height = 30
       Top = 8
       Width = 92
@@ -120,7 +258,7 @@ object ScanSettingsDialog: TScanSettingsDialog
       TabOrder = 1
     end
     object OKButton: TButton
-      Left = 336
+      Left = 416
       Height = 30
       Top = 8
       Width = 92
@@ -131,20 +269,8 @@ object ScanSettingsDialog: TScanSettingsDialog
       Caption = 'Start scan'
       Default = True
       ModalResult = 1
+      OnClick = StartScanClicked
       TabOrder = 0
     end
-  end
-  object FIgnorePatterns: TMemo
-    Left = 12
-    Height = 178
-    Top = 214
-    Width = 516
-    Align = alClient
-    BorderSpacing.Left = 12
-    BorderSpacing.Right = 12
-    BorderSpacing.Bottom = 12
-    ScrollBars = ssAutoVertical
-    TabOrder = 4
-    WordWrap = False
   end
 end

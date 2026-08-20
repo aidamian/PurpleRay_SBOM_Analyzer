@@ -56,7 +56,8 @@ type
     pkPodfileLock,
     pkVcpkgJSON,
     pkConanText,
-    pkPNPMLock);
+    pkPNPMLock,
+    pkPyProjectTOML);
 
   TArtifactDefinition = record
     Detected: Boolean;
@@ -160,7 +161,8 @@ begin
     Define(ADefinition, 'requirements.txt', 'PyPI', 'requirements-text',
       pkRequirements)
   else if NameValue = 'pyproject.toml' then
-    Define(ADefinition, 'pyproject.toml', 'PyPI', 'unsupported-toml', pkNone)
+    Define(ADefinition, 'pyproject.toml', 'PyPI',
+      'conservative-pyproject-toml', pkPyProjectTOML, True)
   else if NameValue = 'poetry.lock' then
     Define(ADefinition, 'poetry.lock', 'PyPI', 'conservative-poetry-lock',
       pkPoetryLock, True)

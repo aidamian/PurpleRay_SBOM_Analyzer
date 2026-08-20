@@ -748,7 +748,13 @@ begin
     if IsCancelled or not CompletedNormally then
       FTask.Status := tsCancelled
     else
+    begin
       FTask.Status := tsCompleted;
+      if FTask.FilesInspected = 0 then
+        AddWarning('The scan completed without inspecting any regular files. ' +
+          'Review the selected folder, permissions, symbolic-link policy, and ' +
+          'ignore patterns before relying on this result.');
+    end;
   except
     on E: Exception do
     begin

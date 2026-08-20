@@ -39,6 +39,9 @@ type
     FollowSymbolicLinks: Boolean;
     AllowOutsideRoot: Boolean;
     CalculateSHA256: Boolean;
+    SBOMAuthorOrganization: string;
+    SBOMAuthorEmail: string;
+    RememberPrivacyChoices: Boolean;
     IgnorePatterns: TStringList;
     {**
       Creates settings and installs the safe default ignore policy.
@@ -61,7 +64,8 @@ type
     destructor Destroy; override;
 
     {**
-      Restores all Boolean options and ignore patterns to product defaults.
+      Restores author identity, Boolean options, and ignore patterns to product
+      defaults.
 
       Parameters
       ----------
@@ -256,8 +260,10 @@ type
     DependencyScope: string;
     SHA256: string;
     EvidencePaths: TStringList;
+    DeclaredLicenses: TStringList;
+    DeclaredPublishers: TStringList;
     {**
-      Creates a component with an owned, sorted evidence-path collection.
+      Creates a component with owned, sorted evidence and declaration lists.
 
       Parameters
       ----------
@@ -277,7 +283,7 @@ type
     destructor Destroy; override;
 
     {**
-      Creates a deep copy including all evidence paths.
+      Creates a deep copy including evidence, licenses, and publishers.
 
       Parameters
       ----------
@@ -296,7 +302,8 @@ type
     function Clone: TComponent;
 
     {**
-      Serializes component identity, provenance, scope, and evidence paths.
+      Serializes component identity, provenance, scope, evidence, and explicit
+      manifest declarations.
 
       Parameters
       ----------
@@ -315,7 +322,8 @@ type
     function ToJSON: TJSONObject;
 
     {**
-      Constructs a component and its evidence collection from JSON.
+      Constructs a component, its evidence collection, and its declared
+      license and publisher collections from JSON.
 
       Parameters
       ----------
@@ -666,6 +674,9 @@ begin
   FollowSymbolicLinks := False;
   AllowOutsideRoot := False;
   CalculateSHA256 := True;
+  SBOMAuthorOrganization := '';
+  SBOMAuthorEmail := '';
+  RememberPrivacyChoices := False;
   IgnorePatterns.Clear;
   for I := Low(Defaults) to High(Defaults) do
     IgnorePatterns.Add(Defaults[I]);
@@ -679,6 +690,9 @@ begin
   FollowSymbolicLinks := ASource.FollowSymbolicLinks;
   AllowOutsideRoot := ASource.AllowOutsideRoot;
   CalculateSHA256 := ASource.CalculateSHA256;
+  SBOMAuthorOrganization := ASource.SBOMAuthorOrganization;
+  SBOMAuthorEmail := ASource.SBOMAuthorEmail;
+  RememberPrivacyChoices := ASource.RememberPrivacyChoices;
   IgnorePatterns.Assign(ASource.IgnorePatterns);
 end;
 
@@ -697,6 +711,11 @@ begin
   Result.Add('follow_symbolic_links', FollowSymbolicLinks);
   Result.Add('allow_outside_root', AllowOutsideRoot);
   Result.Add('calculate_sha256', CalculateSHA256);
+  if SBOMAuthorOrganization <> '' then
+    Result.Add('sbom_author_organization', SBOMAuthorOrganization);
+  if SBOMAuthorEmail <> '' then
+    Result.Add('sbom_author_email', SBOMAuthorEmail);
+  Result.Add('remember_privacy_choices', RememberPrivacyChoices);
   Patterns := TJSONArray.Create;
   StringsToJSON(IgnorePatterns, Patterns);
   Result.Add('ignore_patterns', Patterns);
@@ -711,6 +730,11 @@ begin
   Result.FollowSymbolicLinks := JSONBoolean(AObject, 'follow_symbolic_links', False);
   Result.AllowOutsideRoot := JSONBoolean(AObject, 'allow_outside_root', False);
   Result.CalculateSHA256 := JSONBoolean(AObject, 'calculate_sha256', True);
+  Result.SBOMAuthorOrganization := JSONString(AObject,
+    'sbom_author_organization');
+  Result.SBOMAuthorEmail := JSONString(AObject, 'sbom_author_email');
+  Result.RememberPrivacyChoices := JSONBoolean(AObject,
+    'remember_privacy_choices', False);
   if JSONArray(AObject, 'ignore_patterns') <> nil then
     JSONToStrings(JSONArray(AObject, 'ignore_patterns'), Result.IgnorePatterns);
 end;
@@ -718,9 +742,13 @@ end;
 function TScanSettings.AsSummary: string;
 begin
   Result := Format('absolute paths: %s; follow symlinks: %s; leave root: %s; '+
-    'SHA-256: %s; ignore patterns: %d', [BoolToStr(IncludeAbsolutePaths, True),
+    'SHA-256: %s; ignore patterns: %d; SBOM author configured: %s; ' +
+    'remember privacy choices: %s', [BoolToStr(IncludeAbsolutePaths, True),
     BoolToStr(FollowSymbolicLinks, True), BoolToStr(AllowOutsideRoot, True),
-    BoolToStr(CalculateSHA256, True), IgnorePatterns.Count]);
+    BoolToStr(CalculateSHA256, True), IgnorePatterns.Count,
+    BoolToStr((Trim(SBOMAuthorOrganization) <> '') or
+      (Trim(SBOMAuthorEmail) <> ''), True),
+    BoolToStr(RememberPrivacyChoices, True)]);
 end;
 
 function TArtifact.Clone: TArtifact;
@@ -778,10 +806,18 @@ begin
   EvidencePaths := TStringList.Create;
   EvidencePaths.Sorted := True;
   EvidencePaths.Duplicates := dupIgnore;
+  DeclaredLicenses := TStringList.Create;
+  DeclaredLicenses.Sorted := True;
+  DeclaredLicenses.Duplicates := dupIgnore;
+  DeclaredPublishers := TStringList.Create;
+  DeclaredPublishers.Sorted := True;
+  DeclaredPublishers.Duplicates := dupIgnore;
 end;
 
 destructor TComponent.Destroy;
 begin
+  DeclaredPublishers.Free;
+  DeclaredLicenses.Free;
   EvidencePaths.Free;
   inherited Destroy;
 end;
@@ -799,11 +835,13 @@ begin
   Result.DependencyScope := DependencyScope;
   Result.SHA256 := SHA256;
   Result.EvidencePaths.Assign(EvidencePaths);
+  Result.DeclaredLicenses.Assign(DeclaredLicenses);
+  Result.DeclaredPublishers.Assign(DeclaredPublishers);
 end;
 
 function TComponent.ToJSON: TJSONObject;
 var
-  Evidence: TJSONArray;
+  Evidence, Values: TJSONArray;
 begin
   Result := TJSONObject.Create;
   Result.Add('component_type', ComponentType);
@@ -822,6 +860,18 @@ begin
   Evidence := TJSONArray.Create;
   StringsToJSON(EvidencePaths, Evidence);
   Result.Add('evidence_paths', Evidence);
+  if DeclaredLicenses.Count > 0 then
+  begin
+    Values := TJSONArray.Create;
+    StringsToJSON(DeclaredLicenses, Values);
+    Result.Add('declared_licenses', Values);
+  end;
+  if DeclaredPublishers.Count > 0 then
+  begin
+    Values := TJSONArray.Create;
+    StringsToJSON(DeclaredPublishers, Values);
+    Result.Add('declared_publishers', Values);
+  end;
 end;
 
 class function TComponent.FromJSON(AObject: TJSONObject): TComponent;
@@ -837,6 +887,10 @@ begin
   Result.DependencyScope := JSONString(AObject, 'dependency_scope');
   Result.SHA256 := JSONString(AObject, 'sha256');
   JSONToStrings(JSONArray(AObject, 'evidence_paths'), Result.EvidencePaths);
+  JSONToStrings(JSONArray(AObject, 'declared_licenses'),
+    Result.DeclaredLicenses);
+  JSONToStrings(JSONArray(AObject, 'declared_publishers'),
+    Result.DeclaredPublishers);
 end;
 
 constructor TScanTask.Create;

@@ -83,7 +83,7 @@ implementation
 
 uses
   Classes, Contnrs, fpjson, uJSONUtils, uManifestParsers, uSHA256,
-  uVersionInfo;
+  uSPDXExpressions, uVersionInfo;
 
 type
   TArtifactReferenceList = class(TList);
@@ -179,6 +179,123 @@ begin
   Item.Add('name', AName);
   Item.Add('value', AValue);
   AProperties.Add(Item);
+end;
+
+{**
+  Joins sorted declaration values without changing their individual text.
+
+  Parameters
+  ----------
+  AValues
+    Sorted manifest-declaration list.
+
+  Returns
+  -------
+  string
+    Values separated by a semicolon and one space, or an empty string.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the joined string cannot be allocated.
+}
+function JoinDeclarations(AValues: TStrings): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  if AValues = nil then
+    Exit;
+  for I := 0 to AValues.Count - 1 do
+  begin
+    if I > 0 then
+      Result := Result + '; ';
+    Result := Result + AValues[I];
+  end;
+end;
+
+{**
+  Builds the CycloneDX license choice for explicit manifest declarations.
+
+  Parameters
+  ----------
+  AComponent
+    Component supplying sorted, unique raw license declarations.
+
+  Returns
+  -------
+  TJSONArray
+    Newly allocated license choice, or nil when nothing was declared. One
+    valid SPDX declaration becomes an expression; multiple or non-SPDX values
+    become named license objects without an invented Boolean relationship.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if JSON allocation fails.
+}
+function BuildDeclaredLicenses(AComponent: uModels.TComponent): TJSONArray;
+var
+  I: Integer;
+  Choice, LicenseValue: TJSONObject;
+begin
+  Result := nil;
+  if (AComponent = nil) or (AComponent.DeclaredLicenses.Count = 0) then
+    Exit;
+  Result := TJSONArray.Create;
+  if (AComponent.DeclaredLicenses.Count = 1) and
+    IsValidSPDXExpression(AComponent.DeclaredLicenses[0]) then
+  begin
+    Choice := TJSONObject.Create;
+    Choice.Add('expression', AComponent.DeclaredLicenses[0]);
+    Choice.Add('acknowledgement', 'declared');
+    Result.Add(Choice);
+    Exit;
+  end;
+  for I := 0 to AComponent.DeclaredLicenses.Count - 1 do
+  begin
+    LicenseValue := TJSONObject.Create;
+    LicenseValue.Add('name', AComponent.DeclaredLicenses[I]);
+    LicenseValue.Add('acknowledgement', 'declared');
+    Choice := TJSONObject.Create;
+    Choice.Add('license', LicenseValue);
+    Result.Add(Choice);
+  end;
+end;
+
+{**
+  Adds explicit publisher and license declarations to a CycloneDX component.
+
+  Parameters
+  ----------
+  AJSON
+    Component JSON object to augment.
+  AComponent
+    Model component containing manifest declarations.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EAccessViolation
+    Raised when either argument is nil.
+  EOutOfMemory
+    Propagated if JSON allocation fails.
+}
+procedure AddDeclaredComponentMetadata(AJSON: TJSONObject;
+  AComponent: uModels.TComponent);
+var
+  LicenseValues: TJSONArray;
+  PublisherValue: string;
+begin
+  PublisherValue := JoinDeclarations(AComponent.DeclaredPublishers);
+  if PublisherValue <> '' then
+    AJSON.Add('publisher', PublisherValue);
+  LicenseValues := BuildDeclaredLicenses(AComponent);
+  if LicenseValues <> nil then
+    AJSON.Add('licenses', LicenseValues);
 end;
 
 {**
@@ -501,7 +618,8 @@ begin
     AComponent.Version);
   if not Result then
     Exit;
-  if SameText(Trim(AComponent.SourceParser), 'conservative-cargo-toml') then
+  if SameText(Trim(AComponent.SourceParser), 'conservative-cargo-toml') and
+    not HasDependencyScope(AComponent, 'project') then
     Exit(False);
   ABIValue := SONAMEABIVersion(AComponent);
   if (ABIValue <> '') and SameText(Trim(AComponent.Version), ABIValue) then
@@ -532,6 +650,7 @@ begin
   Result := '';
   if IsEcosystemVersionRange(AComponent.Ecosystem, AComponent.Version) or
     (SameText(Trim(AComponent.SourceParser), 'conservative-cargo-toml') and
+    not HasDependencyScope(AComponent, 'project') and
     IsExactVersion(AComponent.Version)) then
     Result := Trim(AComponent.Version);
 end;
@@ -636,6 +755,7 @@ begin
   Result.Add('type', AComponent.ComponentType);
   Result.Add('bom-ref', ComponentReference(AComponent));
   Result.Add('name', AComponent.Name);
+  AddDeclaredComponentMetadata(Result, AComponent);
   if ComponentHasExactVersion(AComponent) then
     Result.Add('version', AComponent.Version);
   ScopeValue := CycloneComponentScope(AComponent);
@@ -676,7 +796,8 @@ end;
   TJSONObject
     Newly allocated application component owned by the caller JSON tree. Its
     display name is always the target-folder basename. When promoted, version,
-    purl, hash, evidence, and provenance come from AProjectComponent.
+    purl, hash, declared licenses, publisher, evidence, and provenance come
+    from AProjectComponent.
 
   Raises
   ------
@@ -702,6 +823,7 @@ begin
   Result.Add('name', NameValue);
   if AProjectComponent = nil then
     Exit;
+  AddDeclaredComponentMetadata(Result, AProjectComponent);
   if ComponentHasExactVersion(AProjectComponent) then
     Result.Add('version', AProjectComponent.Version);
   ScopeValue := CycloneComponentScope(AProjectComponent);
@@ -1261,11 +1383,153 @@ begin
   end;
 end;
 
+{**
+  Applies a conservative syntax check before emitting an SBOM author email.
+
+  Parameters
+  ----------
+  AValue
+    Candidate email address from persisted scan settings.
+
+  Returns
+  -------
+  Boolean
+    True for one bounded address with non-empty local and domain parts and no
+    whitespace or delimiter characters.
+
+  Raises
+  ------
+  None
+}
+function IsValidAuthorEmail(const AValue: string): Boolean;
+var
+  ValueText, LocalValue, DomainValue: string;
+  AtPos, I: Integer;
+begin
+  ValueText := Trim(AValue);
+  Result := (ValueText <> '') and (Length(ValueText) <= 254);
+  if not Result then
+    Exit;
+  AtPos := Pos('@', ValueText);
+  if (AtPos <= 1) or (AtPos = Length(ValueText)) or
+    (Pos('@', Copy(ValueText, AtPos + 1, MaxInt)) > 0) then
+    Exit(False);
+  LocalValue := Copy(ValueText, 1, AtPos - 1);
+  DomainValue := Copy(ValueText, AtPos + 1, MaxInt);
+  if (LocalValue[1] = '.') or (LocalValue[Length(LocalValue)] = '.') or
+    (DomainValue[1] in ['.', '-']) or
+    (DomainValue[Length(DomainValue)] in ['.', '-']) or
+    (Pos('..', LocalValue) > 0) or (Pos('..', DomainValue) > 0) then
+    Exit(False);
+  for I := 1 to Length(ValueText) do
+    if (Ord(ValueText[I]) <= 32) or
+      (ValueText[I] in ['<', '>', '(', ')', '[', ']', ',', ';']) then
+      Exit(False);
+  Result := True;
+end;
+
+{**
+  Builds optional CycloneDX metadata authors from frozen scan settings.
+
+  Parameters
+  ----------
+  ASettings
+    Scan settings containing optional author organization and email values.
+
+  Returns
+  -------
+  TJSONArray
+    Newly allocated one-contact array, or nil when no safe value is present.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if JSON allocation fails.
+}
+function BuildMetadataAuthors(ASettings: TScanSettings): TJSONArray;
+const
+  MaxOrganizationLength = 4096;
+var
+  OrganizationValue, EmailValue: string;
+  AuthorValue: TJSONObject;
+begin
+  Result := nil;
+  OrganizationValue := Trim(ASettings.SBOMAuthorOrganization);
+  if Length(OrganizationValue) > MaxOrganizationLength then
+    OrganizationValue := '';
+  EmailValue := Trim(ASettings.SBOMAuthorEmail);
+  if not IsValidAuthorEmail(EmailValue) then
+    EmailValue := '';
+  if (OrganizationValue = '') and (EmailValue = '') then
+    Exit;
+  Result := TJSONArray.Create;
+  AuthorValue := TJSONObject.Create;
+  if OrganizationValue <> '' then
+    AuthorValue.Add('name', OrganizationValue);
+  if EmailValue <> '' then
+    AuthorValue.Add('email', EmailValue);
+  Result.Add(AuthorValue);
+end;
+
+{**
+  Builds the fixed analysis-time CycloneDX lifecycle declaration.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  TJSONArray
+    Newly allocated array containing the ``post-build`` phase.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if JSON allocation fails.
+}
+function BuildMetadataLifecycles: TJSONArray;
+var
+  LifecycleValue: TJSONObject;
+begin
+  Result := TJSONArray.Create;
+  LifecycleValue := TJSONObject.Create;
+  LifecycleValue.Add('phase', 'post-build');
+  Result.Add(LifecycleValue);
+end;
+
+{**
+  Builds the machine-readable best-effort completeness declaration.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  TJSONArray
+    Newly allocated top-level composition with aggregate ``incomplete``.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if JSON allocation fails.
+}
+function BuildIncompleteCompositions: TJSONArray;
+var
+  CompositionValue: TJSONObject;
+begin
+  Result := TJSONArray.Create;
+  CompositionValue := TJSONObject.Create;
+  CompositionValue.Add('aggregate', 'incomplete');
+  Result.Add(CompositionValue);
+end;
+
 function GenerateCycloneDX(ATask: TScanTask;
   ASpecVersion: TCycloneDXSpecVersion): UTF8String;
 var
   Root, Metadata, Tools, PrimaryComponent: TJSONObject;
-  ToolComponents, Components, Properties, Dependencies: TJSONArray;
+  ToolComponents, Components, Properties, Dependencies, Authors: TJSONArray;
   PromotedProject: uModels.TComponent;
   PrimaryReference, SpecVersionText: string;
   I: Integer;
@@ -1287,6 +1551,10 @@ begin
       Metadata.Add('timestamp', ATask.StartedUTC)
     else
       Metadata.Add('timestamp', ATask.CreatedUTC);
+    Metadata.Add('lifecycles', BuildMetadataLifecycles);
+    Authors := BuildMetadataAuthors(ATask.Settings);
+    if Authors <> nil then
+      Metadata.Add('authors', Authors);
     PromotedProject := SoleProjectComponent(ATask);
     PrimaryComponent := BuildPrimaryComponent(ATask, PromotedProject);
     PrimaryReference := JSONString(PrimaryComponent, 'bom-ref');
@@ -1326,6 +1594,7 @@ begin
     Dependencies := BuildDependencies(ATask, PrimaryReference,
       PromotedProject);
     Root.Add('dependencies', Dependencies);
+    Root.Add('compositions', BuildIncompleteCompositions);
 
     JSONText := NormalizeJSONLineEndings(Root.FormatJSON([], 2));
     Result := UTF8Encode(JSONText + #10);

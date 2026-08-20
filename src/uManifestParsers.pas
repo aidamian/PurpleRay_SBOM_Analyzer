@@ -193,12 +193,14 @@ uses
   fpjson, DOM, XMLRead, uJSONUtils;
 
 {**
-  Rejects XML files containing document-type declarations before DOM parsing.
+  Parses one XML manifest with document types and entity expansion disabled.
 
   Parameters
   ----------
   AFileName
-    XML manifest to inspect in bounded chunks.
+    XML manifest opened once and retained through the complete parse.
+  ADocument
+    Receives the newly allocated DOM document owned by the caller.
 
   Returns
   -------
@@ -207,38 +209,54 @@ uses
   Raises
   ------
   EFOpenError, EReadError
-    Propagated when the manifest cannot be read.
+    Propagated when the manifest cannot be opened or read.
   Exception
-    Raised when a DOCTYPE declaration is found.
+    Raised for malformed XML or any document-type declaration, including
+    declarations encoded as UTF-16.
 }
-procedure RejectXMLDocumentTypes(const AFileName: string);
+procedure ReadSafeXMLFile(const AFileName: string;
+  out ADocument: TXMLDocument);
 const
-  Marker = '<!DOCTYPE';
-  BufferSize = 64 * 1024;
+  MaximumDecodedCharacters = 16 * 1024 * 1024;
 var
+  InputSource: TXMLInputSource;
+  Parser: TDOMParser;
   Stream: TFileStream;
-  Buffer: array[0..BufferSize - 1] of Byte;
-  CarryValue, ChunkValue, WindowValue: RawByteString;
-  Count, CarryLength: Integer;
 begin
+  ADocument := nil;
   Stream := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyWrite);
   try
-    CarryValue := '';
-    repeat
-      Count := Stream.Read(Buffer, SizeOf(Buffer));
-      SetLength(ChunkValue, Count);
-      if Count > 0 then
-        Move(Buffer[0], ChunkValue[1], Count);
-      WindowValue := CarryValue + ChunkValue;
-      if Pos(Marker, UpperCase(string(WindowValue))) > 0 then
-        raise Exception.Create('XML document type declarations are not allowed');
-      CarryLength := Length(Marker) - 1;
-      if Length(WindowValue) > CarryLength then
-        CarryValue := Copy(WindowValue,
-          Length(WindowValue) - CarryLength + 1, CarryLength)
-      else
-        CarryValue := WindowValue;
-    until Count = 0;
+    InputSource := TXMLInputSource.Create(Stream);
+    try
+      InputSource.BaseURI := 'stream:';
+      Parser := TDOMParser.Create;
+      try
+        Parser.Options.DisallowDoctype := True;
+        Parser.Options.ExpandEntities := False;
+        Parser.Options.MaxChars := MaximumDecodedCharacters;
+        try
+          Parser.Parse(InputSource, ADocument);
+        except
+          on E: EXMLReadError do
+          begin
+            FreeAndNil(ADocument);
+            if Pos('document type', LowerCase(E.Message)) > 0 then
+              raise Exception.Create(
+                'XML document type declarations are not allowed');
+            raise;
+          end;
+          else
+          begin
+            FreeAndNil(ADocument);
+            raise;
+          end;
+        end;
+      finally
+        Parser.Free;
+      end;
+    finally
+      InputSource.Free;
+    end;
   finally
     Stream.Free;
   end;
@@ -731,6 +749,10 @@ end;
     CycloneDX component type; defaults to library.
   APURL
     Explicit Package URL, or blank to derive one conservatively.
+  ADeclaredLicenses
+    Optional explicit manifest license strings copied to the component.
+  ADeclaredPublishers
+    Optional explicit manifest publisher strings copied to the component.
 
   Returns
   -------
@@ -743,9 +765,11 @@ end;
 }
 procedure AddComponent(AComponents: TObjectList; const AName, AVersion,
   AEcosystem, ARelativePath, AParser, AScope: string;
-  const AComponentType: string = 'library'; const APURL: string = '');
+  const AComponentType: string = 'library'; const APURL: string = '';
+  ADeclaredLicenses: TStrings = nil; ADeclaredPublishers: TStrings = nil);
 var
   Component: TComponent;
+  I: Integer;
 begin
   if Trim(AName) = '' then
     Exit;
@@ -759,12 +783,21 @@ begin
   Component.ComponentType := AComponentType;
   if APURL <> '' then
     Component.PackageURL := APURL
-  else if SameText(AParser, 'conservative-cargo-toml') then
+  else if SameText(AParser, 'conservative-cargo-toml') and
+    not SameText(Trim(AScope), 'project') then
     Component.PackageURL := ''
   else
     Component.PackageURL := BuildPackageURL(AEcosystem, Component.Name,
       Component.Version);
   Component.EvidencePaths.Add(ARelativePath);
+  if ADeclaredLicenses <> nil then
+    for I := 0 to ADeclaredLicenses.Count - 1 do
+      if Trim(ADeclaredLicenses[I]) <> '' then
+        Component.DeclaredLicenses.Add(Trim(ADeclaredLicenses[I]));
+  if ADeclaredPublishers <> nil then
+    for I := 0 to ADeclaredPublishers.Count - 1 do
+      if Trim(ADeclaredPublishers[I]) <> '' then
+        Component.DeclaredPublishers.Add(Trim(ADeclaredPublishers[I]));
   AComponents.Add(Component);
 end;
 
@@ -774,6 +807,158 @@ begin
     Result := ''
   else
     Result := AData.AsString;
+end;
+
+{**
+  Adds one bounded explicit declaration to a deterministic string set.
+
+  Parameters
+  ----------
+  AValue
+    Manifest value to trim and retain when it contains no control characters.
+  AValues
+    Sorted declaration list that receives the value.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the retained declaration cannot be allocated.
+}
+procedure AddDeclaration(const AValue: string; AValues: TStrings);
+const
+  MaxDeclarationLength = 4096;
+var
+  I: Integer;
+  ValueText: string;
+begin
+  if AValues = nil then
+    Exit;
+  for I := 1 to Length(AValue) do
+    if (Ord(AValue[I]) < 32) or (Ord(AValue[I]) = 127) then
+      Exit;
+  ValueText := Trim(AValue);
+  if (ValueText <> '') and (Length(ValueText) <= MaxDeclarationLength) then
+    AValues.Add(ValueText);
+end;
+
+{**
+  Collects scalar strings from a JSON value or one-dimensional JSON array.
+
+  Parameters
+  ----------
+  AData
+    JSON string or one-dimensional array of strings containing explicit
+    manifest declarations; all other JSON types are ignored.
+  AValues
+    Declaration list receiving bounded, non-empty values.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if a declaration cannot be allocated.
+}
+procedure CollectJSONDeclarations(AData: TJSONData; AValues: TStrings);
+var
+  I: Integer;
+begin
+  if (AData = nil) or (AValues = nil) then
+    Exit;
+  if AData.JSONType = jtArray then
+  begin
+    for I := 0 to TJSONArray(AData).Count - 1 do
+      if TJSONArray(AData).Items[I].JSONType = jtString then
+        AddDeclaration(TJSONArray(AData).Items[I].AsString, AValues);
+    Exit;
+  end;
+  if AData.JSONType = jtString then
+    AddDeclaration(AData.AsString, AValues);
+end;
+
+{**
+  Collects explicitly declared publisher names from common JSON author forms.
+
+  Parameters
+  ----------
+  AData
+    String author, author object with a string name/email, or a
+    one-dimensional array of either form. Nested arrays and other JSON types
+    are ignored.
+  AValues
+    Publisher list receiving names, with email used only as an object fallback.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if a publisher value cannot be allocated.
+}
+procedure CollectJSONPublishers(AData: TJSONData; AValues: TStrings);
+var
+  I: Integer;
+  FieldValue: TJSONData;
+  ValueText: string;
+begin
+  if (AData = nil) or (AValues = nil) then
+    Exit;
+  case AData.JSONType of
+    jtArray:
+      for I := 0 to TJSONArray(AData).Count - 1 do
+        if TJSONArray(AData).Items[I].JSONType in [jtObject, jtString] then
+          CollectJSONPublishers(TJSONArray(AData).Items[I], AValues);
+    jtObject:
+      begin
+        ValueText := '';
+        FieldValue := TJSONObject(AData).Find('name');
+        if (FieldValue <> nil) and (FieldValue.JSONType = jtString) then
+          ValueText := FieldValue.AsString
+        else if FieldValue = nil then
+        begin
+          FieldValue := TJSONObject(AData).Find('email');
+          if (FieldValue <> nil) and (FieldValue.JSONType = jtString) then
+            ValueText := FieldValue.AsString;
+        end;
+        AddDeclaration(ValueText, AValues);
+      end;
+    jtNull:
+      Exit;
+    jtString:
+      AddDeclaration(AData.AsString, AValues);
+  end;
+end;
+
+{**
+  Creates a sorted, duplicate-free list for manifest declarations.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  TStringList
+    Newly allocated declaration set owned by the caller.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the list cannot be allocated.
+}
+function CreateDeclarationList: TStringList;
+begin
+  Result := TStringList.Create;
+  Result.Sorted := True;
+  Result.Duplicates := dupIgnore;
 end;
 
 procedure ParseNamedJSONDependencies(AObject: TJSONObject;
@@ -817,17 +1002,22 @@ var
   Data: TJSONData;
   Root: TJSONObject;
   NameValue, VersionValue: string;
+  Licenses, Publishers: TStringList;
 begin
   Data := ReadJSONFile(AFileName);
+  Licenses := CreateDeclarationList;
+  Publishers := CreateDeclarationList;
   try
     if Data.JSONType <> jtObject then
       raise Exception.Create('The package manifest root must be a JSON object');
     Root := TJSONObject(Data);
     NameValue := JSONString(Root, 'name');
     VersionValue := JSONString(Root, 'version');
+    CollectJSONDeclarations(Root.Find('license'), Licenses);
+    CollectJSONPublishers(Root.Find('author'), Publishers);
     if NameValue <> '' then
       AddComponent(AComponents, NameValue, VersionValue, 'npm', ARelativePath,
-        'package-json', 'project', 'application');
+        'package-json', 'project', 'application', '', Licenses, Publishers);
     ParseNamedJSONDependencies(JSONObject(Root, 'dependencies'), AComponents,
       'npm', ARelativePath, 'package-json', 'runtime');
     ParseNamedJSONDependencies(JSONObject(Root, 'devDependencies'), AComponents,
@@ -837,6 +1027,8 @@ begin
     ParseNamedJSONDependencies(JSONObject(Root, 'peerDependencies'), AComponents,
       'npm', ARelativePath, 'package-json', 'peer');
   finally
+    Publishers.Free;
+    Licenses.Free;
     Data.Free;
   end;
 end;
@@ -1157,6 +1349,74 @@ begin
     Result := '';
 end;
 
+{**
+  Finds an XML child using the case-sensitive element names required by XML.
+
+  Parameters
+  ----------
+  ANode
+    Parent whose immediate element children are inspected.
+  AName
+    Exact local element name to match.
+
+  Returns
+  -------
+  TDOMElement
+    Borrowed matching child element, or nil when absent.
+
+  Raises
+  ------
+  None
+}
+function ExactChildElement(ANode: TDOMNode;
+  const AName: string): TDOMElement;
+var
+  Child: TDOMNode;
+begin
+  Result := nil;
+  if ANode = nil then
+    Exit;
+  Child := ANode.FirstChild;
+  while Child <> nil do
+  begin
+    if (Child is TDOMElement) and
+      (CompareStr(LocalNodeName(Child), AName) = 0) then
+      Exit(TDOMElement(Child));
+    Child := Child.NextSibling;
+  end;
+end;
+
+{**
+  Reads trimmed text from one case-sensitive immediate XML child.
+
+  Parameters
+  ----------
+  ANode
+    Parent element.
+  AName
+    Exact local child name.
+
+  Returns
+  -------
+  string
+    Trimmed UTF-8 text, or an empty string when the child is absent.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if DOM text conversion cannot allocate its result.
+}
+function ExactChildText(ANode: TDOMNode; const AName: string): string;
+var
+  Element: TDOMElement;
+begin
+  Element := ExactChildElement(ANode, AName);
+  if Element <> nil then
+    Result := Trim(UTF8Encode(Element.TextContent))
+  else
+    Result := '';
+end;
+
 function AttributeValue(AElement: TDOMElement; const AName: string): string;
 begin
   Result := '';
@@ -1195,6 +1455,69 @@ begin
     Result := 'development';
 end;
 
+{**
+  Retains a Maven declaration only when it is literal manifest evidence.
+
+  Parameters
+  ----------
+  AValue
+    Maven license or organization text to inspect.
+  AValues
+    Declaration set receiving literal values.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if a literal declaration cannot be allocated.
+}
+procedure AddMavenDeclaration(const AValue: string; AValues: TStrings);
+begin
+  if Pos('${', AValue) > 0 then
+    Exit;
+  AddDeclaration(AValue, AValues);
+end;
+
+{**
+  Collects license names declared directly by a Maven project.
+
+  Parameters
+  ----------
+  AProject
+    Maven project root element.
+  AValues
+    Declaration set receiving direct ``licenses/license/name`` values.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if a license declaration cannot be allocated.
+}
+procedure CollectMavenLicenses(AProject: TDOMElement; AValues: TStrings);
+var
+  LicensesElement: TDOMElement;
+  Child: TDOMNode;
+begin
+  LicensesElement := ExactChildElement(AProject, 'licenses');
+  if LicensesElement = nil then
+    Exit;
+  Child := LicensesElement.FirstChild;
+  while Child <> nil do
+  begin
+    if (Child is TDOMElement) and
+      (CompareStr(LocalNodeName(Child), 'license') = 0) then
+      AddMavenDeclaration(ExactChildText(Child, 'name'), AValues);
+    Child := Child.NextSibling;
+  end;
+end;
+
 procedure WalkMavenDependencies(ANode: TDOMNode; AComponents: TObjectList;
   const ARelativePath: string);
 var
@@ -1230,7 +1553,7 @@ begin
 end;
 
 {**
-  Parses dependency elements from a Maven POM after the XML safety check.
+  Parses project declarations and dependency elements from a safe Maven POM.
 
   Parameters
   ----------
@@ -1239,7 +1562,7 @@ end;
   ARelativePath
     Root-relative evidence path.
   AComponents
-    Owned list receiving Maven dependencies.
+    Owned list receiving the declared Maven project and its dependencies.
 
   Returns
   -------
@@ -1254,12 +1577,47 @@ procedure ParseMavenPOM(const AFileName, ARelativePath: string;
   AComponents: TObjectList);
 var
   Document: TXMLDocument;
+  ProjectElement, ParentElement, OrganizationElement: TDOMElement;
+  GroupID, ArtifactID, VersionValue, PURL: string;
+  Licenses, Publishers: TStringList;
 begin
-  RejectXMLDocumentTypes(AFileName);
-  ReadXMLFile(Document, AFileName);
+  ReadSafeXMLFile(AFileName, Document);
+  Licenses := CreateDeclarationList;
+  Publishers := CreateDeclarationList;
   try
-    WalkMavenDependencies(Document.DocumentElement, AComponents, ARelativePath);
+    ProjectElement := Document.DocumentElement;
+    CollectMavenLicenses(ProjectElement, Licenses);
+    OrganizationElement := ExactChildElement(ProjectElement, 'organization');
+    if OrganizationElement <> nil then
+      AddMavenDeclaration(ExactChildText(OrganizationElement, 'name'),
+        Publishers);
+    ArtifactID := ChildText(ProjectElement, 'artifactId');
+    GroupID := ChildText(ProjectElement, 'groupId');
+    VersionValue := ChildText(ProjectElement, 'version');
+    ParentElement := ChildElement(ProjectElement, 'parent');
+    if ParentElement <> nil then
+    begin
+      if GroupID = '' then
+        GroupID := ChildText(ParentElement, 'groupId');
+      if VersionValue = '' then
+        VersionValue := ChildText(ParentElement, 'version');
+    end;
+    if (ArtifactID <> '') and
+      ((Licenses.Count > 0) or (Publishers.Count > 0)) then
+    begin
+      PURL := '';
+      if (GroupID <> '') and IsExactVersion(VersionValue) then
+        PURL := 'pkg:maven/' + PercentEncode(GroupID, False) + '/' +
+          PercentEncode(ArtifactID, False) + '@' +
+          PercentEncode(VersionValue, False);
+      AddComponent(AComponents, ArtifactID, VersionValue, 'Maven',
+        ARelativePath, 'maven-pom-xml', 'project', 'application', PURL,
+        Licenses, Publishers);
+    end;
+    WalkMavenDependencies(ProjectElement, AComponents, ARelativePath);
   finally
+    Publishers.Free;
+    Licenses.Free;
     Document.Free;
   end;
 end;
@@ -1327,8 +1685,7 @@ procedure ParseMSBuild(const AFileName, ARelativePath, AParser: string;
 var
   Document: TXMLDocument;
 begin
-  RejectXMLDocumentTypes(AFileName);
-  ReadXMLFile(Document, AFileName);
+  ReadSafeXMLFile(AFileName, Document);
   try
     WalkMSBuildReferences(Document.DocumentElement, AComponents, ARelativePath,
       AParser, ACentral);
@@ -1381,31 +1738,91 @@ begin
   end;
 end;
 
+{**
+  Parses a Composer manifest and its declared project metadata.
+
+  Parameters
+  ----------
+  AFileName
+    Bounded Composer JSON manifest to read.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving the declared project and runtime/development
+    dependencies.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for malformed JSON and file I/O failures.
+}
 procedure ParseComposerJSON(const AFileName, ARelativePath: string;
   AComponents: TObjectList);
 var
   Data: TJSONData;
   Root: TJSONObject;
+  Licenses, Publishers: TStringList;
+  NameValue, VersionValue: string;
 begin
   Data := ReadJSONFile(AFileName);
+  Licenses := CreateDeclarationList;
+  Publishers := CreateDeclarationList;
   try
     if Data.JSONType <> jtObject then
       raise Exception.Create('The Composer manifest root must be a JSON object');
     Root := TJSONObject(Data);
+    NameValue := JSONString(Root, 'name');
+    VersionValue := JSONString(Root, 'version');
+    CollectJSONDeclarations(Root.Find('license'), Licenses);
+    CollectJSONPublishers(Root.Find('authors'), Publishers);
+    if NameValue <> '' then
+      AddComponent(AComponents, NameValue, VersionValue, 'Composer',
+        ARelativePath, 'composer-json', 'project', 'application', '', Licenses,
+        Publishers);
     ParseNamedJSONDependencies(JSONObject(Root, 'require'), AComponents,
       'Composer', ARelativePath, 'composer-json', 'runtime');
     ParseNamedJSONDependencies(JSONObject(Root, 'require-dev'), AComponents,
       'Composer', ARelativePath, 'composer-json', 'development');
   finally
+    Publishers.Free;
+    Licenses.Free;
     Data.Free;
   end;
 end;
 
+{**
+  Adds declared packages from one Composer lock-file package array.
+
+  Parameters
+  ----------
+  AArray
+    One-dimensional array of Composer package objects; nil is ignored.
+  AComponents
+    Owned list receiving locked package components.
+  ARelativePath
+    Root-relative lock-file evidence path.
+  AScope
+    Stable dependency scope assigned to every accepted package.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if component or declaration storage cannot be allocated.
+}
 procedure ParseComposerPackageArray(AArray: TJSONArray; AComponents: TObjectList;
   const ARelativePath, AScope: string);
 var
   I: Integer;
   Entry: TJSONObject;
+  Licenses, Publishers: TStringList;
 begin
   if AArray = nil then
     Exit;
@@ -1413,9 +1830,18 @@ begin
     if AArray.Items[I].JSONType = jtObject then
     begin
       Entry := TJSONObject(AArray.Items[I]);
-      AddComponent(AComponents, JSONString(Entry, 'name'),
-        JSONString(Entry, 'version'), 'Composer', ARelativePath,
-        'composer-lock-json', AScope);
+      Licenses := CreateDeclarationList;
+      Publishers := CreateDeclarationList;
+      try
+        CollectJSONDeclarations(Entry.Find('license'), Licenses);
+        CollectJSONPublishers(Entry.Find('authors'), Publishers);
+        AddComponent(AComponents, JSONString(Entry, 'name'),
+          JSONString(Entry, 'version'), 'Composer', ARelativePath,
+          'composer-lock-json', AScope, 'library', '', Licenses, Publishers);
+      finally
+        Publishers.Free;
+        Licenses.Free;
+      end;
     end;
 end;
 
@@ -1506,8 +1932,7 @@ procedure ParseLazarusXML(const AFileName, ARelativePath: string;
 var
   Document: TXMLDocument;
 begin
-  RejectXMLDocumentTypes(AFileName);
-  ReadXMLFile(Document, AFileName);
+  ReadSafeXMLFile(AFileName, Document);
   try
     WalkLazarusRequirements(Document.DocumentElement, AComponents,
       ARelativePath, False);
@@ -1601,6 +2026,408 @@ begin
     Result := Copy(Result, 2, Length(Result) - 2);
 end;
 
+{**
+  Removes a TOML comment while respecting single- and double-quoted strings.
+
+  Parameters
+  ----------
+  ALine
+    One physical TOML line.
+
+  Returns
+  -------
+  string
+    Trimmed line content before the first unquoted comment marker.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the returned substring cannot be allocated.
+}
+function StripTOMLComment(const ALine: string): string;
+var
+  I: Integer;
+  QuoteValue: Char;
+  Escaped: Boolean;
+begin
+  QuoteValue := #0;
+  Escaped := False;
+  for I := 1 to Length(ALine) do
+  begin
+    if QuoteValue <> #0 then
+    begin
+      if (QuoteValue = '"') and (ALine[I] = '\') and not Escaped then
+      begin
+        Escaped := True;
+        Continue;
+      end;
+      if (ALine[I] = QuoteValue) and not Escaped then
+        QuoteValue := #0;
+      Escaped := False;
+      Continue;
+    end;
+    if ALine[I] in ['"', ''''] then
+      QuoteValue := ALine[I]
+    else if ALine[I] = '#' then
+      Exit(Trim(Copy(ALine, 1, I - 1)));
+  end;
+  Result := Trim(ALine);
+end;
+
+{**
+  Reads the raw right-hand side of one direct TOML assignment.
+
+  Parameters
+  ----------
+  ALine
+    One physical TOML line.
+  AKey
+    Exact unquoted key expected before the equals sign.
+  AValue
+    Receives the trimmed, comment-free right-hand side.
+
+  Returns
+  -------
+  Boolean
+    True when the requested direct assignment is present and non-empty.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if temporary strings cannot be allocated.
+}
+function TryTOMLAssignmentValue(const ALine, AKey: string;
+  out AValue: string): Boolean;
+var
+  LineValue: string;
+  EqualsAt: SizeInt;
+begin
+  AValue := '';
+  LineValue := StripTOMLComment(ALine);
+  EqualsAt := Pos('=', LineValue);
+  Result := (EqualsAt > 1) and
+    (CompareStr(Trim(Copy(LineValue, 1, EqualsAt - 1)), AKey) = 0);
+  if not Result then
+    Exit;
+  AValue := Trim(Copy(LineValue, EqualsAt + 1, MaxInt));
+  Result := AValue <> '';
+end;
+
+{**
+  Consumes one deliberately restricted TOML literal string.
+
+  Parameters
+  ----------
+  AText
+    Complete single-line TOML value being parsed.
+  APosition
+    One-based input position; advanced past the closing quote on success.
+  AValue
+    Receives the exact unquoted text without escape interpretation.
+
+  Returns
+  -------
+  Boolean
+    True only for a bounded single-line literal. Double-quoted escape
+    sequences are rejected because this conservative parser does not decode
+    them and must never alter declaration evidence.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the returned value cannot be allocated.
+}
+function TryConsumeTOMLLiteralString(const AText: string;
+  var APosition: Integer; out AValue: string): Boolean;
+const
+  MaximumDeclarationLength = 4096;
+var
+  QuoteValue: Char;
+  ValueStart: Integer;
+begin
+  Result := False;
+  AValue := '';
+  if (APosition < 1) or (APosition > Length(AText)) or
+    not (AText[APosition] in ['"', '''']) then
+    Exit;
+  QuoteValue := AText[APosition];
+  Inc(APosition);
+  ValueStart := APosition;
+  while (APosition <= Length(AText)) and
+    (AText[APosition] <> QuoteValue) do
+  begin
+    if (Ord(AText[APosition]) < 32) or
+      (Ord(AText[APosition]) = 127) or
+      ((QuoteValue = '"') and (AText[APosition] = '\')) then
+      Exit;
+    Inc(APosition);
+  end;
+  if APosition > Length(AText) then
+    Exit;
+  AValue := Copy(AText, ValueStart, APosition - ValueStart);
+  Inc(APosition);
+  Result := Length(AValue) <= MaximumDeclarationLength;
+end;
+
+{**
+  Parses one conservative single-line TOML string assignment.
+
+  Parameters
+  ----------
+  ALine
+    Physical TOML line containing the assignment.
+  AKey
+    Exact key to match.
+  AValue
+    Receives the unquoted literal string.
+
+  Returns
+  -------
+  Boolean
+    True only for a bounded single- or double-quoted, non-multiline literal.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if temporary strings cannot be allocated.
+}
+function TryTOMLStringAssignment(const ALine, AKey: string;
+  out AValue: string): Boolean;
+var
+  RawValue: string;
+  PositionValue: Integer;
+begin
+  AValue := '';
+  RawValue := '';
+  if not TryTOMLAssignmentValue(ALine, AKey, RawValue) then
+    Exit(False);
+  PositionValue := 1;
+  Result := TryConsumeTOMLLiteralString(RawValue, PositionValue, AValue) and
+    (AValue <> '') and (PositionValue > Length(RawValue));
+end;
+
+{**
+  Collects a one-line TOML array of literal strings.
+
+  Parameters
+  ----------
+  ALine
+    Physical TOML assignment line.
+  AKey
+    Exact array key to match.
+  AValues
+    Declaration set receiving each bounded quoted string.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if tokenization or declaration allocation fails.
+}
+procedure CollectTOMLStringArray(const ALine, AKey: string;
+  AValues: TStrings);
+var
+  RawValue, ItemValue: string;
+  Items: TStringList;
+  PositionValue: Integer;
+begin
+  if not TryTOMLAssignmentValue(ALine, AKey, RawValue) or
+    (Length(RawValue) < 2) or (RawValue[1] <> '[') or
+    (RawValue[Length(RawValue)] <> ']') then
+    Exit;
+  Items := CreateDeclarationList;
+  try
+    PositionValue := 2;
+    while PositionValue <= Length(RawValue) do
+    begin
+      while (PositionValue <= Length(RawValue)) and
+        (RawValue[PositionValue] in [' ', #9]) do
+        Inc(PositionValue);
+      if (PositionValue = Length(RawValue)) and
+        (RawValue[PositionValue] = ']') then
+      begin
+        Inc(PositionValue);
+        Break;
+      end;
+      if not TryConsumeTOMLLiteralString(RawValue, PositionValue,
+        ItemValue) or (ItemValue = '') then
+        Exit;
+      AddDeclaration(ItemValue, Items);
+      while (PositionValue <= Length(RawValue)) and
+        (RawValue[PositionValue] in [' ', #9]) do
+        Inc(PositionValue);
+      if PositionValue > Length(RawValue) then
+        Exit;
+      if RawValue[PositionValue] = ']' then
+      begin
+        Inc(PositionValue);
+        Break;
+      end;
+      if RawValue[PositionValue] <> ',' then
+        Exit;
+      Inc(PositionValue);
+      while (PositionValue <= Length(RawValue)) and
+        (RawValue[PositionValue] in [' ', #9]) do
+        Inc(PositionValue);
+      if (PositionValue = Length(RawValue)) and
+        (RawValue[PositionValue] = ']') then
+      begin
+        Inc(PositionValue);
+        Break;
+      end;
+      if PositionValue > Length(RawValue) then
+          Exit;
+    end;
+    if PositionValue > Length(RawValue) then
+      AValues.AddStrings(Items);
+  finally
+    Items.Free;
+  end;
+end;
+
+{**
+  Collects ``name`` strings from a one-line PEP-621 author-table array.
+
+  Parameters
+  ----------
+  ALine
+    Physical authors assignment containing one-line inline tables.
+  AValues
+    Publisher declaration set receiving bounded author names.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if a publisher declaration cannot be allocated.
+}
+procedure CollectTOMLInlineAuthorNames(const ALine: string;
+  AValues: TStrings);
+var
+  RawValue, KeyValue, NameValue, StringValue: string;
+  Items: TStringList;
+  PositionValue, KeyStart: Integer;
+  HasName, HasEmail: Boolean;
+begin
+  if not TryTOMLAssignmentValue(ALine, 'authors', RawValue) then
+    Exit;
+  if (Length(RawValue) < 2) or (RawValue[1] <> '[') or
+    (RawValue[Length(RawValue)] <> ']') then
+    Exit;
+  Items := CreateDeclarationList;
+  try
+    PositionValue := 2;
+    while PositionValue <= Length(RawValue) do
+    begin
+      while (PositionValue <= Length(RawValue)) and
+        (RawValue[PositionValue] in [' ', #9]) do
+        Inc(PositionValue);
+      if (PositionValue = Length(RawValue)) and
+        (RawValue[PositionValue] = ']') then
+      begin
+        Inc(PositionValue);
+        Break;
+      end;
+      if (PositionValue > Length(RawValue)) or
+        (RawValue[PositionValue] <> '{') then
+        Exit;
+      Inc(PositionValue);
+      HasName := False;
+      HasEmail := False;
+      NameValue := '';
+      while True do
+      begin
+        while (PositionValue <= Length(RawValue)) and
+          (RawValue[PositionValue] in [' ', #9]) do
+          Inc(PositionValue);
+        KeyStart := PositionValue;
+        while (PositionValue <= Length(RawValue)) and
+          (RawValue[PositionValue] in ['A'..'Z', 'a'..'z', '0'..'9',
+          '_', '-']) do
+          Inc(PositionValue);
+        if PositionValue = KeyStart then
+          Exit;
+        KeyValue := Copy(RawValue, KeyStart, PositionValue - KeyStart);
+        while (PositionValue <= Length(RawValue)) and
+          (RawValue[PositionValue] in [' ', #9]) do
+          Inc(PositionValue);
+        if (PositionValue > Length(RawValue)) or
+          (RawValue[PositionValue] <> '=') then
+          Exit;
+        Inc(PositionValue);
+        while (PositionValue <= Length(RawValue)) and
+          (RawValue[PositionValue] in [' ', #9]) do
+          Inc(PositionValue);
+        if not TryConsumeTOMLLiteralString(RawValue, PositionValue,
+          StringValue) then
+          Exit;
+        if KeyValue = 'name' then
+        begin
+          if HasName then
+            Exit;
+          HasName := True;
+          NameValue := StringValue;
+        end
+        else if KeyValue = 'email' then
+        begin
+          if HasEmail then
+            Exit;
+          HasEmail := True;
+        end
+        else
+          Exit;
+        while (PositionValue <= Length(RawValue)) and
+          (RawValue[PositionValue] in [' ', #9]) do
+          Inc(PositionValue);
+        if (PositionValue > Length(RawValue)) then
+          Exit;
+        if RawValue[PositionValue] = '}' then
+        begin
+          Inc(PositionValue);
+          Break;
+        end;
+        if RawValue[PositionValue] <> ',' then
+          Exit;
+        Inc(PositionValue);
+      end;
+      if HasName and (NameValue <> '') then
+        AddDeclaration(NameValue, Items);
+      while (PositionValue <= Length(RawValue)) and
+        (RawValue[PositionValue] in [' ', #9]) do
+        Inc(PositionValue);
+      if PositionValue > Length(RawValue) then
+        Exit;
+      if RawValue[PositionValue] = ']' then
+      begin
+        Inc(PositionValue);
+        Break;
+      end;
+      if RawValue[PositionValue] <> ',' then
+        Exit;
+      Inc(PositionValue);
+      while (PositionValue <= Length(RawValue)) and
+        (RawValue[PositionValue] in [' ', #9]) do
+        Inc(PositionValue);
+      if (PositionValue = Length(RawValue)) and
+        (RawValue[PositionValue] = ']') then
+      begin
+        Inc(PositionValue);
+        Break;
+      end;
+    end;
+    if PositionValue > Length(RawValue) then
+      AValues.AddStrings(Items);
+  finally
+    Items.Free;
+  end;
+end;
+
 procedure ParseLockNameVersionBlocks(const AFileName, ARelativePath,
   AEcosystem, AParser: string; AComponents: TObjectList);
 var
@@ -1650,24 +2477,80 @@ begin
   end;
 end;
 
+{**
+  Conservatively parses Cargo package declarations and dependency sections.
+
+  Parameters
+  ----------
+  AFileName
+    Cargo.toml file to read without evaluating workspace inheritance.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving the project and declared dependencies.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated when file reading or component allocation fails.
+}
 procedure ParseCargoTOML(const AFileName, ARelativePath: string;
   AComponents: TObjectList);
 var
   Lines: TStringList;
   I, EqualsAt: Integer;
   LineValue, SectionValue, NameValue, VersionValue, ScopeValue: string;
+  ProjectName, ProjectVersion, DeclarationValue: string;
+  Licenses, Publishers: TStringList;
 begin
   Lines := TStringList.Create;
+  Licenses := CreateDeclarationList;
+  Publishers := CreateDeclarationList;
   try
     Lines.LoadFromFile(AFileName);
     SectionValue := '';
+    ProjectName := '';
+    ProjectVersion := '';
     for I := 0 to Lines.Count - 1 do
     begin
-      LineValue := StripInlineComment(Lines[I]);
+      LineValue := StripTOMLComment(Lines[I]);
       if (Length(LineValue) >= 2) and (LineValue[1] = '[') and
         (LineValue[Length(LineValue)] = ']') then
       begin
-        SectionValue := LowerCase(Copy(LineValue, 2, Length(LineValue) - 2));
+        SectionValue := Trim(Copy(LineValue, 2,
+          Length(LineValue) - 2));
+        Continue;
+      end;
+      if SectionValue <> 'package' then
+        Continue;
+      if TryTOMLStringAssignment(LineValue, 'name', DeclarationValue) then
+        ProjectName := DeclarationValue
+      else if TryTOMLStringAssignment(LineValue, 'version',
+        DeclarationValue) then
+        ProjectVersion := DeclarationValue
+      else if TryTOMLStringAssignment(LineValue, 'license',
+        DeclarationValue) then
+        AddDeclaration(DeclarationValue, Licenses)
+      else
+        CollectTOMLStringArray(LineValue, 'authors', Publishers);
+    end;
+    if ProjectName <> '' then
+      AddComponent(AComponents, ProjectName, ProjectVersion, 'Cargo',
+        ARelativePath, 'conservative-cargo-toml', 'project', 'application',
+        '', Licenses, Publishers);
+
+    SectionValue := '';
+    for I := 0 to Lines.Count - 1 do
+    begin
+      LineValue := StripTOMLComment(Lines[I]);
+      if (Length(LineValue) >= 2) and (LineValue[1] = '[') and
+        (LineValue[Length(LineValue)] = ']') then
+      begin
+        SectionValue := Trim(Copy(LineValue, 2, Length(LineValue) - 2));
         Continue;
       end;
       if (SectionValue <> 'dependencies') and
@@ -1706,6 +2589,111 @@ begin
         'Cargo', ARelativePath, 'conservative-cargo-toml', ScopeValue);
     end;
   finally
+    Publishers.Free;
+    Licenses.Free;
+    Lines.Free;
+  end;
+end;
+
+{**
+  Conservatively parses direct PEP-621 or Poetry project declarations.
+
+  Parameters
+  ----------
+  AFileName
+    pyproject.toml file to read without executing a build backend.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving at most one project component.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated when file reading or component allocation fails.
+
+  Notes
+  -----
+  Only bounded single-line literal fields are accepted. License file
+  references, dynamic values, multiline values, and dependency tables are not
+  interpreted.
+}
+procedure ParsePyProjectTOML(const AFileName, ARelativePath: string;
+  AComponents: TObjectList);
+var
+  Lines: TStringList;
+  ProjectLicenses, ProjectPublishers, PoetryLicenses,
+    PoetryPublishers: TStringList;
+  I: Integer;
+  LineValue, SectionValue, DeclarationValue: string;
+  ProjectName, ProjectVersion, PoetryName, PoetryVersion: string;
+begin
+  Lines := TStringList.Create;
+  ProjectLicenses := CreateDeclarationList;
+  ProjectPublishers := CreateDeclarationList;
+  PoetryLicenses := CreateDeclarationList;
+  PoetryPublishers := CreateDeclarationList;
+  try
+    Lines.LoadFromFile(AFileName);
+    SectionValue := '';
+    ProjectName := '';
+    ProjectVersion := '';
+    PoetryName := '';
+    PoetryVersion := '';
+    for I := 0 to Lines.Count - 1 do
+    begin
+      LineValue := StripTOMLComment(Lines[I]);
+      if (Length(LineValue) >= 2) and (LineValue[1] = '[') and
+        (LineValue[Length(LineValue)] = ']') then
+      begin
+        SectionValue := Trim(Copy(LineValue, 2,
+          Length(LineValue) - 2));
+        Continue;
+      end;
+      if SectionValue = 'project' then
+      begin
+        if TryTOMLStringAssignment(LineValue, 'name', DeclarationValue) then
+          ProjectName := DeclarationValue
+        else if TryTOMLStringAssignment(LineValue, 'version',
+          DeclarationValue) then
+          ProjectVersion := DeclarationValue
+        else if TryTOMLStringAssignment(LineValue, 'license',
+          DeclarationValue) then
+          AddDeclaration(DeclarationValue, ProjectLicenses)
+        else
+          CollectTOMLInlineAuthorNames(LineValue, ProjectPublishers);
+      end
+      else if SectionValue = 'tool.poetry' then
+      begin
+        if TryTOMLStringAssignment(LineValue, 'name', DeclarationValue) then
+          PoetryName := DeclarationValue
+        else if TryTOMLStringAssignment(LineValue, 'version',
+          DeclarationValue) then
+          PoetryVersion := DeclarationValue
+        else if TryTOMLStringAssignment(LineValue, 'license',
+          DeclarationValue) then
+          AddDeclaration(DeclarationValue, PoetryLicenses)
+        else
+          CollectTOMLStringArray(LineValue, 'authors', PoetryPublishers);
+      end;
+    end;
+    if ProjectName <> '' then
+      AddComponent(AComponents, ProjectName, ProjectVersion, 'PyPI',
+        ARelativePath, 'conservative-pyproject-toml', 'project',
+        'application', '', ProjectLicenses, ProjectPublishers)
+    else if PoetryName <> '' then
+      AddComponent(AComponents, PoetryName, PoetryVersion, 'PyPI',
+        ARelativePath, 'conservative-pyproject-toml', 'project',
+        'application', '', PoetryLicenses, PoetryPublishers);
+  finally
+    PoetryPublishers.Free;
+    PoetryLicenses.Free;
+    ProjectPublishers.Free;
+    ProjectLicenses.Free;
     Lines.Free;
   end;
 end;
@@ -2114,7 +3102,8 @@ function IsPartialParser(AKind: TParserKind): Boolean;
 begin
   Result := AKind in [pkPipfileLock, pkGoSum, pkCargoLock, pkCargoTOML,
     pkPoetryLock, pkYarnLock, pkGradleLock, pkGemLock, pkEnvironmentYAML,
-    pkPackageResolved, pkPodfileLock, pkVcpkgJSON, pkConanText, pkPNPMLock];
+    pkPackageResolved, pkPodfileLock, pkVcpkgJSON, pkConanText, pkPNPMLock,
+    pkPyProjectTOML];
 end;
 
 procedure ParseArtifact(const AFileName, ARelativePath: string;
@@ -2166,6 +3155,8 @@ begin
       pkVcpkgJSON: ParseVcpkgJSON(AFileName, ARelativePath, AComponents);
       pkConanText: ParseConanText(AFileName, ARelativePath, AComponents);
       pkPNPMLock: ParsePNPMLock(AFileName, ARelativePath, AComponents);
+      pkPyProjectTOML: ParsePyProjectTOML(AFileName, ARelativePath,
+        AComponents);
     else
       raise Exception.Create('No parser is registered for the detected artifact');
     end;

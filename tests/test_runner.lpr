@@ -31,7 +31,7 @@ uses
   uModels, uSHA256, uBinaryInspector, uManifestParsers, uArtifactIdentifier,
   uTaskHistory, uJSONUtils, uComponentNormalizer, uCycloneDX, uIgnoreMatcher,
   uScanEngine, uPlatform, uSystemInspector, uNativeDependencyInspector,
-  uExportUtils, uVersionInfo, uScanWorker;
+  uExportUtils, uVersionInfo, uScanWorker, uPresentation, uSPDXExpressions;
 
 type
   TTestMethod = procedure;
@@ -263,6 +263,83 @@ begin
     DirectorySeparator + 'fixtures' + DirectorySeparator + AName;
 end;
 
+{**
+  Counts non-overlapping occurrences of one exact source fragment.
+
+  Parameters
+  ----------
+  AText
+    Complete source or resource text to inspect.
+  AFragment
+    Exact non-empty fragment to count.
+
+  Returns
+  -------
+  Integer
+    Number of non-overlapping matches, or zero for an empty fragment.
+
+  Raises
+  ------
+  None
+}
+function CountTextOccurrences(const AText, AFragment: string): Integer;
+var
+  RemainingText: string;
+  MatchAt: SizeInt;
+begin
+  Result := 0;
+  if AFragment = '' then
+    Exit;
+  RemainingText := AText;
+  repeat
+    MatchAt := Pos(AFragment, RemainingText);
+    if MatchAt = 0 then
+      Exit;
+    Inc(Result);
+    Delete(RemainingText, 1, MatchAt + Length(AFragment) - 1);
+  until RemainingText = '';
+end;
+
+{**
+  Extracts a bounded method or control block from source text.
+
+  Parameters
+  ----------
+  AText
+    Complete source text containing both markers.
+  AStartMarker
+    Exact first marker retained in the returned section.
+  AEndMarker
+    Exact later marker excluded from the returned section.
+
+  Returns
+  -------
+  string
+    Text from the first marker up to the later marker, or blank when either
+    marker is absent or ordered incorrectly.
+
+  Raises
+  ------
+  EOutOfMemory
+    May propagate while copying the requested source section.
+}
+function ExtractTextSection(const AText, AStartMarker,
+  AEndMarker: string): string;
+var
+  StartAt, RelativeEndAt: SizeInt;
+  TailText: string;
+begin
+  Result := '';
+  StartAt := Pos(AStartMarker, AText);
+  if StartAt = 0 then
+    Exit;
+  TailText := Copy(AText, StartAt, MaxInt);
+  RelativeEndAt := Pos(AEndMarker, TailText);
+  if RelativeEndAt <= 1 then
+    Exit;
+  Result := Copy(TailText, 1, RelativeEndAt - 1);
+end;
+
 function NewTemporaryDirectory(const AName: string): string;
 begin
   Result := IncludeTrailingPathDelimiter(TemporaryRoot) + AName;
@@ -375,6 +452,51 @@ begin
   try
     if Length(AContent) > 0 then
       Stream.WriteBuffer(AContent[1], Length(AContent));
+  finally
+    Stream.Free;
+  end;
+end;
+
+{**
+  Writes deterministic UTF-16LE text with an explicit byte-order mark.
+
+  Parameters
+  ----------
+  AFileName
+    Test-owned destination file to replace.
+  AContent
+    Unicode text whose UTF-16 code units are written little-endian.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EFCreateError, EWriteError
+    Propagated when the fixture cannot be created or completely written.
+}
+procedure WriteUTF16LEText(const AFileName: string;
+  const AContent: UnicodeString);
+var
+  Stream: TFileStream;
+  Bytes: array[0..1] of Byte;
+  CodeUnit: Word;
+  I: Integer;
+begin
+  ForceDirectories(ExtractFileDir(AFileName));
+  Stream := TFileStream.Create(AFileName, fmCreate);
+  try
+    Bytes[0] := $FF;
+    Bytes[1] := $FE;
+    Stream.WriteBuffer(Bytes[0], Length(Bytes));
+    for I := 1 to Length(AContent) do
+    begin
+      CodeUnit := Ord(AContent[I]);
+      Bytes[0] := Byte(CodeUnit);
+      Bytes[1] := Byte(CodeUnit shr 8);
+      Stream.WriteBuffer(Bytes[0], Length(Bytes));
+    end;
   finally
     Stream.Free;
   end;
@@ -1014,6 +1136,723 @@ begin
   end;
 end;
 
+{**
+  Verifies the non-visual status, timestamp, message, and digest UI policies.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when user-facing trust indicators lose their deterministic meaning.
+}
+procedure TestPresentationPolicy;
+var
+  Task: TScanTask;
+  Artifact: TArtifact;
+  DisplayValue: string;
+begin
+  Task := TScanTask.Create;
+  try
+    Task.Status := tsCompleted;
+    Task.FilesInspected := 1;
+    AssertEqual(#$E2#$9C#$93 + ' completed', TaskStatusDisplayText(Task),
+      'completed task status glyph or text differs');
+    AssertTrue(not TaskNeedsReview(Task),
+      'clean completed task unexpectedly needs review');
+
+    Task.Warnings.Add('review this result');
+    AssertTrue(TaskNeedsReview(Task),
+      'warning did not mark the completed task for review');
+    AssertEqual(#$E2#$9A#$A0 + ' completed with warnings',
+      TaskStatusDisplayText(Task), 'warning-aware history status differs');
+
+    Artifact := TArtifact.Create;
+    Artifact.MessageText := 'artifact note';
+    Task.Artifacts.Add(Artifact);
+    Task.Errors.Add('task error');
+    AssertEqual(3, TaskMessageCount(Task),
+      'Messages-tab count should include warnings, errors, and artifact notes');
+    AssertEqual(#$E2#$9C#$93 + ' parsed',
+      ArtifactStatusDisplayText(arsParsed),
+      'parsed artifact status glyph or text differs');
+    AssertEqual(#$E2#$9C#$95 + ' failed',
+      ArtifactStatusDisplayText(arsFailed),
+      'failed artifact status glyph or text differs');
+    AssertEqual(#$E2#$9A#$A0 + ' unsupported',
+      StatusDisplayText('detected but unsupported'),
+      'unsupported component status glyph or compact text differs');
+    AssertEqual('0123456789ab',
+      ShortDigest('0123456789abcdef0123456789abcdef'),
+      'compact digest display differs');
+
+    DisplayValue := LocalTimestampText('2026-08-20T12:34:56.789Z');
+    AssertEqual(19, Length(DisplayValue),
+      'local timestamp should use a complete second-resolution display');
+    AssertTrue(Pos('T', DisplayValue) = 0,
+      'local timestamp retained the ISO separator');
+    AssertTrue(Pos('Z', DisplayValue) = 0,
+      'local timestamp retained the UTC suffix');
+  finally
+    Task.Free;
+  end;
+end;
+
+{**
+  Verifies persistence and deep-copy semantics for compliance declarations.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when author/privacy settings or declared component metadata are
+    omitted, aliased between clones, or lost through JSON persistence.
+}
+procedure TestComplianceModelPersistence;
+var
+  Settings, SettingsClone, LoadedSettings: TScanSettings;
+  Component, ComponentClone, LoadedComponent: uModels.TComponent;
+  Task, TaskClone, LoadedTask: TScanTask;
+  JSONValue: TJSONObject;
+begin
+  Settings := TScanSettings.Create;
+  SettingsClone := nil;
+  LoadedSettings := nil;
+  Component := uModels.TComponent.Create;
+  ComponentClone := nil;
+  LoadedComponent := nil;
+  Task := nil;
+  TaskClone := nil;
+  LoadedTask := nil;
+  JSONValue := nil;
+  try
+    Settings.IncludeAbsolutePaths := True;
+    Settings.AllowOutsideRoot := True;
+    Settings.SBOMAuthorOrganization := 'PurpleRay Research';
+    Settings.SBOMAuthorEmail := 'sbom@example.test';
+    Settings.RememberPrivacyChoices := True;
+    Settings.IgnorePatterns.Add('compliance-cache');
+
+    SettingsClone := Settings.Clone;
+    AssertTrue(SettingsClone.IncludeAbsolutePaths and
+      SettingsClone.AllowOutsideRoot and SettingsClone.RememberPrivacyChoices,
+      'privacy settings were not cloned');
+    AssertEqual('PurpleRay Research', SettingsClone.SBOMAuthorOrganization,
+      'author organization was not cloned');
+    AssertEqual('sbom@example.test', SettingsClone.SBOMAuthorEmail,
+      'author email was not cloned');
+    SettingsClone.SBOMAuthorOrganization := 'Changed clone';
+    SettingsClone.IgnorePatterns.Add('clone-only');
+    AssertEqual('PurpleRay Research', Settings.SBOMAuthorOrganization,
+      'settings clone aliases the original author value');
+    AssertTrue(Settings.IgnorePatterns.IndexOf('clone-only') < 0,
+      'settings clone aliases the original ignore list');
+
+    JSONValue := Settings.ToJSON;
+    LoadedSettings := TScanSettings.FromJSON(JSONValue);
+    FreeAndNil(JSONValue);
+    AssertTrue(LoadedSettings.IncludeAbsolutePaths and
+      LoadedSettings.AllowOutsideRoot and
+      LoadedSettings.RememberPrivacyChoices,
+      'privacy settings were not restored from JSON');
+    AssertEqual('PurpleRay Research', LoadedSettings.SBOMAuthorOrganization,
+      'author organization was not restored from JSON');
+    AssertEqual('sbom@example.test', LoadedSettings.SBOMAuthorEmail,
+      'author email was not restored from JSON');
+    AssertTrue((Pos('PurpleRay Research', Settings.AsSummary) = 0) and
+      (Pos('sbom@example.test', Settings.AsSummary) = 0),
+      'settings summary exposes author contact details');
+
+    Component.Name := 'declared-metadata';
+    Component.Version := '1.0.0';
+    Component.Ecosystem := 'npm';
+    Component.DeclaredLicenses.Add('MIT');
+    Component.DeclaredLicenses.Add('Apache-2.0');
+    Component.DeclaredPublishers.Add('Zeta Publisher');
+    Component.DeclaredPublishers.Add('Acme Publisher');
+    ComponentClone := Component.Clone;
+    AssertEqual(2, ComponentClone.DeclaredLicenses.Count,
+      'declared licenses were not cloned');
+    AssertEqual(2, ComponentClone.DeclaredPublishers.Count,
+      'declared publishers were not cloned');
+    ComponentClone.DeclaredLicenses.Add('BSD-3-Clause');
+    ComponentClone.DeclaredPublishers.Add('Clone Publisher');
+    AssertEqual(2, Component.DeclaredLicenses.Count,
+      'component clone aliases the original license list');
+    AssertEqual(2, Component.DeclaredPublishers.Count,
+      'component clone aliases the original publisher list');
+
+    JSONValue := Component.ToJSON;
+    LoadedComponent := uModels.TComponent.FromJSON(JSONValue);
+    FreeAndNil(JSONValue);
+    AssertEqual(2, LoadedComponent.DeclaredLicenses.Count,
+      'declared licenses were not restored from JSON');
+    AssertEqual('Apache-2.0', LoadedComponent.DeclaredLicenses[0],
+      'declared license order is not deterministic');
+    AssertEqual('MIT', LoadedComponent.DeclaredLicenses[1],
+      'second declared license differs after JSON restoration');
+    AssertEqual(2, LoadedComponent.DeclaredPublishers.Count,
+      'declared publishers were not restored from JSON');
+    AssertEqual('Acme Publisher', LoadedComponent.DeclaredPublishers[0],
+      'declared publisher order is not deterministic');
+
+    Task := TScanTask.Create;
+    Task.Settings.Assign(Settings);
+    Task.Components.Add(Component.Clone);
+    TaskClone := Task.Clone;
+    AssertEqual('PurpleRay Research',
+      TaskClone.Settings.SBOMAuthorOrganization,
+      'task clone lost author settings');
+    AssertEqual(2,
+      uModels.TComponent(TaskClone.Components[0]).DeclaredLicenses.Count,
+      'task clone lost declared licenses');
+    TaskClone.Settings.SBOMAuthorOrganization := 'Task clone only';
+    uModels.TComponent(TaskClone.Components[0]).DeclaredLicenses.Add(
+      'BSD-3-Clause');
+    AssertEqual('PurpleRay Research', Task.Settings.SBOMAuthorOrganization,
+      'task clone aliases original author settings');
+    AssertEqual(2,
+      uModels.TComponent(Task.Components[0]).DeclaredLicenses.Count,
+      'task clone aliases original component declaration lists');
+    JSONValue := Task.ToJSON;
+    LoadedTask := TScanTask.FromJSON(JSONValue);
+    FreeAndNil(JSONValue);
+    AssertEqual('PurpleRay Research',
+      LoadedTask.Settings.SBOMAuthorOrganization,
+      'nested task JSON lost author settings');
+    AssertTrue(LoadedTask.Settings.RememberPrivacyChoices,
+      'nested task JSON lost the privacy persistence choice');
+    AssertEqual(2,
+      uModels.TComponent(LoadedTask.Components[0]).DeclaredLicenses.Count,
+      'nested task JSON lost declared licenses');
+    AssertEqual(2,
+      uModels.TComponent(LoadedTask.Components[0]).DeclaredPublishers.Count,
+      'nested task JSON lost declared publishers');
+
+    SettingsClone.ResetDefaults;
+    AssertTrue((not SettingsClone.IncludeAbsolutePaths) and
+      (not SettingsClone.AllowOutsideRoot) and
+      (not SettingsClone.RememberPrivacyChoices),
+      'restoring settings defaults retained privacy choices');
+    AssertEqual('', SettingsClone.SBOMAuthorOrganization,
+      'restoring settings defaults retained the author organization');
+    AssertEqual('', SettingsClone.SBOMAuthorEmail,
+      'restoring settings defaults retained the author email');
+  finally
+    JSONValue.Free;
+    LoadedTask.Free;
+    TaskClone.Free;
+    Task.Free;
+    LoadedComponent.Free;
+    ComponentClone.Free;
+    Component.Free;
+    LoadedSettings.Free;
+    SettingsClone.Free;
+    Settings.Free;
+  end;
+end;
+
+{**
+  Locks the non-visual source/resource contracts behind Sprint 4 UI behavior.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when target disclosure, restoration, overwrite protection, local
+    time, tab counts, full-hash copy, or asynchronous close wiring regresses.
+}
+procedure TestSprint4UIContracts;
+var
+  AnalyzerSourceLines, AnalyzerResourceLines, SettingsSourceLines,
+    SettingsResourceLines, ShellSourceLines: TStringList;
+  AnalyzerSource, AnalyzerResource, SettingsSource, SettingsResource,
+    ShellSource, TargetBlock, RequestCloseBlock, PrepareCloseBlock,
+    CopyBlock: string;
+begin
+  AnalyzerSourceLines := TStringList.Create;
+  AnalyzerResourceLines := TStringList.Create;
+  SettingsSourceLines := TStringList.Create;
+  SettingsResourceLines := TStringList.Create;
+  ShellSourceLines := TStringList.Create;
+  try
+    AnalyzerSourceLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'uSBOMAnalyzerFrame.pas');
+    AnalyzerResourceLines.LoadFromFile(
+      IncludeTrailingPathDelimiter(ProjectRoot) + 'src' + DirectorySeparator +
+      'uSBOMAnalyzerFrame.lfm');
+    SettingsSourceLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'uScanSettingsDialog.pas');
+    SettingsResourceLines.LoadFromFile(
+      IncludeTrailingPathDelimiter(ProjectRoot) + 'src' + DirectorySeparator +
+      'uScanSettingsDialog.lfm');
+    ShellSourceLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'uMainForm.pas');
+    AnalyzerSource := AnalyzerSourceLines.Text;
+    AnalyzerResource := AnalyzerResourceLines.Text;
+    SettingsSource := SettingsSourceLines.Text;
+    SettingsResource := SettingsResourceLines.Text;
+    ShellSource := ShellSourceLines.Text;
+
+    TargetBlock := ExtractTextSection(SettingsResource,
+      'object FTargetFolder: TEdit',
+      'object FIncludeAbsolutePaths: TCheckBox');
+    AssertTrue((TargetBlock <> '') and
+      (Pos('ReadOnly = True', TargetBlock) > 0),
+      'the settings target-folder field is not read-only');
+    AssertTrue(Pos('Dialog.FTargetFolder.Text := ATargetDirectory',
+      SettingsSource) > 0, 'the settings target folder is not populated');
+    AssertTrue(Pos('Caption = ''Restore defaults''', SettingsResource) > 0,
+      'the ignore-pattern restore action is missing');
+    AssertTrue(Pos('OnClick = RestoreDefaultsClicked', SettingsResource) > 0,
+      'the restore-defaults button is not wired');
+    AssertTrue(Pos('FIgnorePatterns.Lines.Assign(Defaults.IgnorePatterns)',
+      SettingsSource) > 0,
+      'the restore-defaults action does not use model defaults');
+    AssertTrue((Pos('object FIncludeAbsolutePaths: TCheckBox',
+      SettingsResource) < Pos('object FFollowSymbolicLinks: TCheckBox',
+      SettingsResource)) and
+      (Pos('object FFollowSymbolicLinks: TCheckBox', SettingsResource) <
+      Pos('object FAllowOutsideRoot: TCheckBox', SettingsResource)) and
+      (Pos('object FAllowOutsideRoot: TCheckBox', SettingsResource) <
+      Pos('object FRememberPrivacyChoices: TCheckBox', SettingsResource)) and
+      (Pos('object FRememberPrivacyChoices: TCheckBox', SettingsResource) <
+      Pos('object FCalculateSHA256: TCheckBox', SettingsResource)),
+      'settings checkbox visual order differs from the privacy workflow');
+
+    AssertEqual(2, CountTextOccurrences(AnalyzerSource,
+      'Dialog.Options := Dialog.Options + [ofOverwritePrompt]'),
+      'both export dialogs must request overwrite confirmation');
+    AssertTrue(Pos('Caption = ''Back up data...''', AnalyzerResource) > 0,
+      'the database backup action has an ambiguous caption');
+    AssertTrue(Pos('Caption = ''Created (local)''', AnalyzerResource) > 0,
+      'history does not identify its local timestamp');
+    AssertTrue(Pos('Item.Caption := LocalTimestampText(ATask.CreatedUTC)',
+      AnalyzerSource) > 0,
+      'history rows do not convert timestamps for local display');
+    AssertTrue((Pos('ComponentsPage.Caption := ''Components (''',
+      AnalyzerSource) > 0) and
+      (Pos('ArtifactsPage.Caption := ''Artifacts (''', AnalyzerSource) > 0) and
+      (Pos('MessagesPage.Caption := ''Messages (''', AnalyzerSource) > 0),
+      'detail tabs do not expose result counts');
+
+    CopyBlock := ExtractTextSection(AnalyzerSource,
+      'procedure TSBOMAnalyzerFrame.CopySelectedClicked',
+      'procedure TSBOMAnalyzerFrame.OpenExportFolderClicked');
+    AssertTrue((CopyBlock <> '') and (Pos('Artifact.SHA256', CopyBlock) > 0),
+      'artifact row copy no longer includes the full SHA-256 value');
+    AssertTrue(Pos('ShortDigest(Artifact.SHA256)', AnalyzerSource) > 0,
+      'artifact table no longer uses the compact digest presentation');
+
+    RequestCloseBlock := ExtractTextSection(AnalyzerSource,
+      'function TSBOMAnalyzerFrame.RequestClose',
+      'procedure TSBOMAnalyzerFrame.ClosePollTimerTick');
+    PrepareCloseBlock := ExtractTextSection(AnalyzerSource,
+      'function TSBOMAnalyzerFrame.PrepareForClose',
+      'function TSBOMAnalyzerFrame.RequestClose');
+    AssertTrue((RequestCloseBlock <> '') and (PrepareCloseBlock <> ''),
+      'asynchronous close methods are missing');
+    AssertTrue((Pos('WaitFor', RequestCloseBlock) = 0) and
+      (Pos('WaitFor', PrepareCloseBlock) = 0),
+      'the interactive close path blocks on the scan worker');
+    AssertTrue(Pos('ClosePollTimer.Enabled := True', RequestCloseBlock) > 0,
+      'close cancellation does not start asynchronous completion polling');
+    AssertTrue((Pos('object ClosePollTimer: TTimer', AnalyzerResource) > 0) and
+      (Pos('OnTimer = ClosePollTimerTick', AnalyzerResource) > 0),
+      'the asynchronous close timer is not resource-backed');
+    AssertTrue((Pos('FAnalyzerFrame.RequestClose', ShellSource) > 0) and
+      (Pos('FAnalyzerFrame.OnCloseReady', ShellSource) > 0),
+      'the shell is not wired to asynchronous Analyzer close completion');
+
+    AssertTrue((Pos('WorkingSettings.IncludeAbsolutePaths := False',
+      AnalyzerSource) > 0) and
+      (Pos('WorkingSettings.AllowOutsideRoot := False', AnalyzerSource) > 0)
+      and (Pos('PersistedSettings.IncludeAbsolutePaths := False',
+      AnalyzerSource) > 0) and
+      (Pos('PersistedSettings.AllowOutsideRoot := False', AnalyzerSource) > 0),
+      'per-scan privacy choices are not reset when they are not remembered');
+    AssertTrue((Pos('FUsesDefaultDataDirectory := ADataDirectory = ''''',
+      AnalyzerSource) > 0) and
+      (Pos('if FUsesDefaultDataDirectory then', AnalyzerSource) > 0),
+      'an isolated analyzer data directory can still trigger profile migration');
+  finally
+    ShellSourceLines.Free;
+    SettingsResourceLines.Free;
+    SettingsSourceLines.Free;
+    AnalyzerResourceLines.Free;
+    AnalyzerSourceLines.Free;
+  end;
+end;
+
+{**
+  Exercises the bounded registry-backed SPDX expression grammar.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when valid registry identifiers/references are rejected or malformed
+    expressions are accepted as machine-readable SPDX declarations.
+}
+procedure TestSPDXExpressions;
+begin
+  AssertTrue(IsValidSPDXExpression('MIT'),
+    'a registered SPDX license identifier was rejected');
+  AssertTrue(IsValidSPDXExpression(
+    '(MIT OR Apache-2.0) AND BSD-3-Clause'),
+    'a parenthesized SPDX expression was rejected');
+  AssertTrue(IsValidSPDXExpression(
+    'GPL-2.0-only WITH Classpath-exception-2.0'),
+    'a registered SPDX exception expression was rejected');
+  AssertTrue(IsValidSPDXExpression('GPL-2.0+'),
+    'an adjacent SPDX or-later suffix was rejected');
+  AssertTrue(IsValidSPDXExpression('LicenseRef-Internal-Evaluation'),
+    'a valid SPDX LicenseRef was rejected');
+  AssertTrue(IsValidSPDXExpression(
+    'DocumentRef-vendor:LicenseRef-Proprietary'),
+    'a valid document-scoped LicenseRef was rejected');
+  AssertTrue(not IsValidSPDXExpression('mit'),
+    'SPDX registry matching became case-insensitive');
+  AssertTrue(not IsValidSPDXExpression('MIT or Apache-2.0'),
+    'a lowercase SPDX operator was accepted');
+  AssertTrue(not IsValidSPDXExpression('MIT AND'),
+    'an incomplete SPDX expression was accepted');
+  AssertTrue(not IsValidSPDXExpression('(MIT OR Apache-2.0'),
+    'an unbalanced SPDX expression was accepted');
+  AssertTrue(not IsValidSPDXExpression('MIT WITH Unknown-exception'),
+    'an unregistered SPDX exception was accepted');
+  AssertTrue(not IsValidSPDXExpression('LicenseRef-'),
+    'an empty SPDX LicenseRef suffix was accepted');
+  AssertTrue(not IsValidSPDXExpression('LicenseRef-Internal+'),
+    'an invalid SPDX LicenseRef character was accepted');
+  AssertTrue(not IsValidSPDXExpression('GPL-2.0 +'),
+    'whitespace before the SPDX or-later suffix was accepted');
+  AssertTrue(not IsValidSPDXExpression(
+    'GPL-2.0+WITH Classpath-exception-2.0'),
+    'an SPDX WITH operator without leading whitespace was accepted');
+  AssertTrue(not IsValidSPDXExpression(
+    'GPL-2.0-only WITH' + LineEnding + 'Classpath-exception-2.0'),
+    'a multiline SPDX expression was accepted');
+  AssertTrue(not IsValidSPDXExpression('MIT' + LineEnding),
+    'a trailing line break was trimmed from an SPDX expression');
+  AssertTrue(not IsValidSPDXExpression(#9 + 'MIT'),
+    'a leading control character was trimmed from an SPDX expression');
+  AssertTrue(not IsValidSPDXExpression(
+    'GPL-2.0-only WITH(Classpath-exception-2.0)'),
+    'an SPDX WITH operator without trailing whitespace was accepted');
+  AssertTrue(not IsValidSPDXExpression('MIT AND(Apache-2.0)'),
+    'an SPDX binary operator without trailing whitespace was accepted');
+  AssertTrue(not IsValidSPDXExpression(StringOfChar('A', 4097)),
+    'an over-limit SPDX expression was accepted');
+  AssertTrue(not IsValidSPDXExpression('Friendly Internal License'),
+    'a free-form license name was accepted as an SPDX expression');
+end;
+
+{**
+  Verifies declared license and publisher extraction across core manifests.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when package.json, POM, Composer, Cargo, or pyproject declarations
+    are omitted, altered, or attached to the wrong project component.
+}
+procedure TestDeclaredMetadataParsers;
+var
+  Components: TObjectList;
+  Artifact: TArtifact;
+  Component: uModels.TComponent;
+  DirectoryName, FileName: string;
+begin
+  DirectoryName := NewTemporaryDirectory('declared-metadata-parsers');
+  Components := TObjectList.Create(True);
+  try
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'package.json';
+    WriteText(FileName, '{"name":"metadata-npm","version":"1.0.0",' +
+      '"license":"MIT","author":{"name":"NPM Publisher",' +
+      '"email":"publisher@example.test"}}');
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'package.json', pkPackageJSON, Artifact,
+        Components);
+      AssertTrue(Artifact.Status = arsParsed,
+        'package metadata fixture should parse');
+      Component := FindComponent(Components, 'metadata-npm');
+      AssertTrue(Component <> nil, 'package project component is missing');
+      AssertEqual(1, Component.DeclaredLicenses.Count,
+        'package license declaration count differs');
+      AssertEqual('MIT', Component.DeclaredLicenses[0],
+        'package license declaration differs');
+      AssertEqual(1, Component.DeclaredPublishers.Count,
+        'package publisher declaration count differs');
+      AssertEqual('NPM Publisher', Component.DeclaredPublishers[0],
+        'package author name was not retained as publisher evidence');
+    finally
+      Artifact.Free;
+    end;
+
+    Components.Clear;
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'pom.xml';
+    WriteText(FileName, '<?xml version="1.0"?><project>' +
+      '<groupId>org.example</groupId><artifactId>metadata-maven</artifactId>' +
+      '<version>2.0.0</version>' +
+      '<Organization><Name>Invented Case Publisher</Name></Organization>' +
+      '<organization><name>Maven Publisher</name></organization>' +
+      '<Licenses><License><Name>Invented Case License</Name></License>' +
+      '</Licenses><licenses><license><name>Apache-2.0</name></license>' +
+      '<license><name>Custom Maven Terms</name></license>' +
+      '<license><Name>Invented Case Name</Name></license>' +
+      '<license><name>${license.name}</name></license></licenses>' +
+      '</project>');
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'pom.xml', pkMavenPOM, Artifact, Components);
+      AssertTrue(Artifact.Status = arsParsed,
+        'Maven metadata fixture should parse');
+      Component := FindComponent(Components, 'metadata-maven');
+      AssertTrue(Component <> nil, 'Maven project component is missing');
+      AssertEqual(2, Component.DeclaredLicenses.Count,
+        'Maven license declaration count differs');
+      AssertTrue((Component.DeclaredLicenses.IndexOf('Apache-2.0') >= 0) and
+        (Component.DeclaredLicenses.IndexOf('Custom Maven Terms') >= 0),
+        'Maven license declarations differ');
+      AssertEqual(1, Component.DeclaredPublishers.Count,
+        'Maven publisher declaration count differs');
+      AssertEqual('Maven Publisher', Component.DeclaredPublishers[0],
+        'Maven organization was not retained as publisher evidence');
+    finally
+      Artifact.Free;
+    end;
+
+    Components.Clear;
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) +
+      'unresolved-pom.xml';
+    WriteText(FileName, '<?xml version="1.0"?><project>' +
+      '<groupId>org.example</groupId>' +
+      '<artifactId>unresolved-maven</artifactId><version>2.0.0</version>' +
+      '<organization><name>${project.organization}</name></organization>' +
+      '<licenses><license><name>${license.name}</name></license></licenses>' +
+      '</project>');
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'pom.xml', pkMavenPOM, Artifact, Components);
+      AssertTrue(Artifact.Status = arsParsed,
+        'unresolved Maven declaration fixture should parse');
+      AssertEqual(0, Components.Count,
+        'unresolved Maven properties became declared project evidence');
+    finally
+      Artifact.Free;
+    end;
+
+    Components.Clear;
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'composer.json';
+    WriteText(FileName, '{"name":"vendor/metadata-composer",' +
+      '"version":"3.0.0","license":["MIT","BSD-3-Clause"],' +
+      '"authors":[{"name":"Composer One","email":"one@example.test"},' +
+      '{"name":"Composer Two"}]}');
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'composer.json', pkComposerJSON, Artifact,
+        Components);
+      AssertTrue(Artifact.Status = arsParsed,
+        'Composer metadata fixture should parse');
+      Component := FindComponent(Components, 'vendor/metadata-composer');
+      AssertTrue(Component <> nil, 'Composer project component is missing');
+      AssertTrue((Component.DeclaredLicenses.IndexOf('MIT') >= 0) and
+        (Component.DeclaredLicenses.IndexOf('BSD-3-Clause') >= 0),
+        'Composer license declarations differ');
+      AssertTrue((Component.DeclaredPublishers.IndexOf('Composer One') >= 0)
+        and (Component.DeclaredPublishers.IndexOf('Composer Two') >= 0),
+        'Composer authors were not retained as publisher evidence');
+    finally
+      Artifact.Free;
+    end;
+
+    Components.Clear;
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'Cargo.toml';
+    WriteText(FileName, '[package]' + LineEnding +
+      'name = "metadata-cargo"' + LineEnding +
+      'version = "4.0.0"' + LineEnding +
+      'license = "MIT OR Apache-2.0"' + LineEnding +
+      'authors = ["Cargo One <one@example.test>", "Cargo Two"]' +
+      LineEnding);
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'Cargo.toml', pkCargoTOML, Artifact, Components);
+      AssertTrue(Artifact.Status = arsPartiallyParsed,
+        'Cargo metadata fixture should report conservative partial parsing');
+      Component := FindComponent(Components, 'metadata-cargo');
+      AssertTrue(Component <> nil, 'Cargo project component is missing');
+      AssertEqual('MIT OR Apache-2.0', Component.DeclaredLicenses[0],
+        'Cargo license expression differs');
+      AssertTrue((Component.DeclaredPublishers.IndexOf(
+        'Cargo One <one@example.test>') >= 0) and
+        (Component.DeclaredPublishers.IndexOf('Cargo Two') >= 0),
+        'Cargo authors were not retained as publisher evidence');
+    finally
+      Artifact.Free;
+    end;
+
+    Components.Clear;
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) +
+      'pyproject.toml';
+    WriteText(FileName, '[project]' + LineEnding +
+      'name = "metadata-python"' + LineEnding +
+      'version = "5.0.0"' + LineEnding +
+      'license = "BSD-3-Clause"' + LineEnding +
+      'authors = [{name = "Python One", email = "one@example.test"}, ' +
+      '{name = "Python Two"}]' + LineEnding);
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'pyproject.toml', pkPyProjectTOML, Artifact,
+        Components);
+      AssertTrue(Artifact.Status = arsPartiallyParsed,
+        'pyproject metadata fixture should report conservative partial parsing');
+      Component := FindComponent(Components, 'metadata-python');
+      AssertTrue(Component <> nil, 'pyproject component is missing');
+      AssertEqual('BSD-3-Clause', Component.DeclaredLicenses[0],
+        'pyproject license declaration differs');
+      AssertTrue((Component.DeclaredPublishers.IndexOf('Python One') >= 0) and
+        (Component.DeclaredPublishers.IndexOf('Python Two') >= 0),
+        'pyproject author names were not retained as publisher evidence');
+    finally
+      Artifact.Free;
+    end;
+
+    Components.Clear;
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) +
+      'invalid-package.json';
+    WriteText(FileName, '{"name":"invalid-json-meta","version":"1.0.0",' +
+      '"license":["MIT\n",true],"author":{"name":42,' +
+      '"email":"fallback@example.test"}}');
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'package.json', pkPackageJSON, Artifact,
+        Components);
+      Component := FindComponent(Components, 'invalid-json-meta');
+      AssertTrue(Component <> nil,
+        'invalid JSON declaration fixture lost its project component');
+      AssertEqual(0, Component.DeclaredLicenses.Count,
+        'a non-string JSON license became declared evidence');
+      AssertEqual(0, Component.DeclaredPublishers.Count,
+        'a non-string JSON author name produced publisher evidence');
+    finally
+      Artifact.Free;
+    end;
+
+    Components.Clear;
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) +
+      'case-sensitive-pyproject.toml';
+    WriteText(FileName, '[Project]' + LineEnding +
+      'Name = "invented-project"' + LineEnding +
+      'Version = "9.9.9"' + LineEnding +
+      'License = "MIT"' + LineEnding);
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'pyproject.toml', pkPyProjectTOML, Artifact,
+        Components);
+      AssertEqual(0, Components.Count,
+        'case-distinct TOML table or keys were treated as PEP-621 metadata');
+    finally
+      Artifact.Free;
+    end;
+
+    Components.Clear;
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) +
+      'uncertain-pyproject.toml';
+    WriteText(FileName, '[project]' + LineEnding +
+      'name = "strict-project"' + LineEnding +
+      'version = "1.0.0"' + LineEnding +
+      'license = "MIT" trailing-data' + LineEnding +
+      'authors = [{name = "Escaped \"Publisher\""}]' + LineEnding +
+      'authors = [{note = "name = ''Invented Publisher''"}]' + LineEnding);
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'pyproject.toml', pkPyProjectTOML, Artifact,
+        Components);
+      Component := FindComponent(Components, 'strict-project');
+      AssertTrue(Component <> nil,
+        'strict TOML negative fixture lost its valid project identity');
+      AssertEqual(0, Component.DeclaredLicenses.Count,
+        'a TOML value with trailing syntax became a license declaration');
+      AssertEqual(0, Component.DeclaredPublishers.Count,
+        'text inside an unrelated TOML author field invented a publisher');
+    finally
+      Artifact.Free;
+    end;
+
+    Components.Clear;
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) +
+      'case-sensitive-cargo.toml';
+    WriteText(FileName, '[Package]' + LineEnding +
+      'Name = "invented-cargo"' + LineEnding +
+      'Version = "1.0.0"' + LineEnding +
+      'License = "MIT"' + LineEnding);
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'Cargo.toml', pkCargoTOML, Artifact,
+        Components);
+      AssertEqual(0, Components.Count,
+        'case-distinct Cargo table or keys produced project declarations');
+    finally
+      Artifact.Free;
+    end;
+
+    Components.Clear;
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) +
+      'control-pyproject.toml';
+    WriteText(FileName, '[project]' + LineEnding +
+      'name = "bad' + #127 + 'identity"' + LineEnding +
+      'version = "1.0.0"' + LineEnding);
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'pyproject.toml', pkPyProjectTOML, Artifact,
+        Components);
+      AssertEqual(0, Components.Count,
+        'a TOML identity containing DEL was accepted');
+    finally
+      Artifact.Free;
+    end;
+  finally
+    Components.Free;
+  end;
+end;
+
 procedure TestRequirementsParser;
 var
   Components: TObjectList;
@@ -1203,7 +2042,7 @@ var
   Task: TScanTask;
   SBOM: UTF8String;
   Data: TJSONData;
-  Root, ComponentJSON: TJSONObject;
+  Root, Metadata, PrimaryComponent, ComponentJSON: TJSONObject;
   ComponentArray: TJSONArray;
   I: Integer;
 begin
@@ -1216,7 +2055,10 @@ begin
     Task.ScannerVersion := AppVersion;
 
     FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'Cargo.toml';
-    WriteText(FileName, '[dependencies]' + LineEnding +
+    WriteText(FileName, '[package]' + LineEnding +
+      'name = "declared-cargo-project"' + LineEnding +
+      'version = "4.0.0"' + LineEnding +
+      '[dependencies]' + LineEnding +
       'serde = "1.0.0"' + LineEnding + '[dev-dependencies]' + LineEnding +
       'insta = "1.2"' + LineEnding + '[build-dependencies]' + LineEnding +
       'cc = "1.0.99"' + LineEnding);
@@ -1244,6 +2086,16 @@ begin
     Data := GetJSON(string(SBOM));
     try
       Root := TJSONObject(Data);
+      Metadata := JSONObject(Root, 'metadata');
+      PrimaryComponent := JSONObject(Metadata, 'component');
+      AssertEqual('4.0.0', JSONString(PrimaryComponent, 'version'),
+        'Cargo project version was treated as a dependency requirement');
+      AssertEqual('pkg:cargo/declared-cargo-project@4.0.0',
+        JSONString(PrimaryComponent, 'purl'),
+        'Cargo project purl is missing or differs');
+      AssertTrue(not FindCycloneProperty(PrimaryComponent,
+        'purpleray-sbom-analyzer:requested-range', PropertyValue),
+        'Cargo project version was exported as a requested range');
       ComponentArray := JSONArray(Root, 'components');
       ComponentJSON := FindJSONObjectByString(ComponentArray, 'name', 'serde');
       AssertTrue((ComponentJSON.Find('version') = nil) and
@@ -1651,11 +2503,29 @@ begin
   end;
 end;
 
+{**
+  Verifies parser-level DOCTYPE rejection across XML encodings.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when ASCII or UTF-16LE external-entity declarations reach parsing,
+    produce components, lose the stable diagnostic, or valid UTF-8 XML fails.
+}
 procedure TestXMLDocumentTypeRejection;
 var
   DirectoryName, FileName: string;
   Components: TObjectList;
   Artifact: TArtifact;
+  Component: uModels.TComponent;
 begin
   DirectoryName := NewTemporaryDirectory('xml-doctype');
   FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'pom.xml';
@@ -1672,7 +2542,45 @@ begin
       'rejected XML must not produce components');
     AssertTrue(Pos('document type declarations are not allowed',
       LowerCase(Artifact.MessageText)) > 0,
-      'XML rejection message is unclear');
+      'ASCII XML rejection message is unclear');
+
+    Components.Clear;
+    FreeAndNil(Artifact);
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) +
+      'utf16-pom.xml';
+    WriteUTF16LEText(FileName,
+      '<?xml version="1.0" encoding="UTF-16"?>' +
+      '<!DOCTYPE project [<!ENTITY remote SYSTEM ' +
+      '"https://example.invalid/external-entity">]>' +
+      '<project><dependencies><dependency><artifactId>&remote;</artifactId>' +
+      '</dependency></dependencies></project>');
+    Artifact := TArtifact.Create;
+    ParseArtifact(FileName, 'pom.xml', pkMavenPOM, Artifact, Components);
+    AssertTrue(Artifact.Status = arsFailed,
+      'UTF-16LE XML with a document type must be rejected');
+    AssertEqual(0, Components.Count,
+      'rejected UTF-16LE XML must not produce components');
+    AssertTrue(Pos('document type declarations are not allowed',
+      LowerCase(Artifact.MessageText)) > 0,
+      'UTF-16LE XML rejection message differs');
+
+    Components.Clear;
+    FreeAndNil(Artifact);
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) +
+      'valid-pom.xml';
+    WriteText(FileName, '<?xml version="1.0" encoding="UTF-8"?>' +
+      '<project><dependencies><dependency><groupId>org.example</groupId>' +
+      '<artifactId>valid-utf8</artifactId><version>1.2.3</version>' +
+      '</dependency></dependencies></project>');
+    Artifact := TArtifact.Create;
+    ParseArtifact(FileName, 'pom.xml', pkMavenPOM, Artifact, Components);
+    AssertTrue(Artifact.Status = arsParsed,
+      'valid UTF-8 XML should still parse');
+    Component := FindComponent(Components, 'valid-utf8');
+    AssertTrue(Component <> nil,
+      'valid UTF-8 XML dependency is missing');
+    AssertEqual('pkg:maven/org.example/valid-utf8@1.2.3',
+      Component.PackageURL, 'valid UTF-8 XML dependency purl differs');
   finally
     Artifact.Free;
     Components.Free;
@@ -2121,6 +3029,8 @@ begin
     First.SourceArtifact := 'a/package.json';
     First.DependencyScope := ' runtime, development ';
     First.EvidencePaths.Add('a/package.json');
+    First.DeclaredLicenses.Add('MIT');
+    First.DeclaredPublishers.Add('Zeta Publisher');
     Input.Add(First);
     Second := uModels.TComponent.Create;
     Second.Name := 'demo'; Second.Version := '1.0.0'; Second.Ecosystem := 'npm';
@@ -2128,6 +3038,8 @@ begin
     Second.SourceArtifact := 'b/package-lock.json';
     Second.DependencyScope := 'optional, runtime';
     Second.EvidencePaths.Add('b/package-lock.json');
+    Second.DeclaredLicenses.Add('Apache-2.0');
+    Second.DeclaredPublishers.Add('Acme Publisher');
     Input.Add(Second);
     NormalizeComponents(Input, Output);
     AssertEqual(1, Output.Count, 'duplicate components were not merged');
@@ -2136,6 +3048,18 @@ begin
       'duplicate evidence paths were not merged');
     AssertEqual('development, optional, runtime', Merged.DependencyScope,
       'duplicate dependency scopes were not merged deterministically');
+    AssertEqual(2, Merged.DeclaredLicenses.Count,
+      'duplicate declared licenses were not merged');
+    AssertEqual('Apache-2.0', Merged.DeclaredLicenses[0],
+      'merged license declarations are not deterministic');
+    AssertEqual('MIT', Merged.DeclaredLicenses[1],
+      'second merged license declaration differs');
+    AssertEqual(2, Merged.DeclaredPublishers.Count,
+      'duplicate declared publishers were not merged');
+    AssertEqual('Acme Publisher', Merged.DeclaredPublishers[0],
+      'merged publisher declarations are not deterministic');
+    AssertEqual('Zeta Publisher', Merged.DeclaredPublishers[1],
+      'second merged publisher declaration differs');
   finally
     Output.Free;
     Input.Free;
@@ -2509,9 +3433,9 @@ begin
         Fail('Unable to create CycloneDX schema-fixture directory: ' +
           FixtureDirectory);
       WriteUTF8File(IncludeTrailingPathDelimiter(FixtureDirectory) +
-        'fixture-1.6.cdx.json', SBOM16);
+        'structure-1.6.cdx.json', SBOM16);
       WriteUTF8File(IncludeTrailingPathDelimiter(FixtureDirectory) +
-        'fixture-1.7.cdx.json', SBOM17);
+        'structure-1.7.cdx.json', SBOM17);
     end;
 
     Data := GetJSON(string(SBOM16));
@@ -2685,6 +3609,173 @@ begin
         'leaf dependency received an inferred transitive graph entry');
     finally
       Data.Free;
+    end;
+  finally
+    Task.Free;
+  end;
+end;
+
+{**
+  Verifies one generated compliance document independent of schema version.
+
+  Parameters
+  ----------
+  ASBOM
+    CycloneDX JSON document to parse and inspect.
+  ASpecVersion
+    Exact expected CycloneDX specification version.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when author, lifecycle, completeness, license, or publisher fields
+    are absent or represented with incorrect CycloneDX choice semantics.
+}
+procedure AssertCycloneDXComplianceDocument(const ASBOM: UTF8String;
+  const ASpecVersion: string);
+var
+  Data: TJSONData;
+  Root, Metadata, AuthorValue, LifecycleValue, Primary, LicenseChoice,
+    DependencyValue, NamedLicense, CompositionValue: TJSONObject;
+  Authors, Lifecycles, Licenses, Components, Compositions: TJSONArray;
+begin
+  Data := GetJSON(string(ASBOM));
+  try
+    Root := TJSONObject(Data);
+    AssertEqual(ASpecVersion, JSONString(Root, 'specVersion'),
+      'compliance document specification version differs');
+    Metadata := JSONObject(Root, 'metadata');
+    AssertTrue(Metadata <> nil, 'compliance metadata is missing');
+
+    Authors := JSONArray(Metadata, 'authors');
+    AssertTrue((Authors <> nil) and (Authors.Count = 1),
+      'SBOM author metadata count differs');
+    AuthorValue := TJSONObject(Authors.Items[0]);
+    AssertEqual('PurpleRay Research', JSONString(AuthorValue, 'name'),
+      'SBOM author organization differs');
+    AssertEqual('sbom@example.test', JSONString(AuthorValue, 'email'),
+      'SBOM author email differs');
+
+    Lifecycles := JSONArray(Metadata, 'lifecycles');
+    AssertTrue((Lifecycles <> nil) and (Lifecycles.Count = 1),
+      'SBOM lifecycle metadata count differs');
+    LifecycleValue := TJSONObject(Lifecycles.Items[0]);
+    AssertEqual('post-build', JSONString(LifecycleValue, 'phase'),
+      'SBOM lifecycle phase differs');
+
+    Primary := JSONObject(Metadata, 'component');
+    AssertTrue(Primary <> nil, 'compliance primary component is missing');
+    AssertEqual('Project Publisher', JSONString(Primary, 'publisher'),
+      'promoted project publisher differs');
+    Licenses := JSONArray(Primary, 'licenses');
+    AssertTrue((Licenses <> nil) and (Licenses.Count = 1),
+      'promoted project license choice count differs');
+    LicenseChoice := TJSONObject(Licenses.Items[0]);
+    AssertEqual('MIT', JSONString(LicenseChoice, 'expression'),
+      'valid SPDX declaration was not emitted as an expression');
+    AssertEqual('declared', JSONString(LicenseChoice, 'acknowledgement'),
+      'SPDX expression acknowledgement differs');
+
+    Components := JSONArray(Root, 'components');
+    DependencyValue := FindJSONObjectByString(Components, 'name',
+      'compliance-dependency');
+    AssertTrue(DependencyValue <> nil,
+      'compliance dependency component is missing');
+    AssertEqual('Alpha Publisher; Zeta Publisher',
+      JSONString(DependencyValue, 'publisher'),
+      'dependency publisher differs');
+    Licenses := JSONArray(DependencyValue, 'licenses');
+    AssertTrue((Licenses <> nil) and (Licenses.Count = 1),
+      'dependency license choice count differs');
+    LicenseChoice := TJSONObject(Licenses.Items[0]);
+    AssertTrue(LicenseChoice.Find('expression') = nil,
+      'free-form license name was mislabeled as an SPDX expression');
+    NamedLicense := JSONObject(LicenseChoice, 'license');
+    AssertTrue(NamedLicense <> nil,
+      'free-form license did not use the named-license choice');
+    AssertEqual('Internal Evaluation License',
+      JSONString(NamedLicense, 'name'), 'named license text differs');
+    AssertEqual('declared', JSONString(NamedLicense, 'acknowledgement'),
+      'named license acknowledgement differs');
+
+    Compositions := JSONArray(Root, 'compositions');
+    AssertTrue((Compositions <> nil) and (Compositions.Count = 1),
+      'machine-readable completeness declaration count differs');
+    CompositionValue := TJSONObject(Compositions.Items[0]);
+    AssertEqual('incomplete', JSONString(CompositionValue, 'aggregate'),
+      'machine-readable completeness aggregate differs');
+  finally
+    Data.Free;
+  end;
+end;
+
+{**
+  Verifies Sprint 4 compliance metadata in CycloneDX 1.6 and 1.7 output.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when either compatibility mode loses authors, publishers, declared
+    licenses, lifecycle context, or the incomplete-composition declaration.
+}
+procedure TestCycloneDXComplianceMetadata;
+var
+  Task: TScanTask;
+  ProjectComponent, DependencyComponent: uModels.TComponent;
+  SBOM16, SBOM17: UTF8String;
+  FixtureDirectory: string;
+begin
+  Task := TScanTask.Create;
+  try
+    Task.ID := 'fedcba98-7654-3210-fedc-ba9876543210';
+    Task.CreatedUTC := '2026-08-20T12:34:56.000Z';
+    Task.StartedUTC := Task.CreatedUTC;
+    Task.TargetDirectory := '/private/compliance-fixture';
+    Task.TargetRootName := 'compliance-fixture';
+    Task.ScannerVersion := AppVersion;
+    Task.Settings.SBOMAuthorOrganization := 'PurpleRay Research';
+    Task.Settings.SBOMAuthorEmail := 'sbom@example.test';
+
+    ProjectComponent := AddFixtureComponent(Task, 'compliance-project',
+      '1.0.0', 'npm', 'pkg:npm/compliance-project@1.0.0', 'package.json',
+      'package-json', 'project', 'application');
+    ProjectComponent.DeclaredLicenses.Add('MIT');
+    ProjectComponent.DeclaredPublishers.Add('Project Publisher');
+    DependencyComponent := AddFixtureComponent(Task, 'compliance-dependency',
+      '2.0.0', 'npm', 'pkg:npm/compliance-dependency@2.0.0', 'package.json',
+      'package-json', 'runtime', 'library');
+    DependencyComponent.DeclaredLicenses.Add('Internal Evaluation License');
+    DependencyComponent.DeclaredPublishers.Add('Zeta Publisher');
+    DependencyComponent.DeclaredPublishers.Add('Alpha Publisher');
+
+    SBOM16 := GenerateCycloneDX(Task, cdxSpec16);
+    SBOM17 := GenerateCycloneDX(Task, cdxSpec17);
+    AssertCycloneDXComplianceDocument(SBOM16, '1.6');
+    AssertCycloneDXComplianceDocument(SBOM17, '1.7');
+
+    FixtureDirectory := GetEnvironmentVariable(
+      'PURPLERAY_CYCLONEDX_FIXTURE_DIR');
+    if FixtureDirectory <> '' then
+    begin
+      if not ForceDirectories(FixtureDirectory) then
+        Fail('Unable to create CycloneDX compliance-fixture directory: ' +
+          FixtureDirectory);
+      WriteUTF8File(IncludeTrailingPathDelimiter(FixtureDirectory) +
+        'compliance-1.6.cdx.json', SBOM16);
+      WriteUTF8File(IncludeTrailingPathDelimiter(FixtureDirectory) +
+        'compliance-1.7.cdx.json', SBOM17);
     end;
   finally
     Task.Free;
@@ -3286,6 +4377,131 @@ begin
 end;
 {$ENDIF}
 
+{**
+  Verifies that a LICENSE file is evidence only and never a license guess.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when license evidence creates a component declaration, is hashed as
+    package metadata, or adds a license choice to the synthetic root.
+}
+procedure TestLicenseEvidenceDoesNotInferLicense;
+var
+  RootName, LicenseName: string;
+  Task: TScanTask;
+  Engine: TScanEngine;
+  Artifact: TArtifact;
+  SBOM: UTF8String;
+  Data: TJSONData;
+  Root, Metadata, Primary: TJSONObject;
+  Components: TJSONArray;
+begin
+  RootName := NewTemporaryDirectory('license-evidence-only');
+  LicenseName := IncludeTrailingPathDelimiter(RootName) + 'LICENSE';
+  WriteText(LicenseName, 'MIT License' + LineEnding +
+    'Copyright fixture text only; this is not a package declaration.');
+  Task := TScanTask.Create;
+  Engine := TScanEngine.Create(nil, nil);
+  try
+    Task.TargetDirectory := RootName;
+    Task.TargetRootName := 'license-evidence-only';
+    AssertTrue(Engine.Scan(Task), 'license-evidence scan should complete');
+    AssertEqual(1, Task.FilesInspected,
+      'license-evidence scan inspected an unexpected file count');
+    AssertEqual(0, Task.Components.Count,
+      'LICENSE-file presence inferred a component license');
+    Artifact := FindArtifact(Task.Artifacts, 'LICENSE');
+    AssertTrue(Artifact <> nil, 'LICENSE evidence artifact is missing');
+    AssertEqual('license evidence', Artifact.ArtifactType,
+      'LICENSE evidence artifact type differs');
+    AssertTrue(Artifact.Status = arsUnsupported,
+      'LICENSE evidence should remain explicitly unsupported');
+    AssertTrue(Pos('no package license is inferred',
+      LowerCase(Artifact.MessageText)) > 0,
+      'LICENSE evidence does not disclose the no-inference boundary');
+    AssertEqual('', Artifact.SHA256,
+      'LICENSE evidence was hashed as if it were package metadata');
+
+    SBOM := GenerateCycloneDX(Task);
+    Data := GetJSON(string(SBOM));
+    try
+      Root := TJSONObject(Data);
+      Metadata := JSONObject(Root, 'metadata');
+      Primary := JSONObject(Metadata, 'component');
+      AssertTrue(Primary.Find('licenses') = nil,
+        'LICENSE-file presence added a license to the synthetic root');
+      Components := JSONArray(Root, 'components');
+      AssertTrue((Components = nil) or (Components.Count = 0),
+        'LICENSE-file presence emitted a licensed component');
+    finally
+      Data.Free;
+    end;
+  finally
+    Engine.Free;
+    Task.Free;
+  end;
+end;
+
+{**
+  Verifies that a readable empty directory completes with an explicit warning.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when a zero-file scan silently appears complete and trustworthy.
+}
+procedure TestEmptyDirectoryWarning;
+var
+  RootName: string;
+  Task: TScanTask;
+  Engine: TScanEngine;
+begin
+  RootName := NewTemporaryDirectory('empty-directory-warning');
+  Task := TScanTask.Create;
+  Engine := TScanEngine.Create(nil, nil);
+  try
+    Task.TargetDirectory := RootName;
+    Task.TargetRootName := 'empty-directory-warning';
+    AssertTrue(Engine.Scan(Task), 'empty-directory scan should complete');
+    AssertTrue(Task.Status = tsCompleted,
+      'empty-directory scan should retain completed status');
+    AssertEqual(0, Task.FilesInspected,
+      'empty-directory scan inspected an unexpected file');
+    AssertEqual(0, Task.Components.Count,
+      'empty-directory scan created an unexpected component');
+    AssertTrue(StringListContainsText(Task.Warnings,
+      'without inspecting any regular files'),
+      'empty-directory scan omitted its completeness warning');
+    AssertEqual(0, Task.Errors.Count,
+      'empty-directory scan incorrectly reported an error');
+    AssertTrue(TaskNeedsReview(Task),
+      'empty completed scan is not marked for review');
+    AssertEqual(#$E2#$9A#$A0 + ' completed with warnings',
+      TaskStatusDisplayText(Task),
+      'empty completed scan lacks the warning-aware history status');
+  finally
+    Engine.Free;
+    Task.Free;
+  end;
+end;
+
 procedure TestScanCancellation;
 var
   RootName: string;
@@ -3367,6 +4583,11 @@ begin
   RunTest('application shell structure', @TestApplicationShellStructure);
   RunTest('settings dialog DPI-stable layout',
     @TestScanSettingsDialogDPIStableLayout);
+  RunTest('presentation policy', @TestPresentationPolicy);
+  RunTest('compliance model persistence', @TestComplianceModelPersistence);
+  RunTest('Sprint 4 UI contracts', @TestSprint4UIContracts);
+  RunTest('SPDX expressions', @TestSPDXExpressions);
+  RunTest('declared manifest metadata', @TestDeclaredMetadataParsers);
   RunTest('requirements parser', @TestRequirementsParser);
   RunTest('Package URL normalization', @TestPackageURLNormalization);
   RunTest('Gradle and Conda purls', @TestGradleAndCondaPURLs);
@@ -3393,6 +4614,8 @@ begin
   RunTest('manifest and lockfile scan', @TestManifestLockScan);
   RunTest('CycloneDX synthetic root', @TestCycloneDXSyntheticRoot);
   RunTest('CycloneDX structure and semantics', @TestCycloneDXStructure);
+  RunTest('CycloneDX compliance metadata',
+    @TestCycloneDXComplianceMetadata);
   RunTest('CycloneDX normalized binary graph',
     @TestCycloneDXNormalizedBinaryGraph);
   RunTest('deterministic CycloneDX', @TestDeterministicCycloneDX);
@@ -3406,6 +4629,9 @@ begin
   RunTest('glob-metacharacter enumeration', @TestGlobMetacharacterEnumeration);
   RunTest('unreadable-directory warnings', @TestUnreadableDirectoryWarning);
   RunTest('symbolic-link loop prevention', @TestSymlinkLoopPrevention);
+  RunTest('LICENSE evidence does not infer a license',
+    @TestLicenseEvidenceDoesNotInferLicense);
+  RunTest('empty-directory warning', @TestEmptyDirectoryWarning);
   RunTest('scan cancellation', @TestScanCancellation);
   WriteLn(Format('%d tests: %d passed, %d failed, %d skipped',
     [TestCount, PassCount, FailureCount, SkipCount]));
