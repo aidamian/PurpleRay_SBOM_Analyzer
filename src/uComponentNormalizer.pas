@@ -83,6 +83,70 @@ begin
       LowerCase(Trim(AComponent.ComponentType));
 end;
 
+{**
+  Adds trimmed, non-empty comma-delimited tokens to a sorted token set.
+
+  Parameters
+  ----------
+  AText
+    Comma-delimited token text to parse.
+  AValues
+    Sorted destination list that receives normalized tokens.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if temporary token storage or a destination entry cannot be
+    allocated.
+}
+procedure AddTokens(const AText: string; AValues: TStringList);
+var
+  Tokens: TStringList;
+  I: Integer;
+  TokenValue: string;
+begin
+  if Trim(AText) = '' then
+    Exit;
+  Tokens := TStringList.Create;
+  try
+    Tokens.Delimiter := ',';
+    Tokens.StrictDelimiter := True;
+    Tokens.DelimitedText := AText;
+    for I := 0 to Tokens.Count - 1 do
+    begin
+      TokenValue := Trim(Tokens[I]);
+      if TokenValue <> '' then
+        AValues.Add(TokenValue);
+    end;
+  finally
+    Tokens.Free;
+  end;
+end;
+
+{**
+  Combines two comma-delimited token sets in deterministic sorted order.
+
+  Parameters
+  ----------
+  ALeft
+    Existing comma-delimited tokens.
+  ARight
+    Additional comma-delimited tokens.
+
+  Returns
+  -------
+  string
+    Unique trimmed tokens joined with a comma and one space.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if token parsing or result construction cannot be allocated.
+}
 function MergeTokens(const ALeft, ARight: string): string;
 var
   Values: TStringList;
@@ -94,14 +158,8 @@ begin
     Values.Duplicates := dupIgnore;
     Values.Delimiter := ',';
     Values.StrictDelimiter := True;
-    if Trim(ALeft) <> '' then
-    begin
-      Values.DelimitedText := ALeft;
-      for I := Values.Count - 1 downto 0 do
-        Values[I] := Trim(Values[I]);
-    end;
-    if Trim(ARight) <> '' then
-      Values.Add(Trim(ARight));
+    AddTokens(ALeft, Values);
+    AddTokens(ARight, Values);
     Result := '';
     for I := 0 to Values.Count - 1 do
     begin

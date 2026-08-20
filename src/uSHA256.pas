@@ -108,6 +108,34 @@ begin
   Result := (AValue shr ACount) or (AValue shl (32 - ACount));
 end;
 
+{**
+  Adds up to five SHA-256 words with explicit modulo-2^32 reduction.
+
+  Parameters
+  ----------
+  AFirst, ASecond
+    Required 32-bit words.
+  AThird, AFourth, AFifth
+    Optional additional words, defaulting to zero.
+
+  Returns
+  -------
+  UInt32
+    Low 32 bits of the unsigned sum.
+
+  Raises
+  ------
+  None
+    The wider intermediate prevents checked Debug builds from treating the
+    algorithm's required modular reduction as a range error.
+}
+function AddMod32(AFirst, ASecond: UInt32; AThird: UInt32 = 0;
+  AFourth: UInt32 = 0; AFifth: UInt32 = 0): UInt32; inline;
+begin
+  Result := UInt32((QWord(AFirst) + QWord(ASecond) + QWord(AThird) +
+    QWord(AFourth) + QWord(AFifth)) and QWord($FFFFFFFF));
+end;
+
 procedure Initialize(var AContext: TSHA256Context);
 begin
   FillChar(AContext, SizeOf(AContext), 0);
@@ -138,7 +166,7 @@ begin
       (W[I - 15] shr 3);
     S1 := RotateRight(W[I - 2], 17) xor RotateRight(W[I - 2], 19) xor
       (W[I - 2] shr 10);
-    W[I] := W[I - 16] + S0 + W[I - 7] + S1;
+    W[I] := AddMod32(W[I - 16], S0, W[I - 7], S1);
   end;
 
   A := AContext.State[0];
@@ -154,28 +182,28 @@ begin
   begin
     S1 := RotateRight(E, 6) xor RotateRight(E, 11) xor RotateRight(E, 25);
     Choice := (E and F) xor ((not E) and G);
-    T1 := H + S1 + Choice + K[I] + W[I];
+    T1 := AddMod32(H, S1, Choice, K[I], W[I]);
     S0 := RotateRight(A, 2) xor RotateRight(A, 13) xor RotateRight(A, 22);
     Majority := (A and B) xor (A and C) xor (B and C);
-    T2 := S0 + Majority;
+    T2 := AddMod32(S0, Majority);
     H := G;
     G := F;
     F := E;
-    E := D + T1;
+    E := AddMod32(D, T1);
     D := C;
     C := B;
     B := A;
-    A := T1 + T2;
+    A := AddMod32(T1, T2);
   end;
 
-  AContext.State[0] := AContext.State[0] + A;
-  AContext.State[1] := AContext.State[1] + B;
-  AContext.State[2] := AContext.State[2] + C;
-  AContext.State[3] := AContext.State[3] + D;
-  AContext.State[4] := AContext.State[4] + E;
-  AContext.State[5] := AContext.State[5] + F;
-  AContext.State[6] := AContext.State[6] + G;
-  AContext.State[7] := AContext.State[7] + H;
+  AContext.State[0] := AddMod32(AContext.State[0], A);
+  AContext.State[1] := AddMod32(AContext.State[1], B);
+  AContext.State[2] := AddMod32(AContext.State[2], C);
+  AContext.State[3] := AddMod32(AContext.State[3], D);
+  AContext.State[4] := AddMod32(AContext.State[4], E);
+  AContext.State[5] := AddMod32(AContext.State[5], F);
+  AContext.State[6] := AddMod32(AContext.State[6], G);
+  AContext.State[7] := AddMod32(AContext.State[7], H);
 end;
 
 procedure Update(var AContext: TSHA256Context; const AData; ALength: SizeInt);
@@ -222,7 +250,7 @@ begin
     Inc(AContext.BufferLength);
   end;
   for I := 0 to 7 do
-    AContext.Buffer[63 - I] := Byte(TotalBits shr (I * 8));
+    AContext.Buffer[63 - I] := Byte((TotalBits shr (I * 8)) and $FF);
   Transform(AContext);
 
   Result := '';

@@ -45,6 +45,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify tracked version fallbacks
+        shell: bash
+        run: scripts/check-version.sh
+
       - name: Read operator-managed version
         id: version
         shell: bash
@@ -326,6 +330,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $expectedVersion = '${{ needs.prepare.outputs.version }}'
           $expectedFileVersion = "$expectedVersion.0"
+          $expectedParts = @($expectedVersion.Split('.') | ForEach-Object { [int]$_ })
           $executable = Get-Item 'build/release/purpleray-sbom-analyzer.exe'
           $versionInfo = $executable.VersionInfo
           $expectedMetadata = [ordered]@{
@@ -338,11 +343,28 @@ jobs:
             LegalCopyright = 'Copyright (c) 2026 Andrei Ionut Damian'
             OriginalFilename = 'purpleray-sbom-analyzer.exe'
           }
+          $expectedNumericMetadata = [ordered]@{
+            FileMajorPart = $expectedParts[0]
+            FileMinorPart = $expectedParts[1]
+            FileBuildPart = $expectedParts[2]
+            FilePrivatePart = 0
+            ProductMajorPart = $expectedParts[0]
+            ProductMinorPart = $expectedParts[1]
+            ProductBuildPart = $expectedParts[2]
+            ProductPrivatePart = 0
+          }
           $metadataErrors = [System.Collections.Generic.List[string]]::new()
           foreach ($field in $expectedMetadata.Keys) {
             if ($versionInfo.$field -ne $expectedMetadata[$field]) {
               $metadataErrors.Add(
                 "$field expected '$($expectedMetadata[$field])', got '$($versionInfo.$field)'"
+              )
+            }
+          }
+          foreach ($field in $expectedNumericMetadata.Keys) {
+            if ($versionInfo.$field -ne $expectedNumericMetadata[$field]) {
+              $metadataErrors.Add(
+                "$field expected '$($expectedNumericMetadata[$field])', got '$($versionInfo.$field)'"
               )
             }
           }

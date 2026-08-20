@@ -30,6 +30,25 @@ uses
   Classes, SysUtils, Contnrs, uModels, uArtifactIdentifier;
 
 {**
+  Returns the maximum byte size accepted by a manifest parser.
+
+  Parameters
+  ----------
+  AParserKind
+    Parser whose bounded input policy is requested.
+
+  Returns
+  -------
+  Int64
+    Zero for pkNone, otherwise the deterministic maximum input size in bytes.
+
+  Raises
+  ------
+  None
+}
+function ManifestSizeLimit(AParserKind: TParserKind): Int64;
+
+{**
   Dispatches one recognized artifact to its conservative format parser.
 
   Parameters
@@ -926,6 +945,30 @@ begin
   end;
 end;
 
+{**
+  Walks Lazarus project XML and records declared required packages.
+
+  Parameters
+  ----------
+  ANode
+    Current DOM node to inspect recursively.
+  AComponents
+    Owned list receiving Free Pascal package components.
+  ARelativePath
+    Root-relative evidence path recorded on produced components.
+  AInRequiredPackages
+    True when the current traversal branch is already beneath a
+    RequiredPackages element.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated when component or traversal data cannot be allocated.
+}
 procedure WalkLazarusRequirements(ANode: TDOMNode; AComponents: TObjectList;
   const ARelativePath: string; AInRequiredPackages: Boolean);
 var
@@ -943,10 +986,16 @@ begin
     (Pos('Item', LocalNodeName(ANode)) = 1) then
   begin
     Element := TDOMElement(ANode);
-    NameElement := ChildElement(Element, 'Name');
-    NameValue := AttributeValue(NameElement, 'Value');
-    if NameValue = '' then
-      NameValue := ChildText(Element, 'Name');
+    NameElement := ChildElement(Element, 'PackageName');
+    if NameElement = nil then
+      NameElement := ChildElement(Element, 'Name');
+    NameValue := '';
+    if NameElement <> nil then
+    begin
+      NameValue := AttributeValue(NameElement, 'Value');
+      if NameValue = '' then
+        NameValue := Trim(UTF8Encode(NameElement.TextContent));
+    end;
     AddComponent(AComponents, NameValue, '', 'FreePascal', ARelativePath,
       'lazarus-project-xml', 'build');
   end;
@@ -1540,6 +1589,26 @@ begin
   end;
 end;
 
+function ManifestSizeLimit(AParserKind: TParserKind): Int64;
+const
+  SmallManifestLimit: Int64 = 8 * 1024 * 1024;
+  JSONLockLimit: Int64 = 32 * 1024 * 1024;
+  LineLockLimit: Int64 = 64 * 1024 * 1024;
+begin
+  case AParserKind of
+    pkNone:
+      Result := 0;
+    pkPackageLockJSON, pkNuGetLock, pkComposerLock, pkPipfileLock,
+    pkPackageResolved:
+      Result := JSONLockLimit;
+    pkGoSum, pkCargoLock, pkPoetryLock, pkYarnLock, pkGradleLock, pkGemLock,
+    pkPodfileLock, pkPNPMLock:
+      Result := LineLockLimit;
+    else
+      Result := SmallManifestLimit;
+  end;
+end;
+
 function IsPartialParser(AKind: TParserKind): Boolean;
 begin
   Result := AKind in [pkPipfileLock, pkGoSum, pkCargoLock, pkCargoTOML,
@@ -1617,6 +1686,14 @@ begin
     end;
   end;
   AArtifact.ComponentCount := AComponents.Count - InitialCount;
+  if (AArtifact.Status in [arsParsed, arsPartiallyParsed]) and
+    (AArtifact.ComponentCount = 0) then
+  begin
+    if AArtifact.MessageText <> '' then
+      AArtifact.MessageText := AArtifact.MessageText + ' ';
+    AArtifact.MessageText := AArtifact.MessageText +
+      'No dependency components were identified.';
+  end;
 end;
 
 end.

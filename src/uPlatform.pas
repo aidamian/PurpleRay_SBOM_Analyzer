@@ -29,6 +29,13 @@ interface
 uses
   Classes, SysUtils;
 
+type
+  TFileSystemEntryKind = (
+    fsekRegularFile,
+    fsekDirectory,
+    fsekUnsupported
+  );
+
 {**
   Returns the canonical per-user application-data directory, creating it once.
 
@@ -149,6 +156,115 @@ function PathIsWithin(const APath, ARoot: string): Boolean;
   None
 }
 function IsSymbolicLink(const APath: string): Boolean;
+
+{**
+  Tests whether a filesystem path itself names a regular disk file.
+
+  Parameters
+  ----------
+  APath
+    Filesystem entry to inspect without following symbolic links on Unix.
+  AReason
+    Receives a stable description when the entry is not a regular file.
+
+  Returns
+  -------
+  Boolean
+    True only for a regular file that is safe to open as scan input.
+
+  Raises
+  ------
+  None
+    Metadata lookup failures are returned as False with AReason populated.
+}
+function IsRegularFile(const APath: string; out AReason: string): Boolean;
+
+{**
+  Classifies metadata captured by an existing directory enumeration.
+
+  Parameters
+  ----------
+  AAttributes
+    Platform attributes copied from the entry's TSearchRec.
+  AUnixMode
+    Unix mode copied from TSearchRec.Mode, or zero on non-Unix platforms.
+  AReason
+    Receives a stable description when the entry is not a regular file.
+
+  Returns
+  -------
+  TFileSystemEntryKind
+    Regular file, directory, or unsupported special entry.
+
+  Raises
+  ------
+  None
+}
+function ClassifyFileSystemEntry(AAttributes: LongInt; AUnixMode: QWord;
+  out AReason: string): TFileSystemEntryKind;
+
+{**
+  Determines whether a failed FindFirst call represents an enumeration error.
+
+  Parameters
+  ----------
+  ADirectory
+    Directory passed to the enumeration operation.
+  AFindResult
+    Nonzero result returned by FindFirst.
+  AReason
+    Receives the operating-system failure description when Result is True.
+
+  Returns
+  -------
+  Boolean
+    True for an inaccessible or missing directory; False for an empty one.
+
+  Raises
+  ------
+  None
+}
+function DirectoryEnumerationFailed(const ADirectory: string;
+  AFindResult: Integer; out AReason: string): Boolean;
+
+{**
+  Clears the host error state immediately before a directory enumeration call.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+}
+procedure ResetDirectoryEnumerationError;
+
+{**
+  Distinguishes normal end-of-directory from a failed continuation call.
+
+  Parameters
+  ----------
+  AFindResult
+    Nonzero result returned by FindNext after enumeration has started.
+  AReason
+    Receives the operating-system failure description when Result is True.
+
+  Returns
+  -------
+  Boolean
+    True only when enumeration ended because of an error rather than EOF.
+
+  Raises
+  ------
+  None
+}
+function DirectoryEnumerationContinuationFailed(AFindResult: Integer;
+  out AReason: string): Boolean;
 
 {**
   Forces buffered file data to stable operating-system storage.
@@ -489,6 +605,208 @@ begin
   Attributes := GetFileAttributesW(PWideChar(WidePath));
   Result := (Attributes <> INVALID_FILE_ATTRIBUTES) and
     ((Attributes and FILE_ATTRIBUTE_REPARSE_POINT) <> 0);
+  {$ENDIF}
+end;
+
+function ClassifyFileSystemEntry(AAttributes: LongInt; AUnixMode: QWord;
+  out AReason: string): TFileSystemEntryKind;
+begin
+  AReason := '';
+  {$IFDEF UNIX}
+  if FPS_ISREG(TMode(AUnixMode)) then
+    Exit(fsekRegularFile);
+  if FPS_ISDIR(TMode(AUnixMode)) then
+    Exit(fsekDirectory);
+  if FPS_ISFIFO(TMode(AUnixMode)) then
+    AReason := 'named pipe'
+  else if FPS_ISSOCK(TMode(AUnixMode)) then
+    AReason := 'socket'
+  else if FPS_ISBLK(TMode(AUnixMode)) then
+    AReason := 'block device'
+  else if FPS_ISCHR(TMode(AUnixMode)) then
+    AReason := 'character device'
+  else if FPS_ISLNK(TMode(AUnixMode)) then
+    AReason := 'symbolic link'
+  else
+    AReason := 'non-regular file';
+  Result := fsekUnsupported;
+  {$ENDIF}
+  {$IFDEF Windows}
+  if (AAttributes and FILE_ATTRIBUTE_DEVICE) <> 0 then
+    AReason := 'device'
+  else if (AAttributes and FILE_ATTRIBUTE_OFFLINE) <> 0 then
+    AReason := 'offline file'
+  else if (AAttributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+    Exit(fsekDirectory)
+  else
+    Exit(fsekRegularFile);
+  Result := fsekUnsupported;
+  {$ENDIF}
+  {$IFNDEF UNIX}
+  {$IFNDEF Windows}
+  if (AAttributes and faDirectory) <> 0 then
+    Result := fsekDirectory
+  else
+    Result := fsekRegularFile;
+  {$ENDIF}
+  {$ENDIF}
+end;
+
+function IsRegularFile(const APath: string; out AReason: string): Boolean;
+{$IFDEF UNIX}
+var
+  Info: Stat;
+{$ENDIF}
+{$IFDEF Windows}
+var
+  Attributes, ErrorCode: DWORD;
+  WidePath: UnicodeString;
+{$ENDIF}
+begin
+  AReason := '';
+  {$IFDEF UNIX}
+  if fpLStat(PChar(APath), Info) <> 0 then
+  begin
+    AReason := SysErrorMessage(fpGetErrNo);
+    Exit(False);
+  end;
+  Result := ClassifyFileSystemEntry(0, QWord(Info.st_mode), AReason) =
+    fsekRegularFile;
+  {$ENDIF}
+  {$IFDEF Windows}
+  WidePath := UTF8Decode(APath);
+  Attributes := GetFileAttributesW(PWideChar(WidePath));
+  if Attributes = INVALID_FILE_ATTRIBUTES then
+  begin
+    ErrorCode := GetLastError;
+    AReason := SysErrorMessage(ErrorCode);
+    Exit(False);
+  end;
+  if (Attributes and FILE_ATTRIBUTE_REPARSE_POINT) <> 0 then
+  begin
+    AReason := 'reparse point';
+    Exit(False);
+  end;
+  Result := ClassifyFileSystemEntry(LongInt(Attributes), 0, AReason) =
+    fsekRegularFile;
+  {$ENDIF}
+  {$IFNDEF UNIX}
+  {$IFNDEF Windows}
+  Result := FileExists(APath);
+  if not Result then
+    AReason := 'not a regular file';
+  {$ENDIF}
+  {$ENDIF}
+end;
+
+function DirectoryEnumerationFailed(const ADirectory: string;
+  AFindResult: Integer; out AReason: string): Boolean;
+{$IFDEF UNIX}
+var
+  EnumerationError, AccessError: Integer;
+{$ENDIF}
+{$IFDEF Windows}
+const
+  ErrorFileNotFound = 2;
+  ErrorNoMoreFiles = 18;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  { Capture errno before any later helper performs another system call. }
+  EnumerationError := fpGetErrNo;
+  {$ENDIF}
+  AReason := '';
+  if AFindResult = 0 then
+    Exit(False);
+  {$IFDEF UNIX}
+  if fpAccess(PChar(ADirectory), R_OK or X_OK) <> 0 then
+  begin
+    AccessError := fpGetErrNo;
+    AReason := SysErrorMessage(AccessError);
+    Exit(True);
+  end;
+  if not DirectoryExists(ADirectory) then
+  begin
+    if EnumerationError <> 0 then
+      AReason := SysErrorMessage(EnumerationError)
+    else
+      AReason := 'directory does not exist';
+    Exit(True);
+  end;
+  if EnumerationError <> 0 then
+    AReason := SysErrorMessage(EnumerationError);
+  if AReason = '' then
+    AReason := 'the operating system rejected directory enumeration';
+  Result := True;
+  {$ENDIF}
+  {$IFDEF Windows}
+  if AFindResult in [ErrorFileNotFound, ErrorNoMoreFiles] then
+  begin
+    if DirectoryExists(ADirectory) then
+      Exit(False);
+    AReason := SysErrorMessage(AFindResult);
+    if AReason = '' then
+      AReason := 'directory does not exist';
+    Exit(True);
+  end;
+  AReason := SysErrorMessage(AFindResult);
+  if AReason = '' then
+    AReason := 'operating-system error ' + IntToStr(AFindResult);
+  Result := True;
+  {$ENDIF}
+  {$IFNDEF UNIX}
+  {$IFNDEF Windows}
+  Result := not DirectoryExists(ADirectory);
+  if Result then
+    AReason := 'directory does not exist';
+  {$ENDIF}
+  {$ENDIF}
+end;
+
+procedure ResetDirectoryEnumerationError;
+begin
+  {$IFDEF UNIX}
+  fpSetErrNo(0);
+  {$ENDIF}
+end;
+
+function DirectoryEnumerationContinuationFailed(AFindResult: Integer;
+  out AReason: string): Boolean;
+{$IFDEF UNIX}
+var
+  EnumerationError: Integer;
+{$ENDIF}
+{$IFDEF Windows}
+const
+  ErrorNoMoreFiles = 18;
+{$ENDIF}
+begin
+  AReason := '';
+  if AFindResult = 0 then
+    Exit(False);
+  {$IFDEF UNIX}
+  EnumerationError := fpGetErrNo;
+  Result := EnumerationError <> 0;
+  if Result then
+  begin
+    AReason := SysErrorMessage(EnumerationError);
+    if AReason = '' then
+      AReason := 'operating-system error ' + IntToStr(EnumerationError);
+  end;
+  {$ENDIF}
+  {$IFDEF Windows}
+  Result := AFindResult <> ErrorNoMoreFiles;
+  if Result then
+  begin
+    AReason := SysErrorMessage(AFindResult);
+    if AReason = '' then
+      AReason := 'operating-system error ' + IntToStr(AFindResult);
+  end;
+  {$ENDIF}
+  {$IFNDEF UNIX}
+  {$IFNDEF Windows}
+  Result := False;
+  {$ENDIF}
   {$ENDIF}
 end;
 

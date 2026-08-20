@@ -26,14 +26,18 @@ program test_runner;
 
 uses
   {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
+  {$IFDEF Windows}Windows,{$ENDIF}
   Classes, SysUtils, Contnrs, fpjson, zipper,
   uModels, uSHA256, uBinaryInspector, uManifestParsers, uArtifactIdentifier,
   uTaskHistory, uJSONUtils, uComponentNormalizer, uCycloneDX, uIgnoreMatcher,
   uScanEngine, uPlatform, uSystemInspector, uNativeDependencyInspector,
-  uExportUtils, uVersionInfo;
+  uExportUtils, uVersionInfo, uScanWorker;
 
 type
   TTestMethod = procedure;
+
+  { Signals that a registered test is not applicable to this runtime. }
+  ETestSkipped = class(Exception);
 
   TCancelController = class
   private
@@ -44,9 +48,39 @@ type
     function Check: Boolean;
   end;
 
+  { Captures a queued scan-worker completion for exception-path assertions. }
+  TCompletionObserver = class
+  public
+    Count: Integer;
+    Status: TTaskStatus;
+    ErrorText: string;
+    CompletedUTC: string;
+    procedure Complete(Sender: TObject; AResult: TScanTask);
+  end;
+
+  { Injects a deterministic failure through the worker's protected test seam. }
+  TFailingScanWorker = class(TScanWorker)
+  protected
+    procedure PerformScan; override;
+  end;
+
+  {$IFDEF UNIX}
+  { Supplies one byte to a FIFO if a regressed scanner attempts to open it. }
+  TFIFOWriter = class(TThread)
+  private
+    FPath: string;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const APath: string);
+  end;
+  {$ENDIF}
+
 var
   TestCount: Integer = 0;
+  PassCount: Integer = 0;
   FailureCount: Integer = 0;
+  SkipCount: Integer = 0;
   ProjectRoot: string;
   TemporaryRoot: string;
 
@@ -62,9 +96,146 @@ begin
   Result := FChecks >= FLimit;
 end;
 
+{**
+  Records one worker completion without retaining the worker-owned task.
+
+  Parameters
+  ----------
+  Sender
+    Worker that queued the completion; unused by the observer.
+  AResult
+    Worker-owned task whose stable scalar state is copied for assertions.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+}
+procedure TCompletionObserver.Complete(Sender: TObject; AResult: TScanTask);
+begin
+  Inc(Count);
+  Status := AResult.Status;
+  ErrorText := AResult.Errors.Text;
+  CompletedUTC := AResult.CompletedUTC;
+end;
+
+{**
+  Raises a known exception to exercise the worker's last-resort boundary.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Always raised with a stable regression-test diagnostic.
+}
+procedure TFailingScanWorker.PerformScan;
+begin
+  raise Exception.Create('intentional worker regression failure');
+end;
+
+{$IFDEF UNIX}
+{**
+  Creates a suspended bounded FIFO writer for the special-file regression.
+
+  Parameters
+  ----------
+  APath
+    FIFO path that may be opened by a regressed scanner.
+
+  Returns
+  -------
+  TFIFOWriter
+    Suspended writer owned by the caller.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if thread allocation fails.
+}
+constructor TFIFOWriter.Create(const APath: string);
+begin
+  inherited Create(True);
+  FreeOnTerminate := False;
+  FPath := APath;
+end;
+
+{**
+  Non-blockingly connects to a FIFO reader and supplies a finite payload.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+    Connection failures are retried for at most five seconds.
+}
+procedure TFIFOWriter.Execute;
+var
+  Deadline: QWord;
+  FileHandle: cint;
+  Payload: Byte;
+begin
+  Deadline := GetTickCount64 + 5000;
+  repeat
+    if Terminated then
+      Exit;
+    FileHandle := fpOpen(PChar(FPath), O_WRONLY or O_NONBLOCK);
+    if FileHandle >= 0 then
+    begin
+      try
+        Payload := Ord('x');
+        fpWrite(FileHandle, Payload, 1);
+      finally
+        fpClose(FileHandle);
+      end;
+      Exit;
+    end;
+    Sleep(1);
+  until GetTickCount64 >= Deadline;
+end;
+{$ENDIF}
+
 procedure Fail(const AMessage: string);
 begin
   raise Exception.Create(AMessage);
+end;
+
+{**
+  Marks the current registered test as inapplicable on this runtime.
+
+  Parameters
+  ----------
+  AReason
+    Concise explanation written beside the explicit SKIP result.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  ETestSkipped
+    Always raised so RunTest can account for the skipped case separately.
+}
+procedure SkipTest(const AReason: string);
+begin
+  raise ETestSkipped.Create(AReason);
 end;
 
 procedure AssertTrue(AValue: Boolean; const AMessage: string);
@@ -97,6 +268,102 @@ begin
   Result := IncludeTrailingPathDelimiter(TemporaryRoot) + AName;
   if not ForceDirectories(Result) then
     Fail('Unable to create temporary test directory: ' + Result);
+end;
+
+{**
+  Independently identifies link-like entries during test cleanup.
+
+  Parameters
+  ----------
+  APath
+    Exact test-owned entry to inspect without following it.
+
+  Returns
+  -------
+  Boolean
+    True for a Unix symbolic link or Windows reparse point.
+
+  Raises
+  ------
+  None
+    Metadata lookup failures are treated as non-links for best-effort cleanup.
+}
+function CleanupEntryIsLink(const APath: string): Boolean;
+{$IFDEF UNIX}
+var
+  Info: Stat;
+{$ENDIF}
+{$IFDEF Windows}
+var
+  Attributes: DWORD;
+  WidePath: UnicodeString;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  Result := (fpLStat(PChar(APath), Info) = 0) and FPS_ISLNK(Info.st_mode);
+  {$ENDIF}
+  {$IFDEF Windows}
+  WidePath := UTF8Decode(APath);
+  Attributes := GetFileAttributesW(PWideChar(WidePath));
+  Result := (Attributes <> INVALID_FILE_ATTRIBUTES) and
+    ((Attributes and FILE_ATTRIBUTE_REPARSE_POINT) <> 0);
+  {$ENDIF}
+  {$IFNDEF UNIX}
+  {$IFNDEF Windows}
+  Result := False;
+  {$ENDIF}
+  {$ENDIF}
+end;
+
+{**
+  Best-effort removes a test-owned directory without following symlinks.
+
+  Parameters
+  ----------
+  ADirectory
+    Exact temporary directory tree owned by this test process.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+    Cleanup failures are ignored so they cannot hide the actual test result.
+}
+procedure RemoveTemporaryTree(const ADirectory: string);
+var
+  SearchRecord: TSearchRec;
+  FindResult: Integer;
+  EntryPath: string;
+begin
+  if not DirectoryExists(ADirectory) then
+    Exit;
+  FindResult := FindFirst(IncludeTrailingPathDelimiter(ADirectory) + '*',
+    faAnyFile, SearchRecord);
+  if FindResult = 0 then
+  begin
+    try
+      while FindResult = 0 do
+      begin
+        if (SearchRecord.Name <> '.') and (SearchRecord.Name <> '..') then
+        begin
+          EntryPath := IncludeTrailingPathDelimiter(ADirectory) +
+            SearchRecord.Name;
+          if ((SearchRecord.Attr and faDirectory) <> 0) and
+            not CleanupEntryIsLink(EntryPath) then
+            RemoveTemporaryTree(EntryPath)
+          else
+            SysUtils.DeleteFile(EntryPath);
+        end;
+        FindResult := FindNext(SearchRecord);
+      end;
+    finally
+      FindClose(SearchRecord);
+    end;
+  end;
+  RemoveDir(ADirectory);
 end;
 
 procedure WriteText(const AFileName, AContent: RawByteString);
@@ -171,6 +438,68 @@ begin
 end;
 
 {**
+  Finds one artifact by its exact root-relative evidence path.
+
+  Parameters
+  ----------
+  AArtifacts
+    Artifact collection produced by the scan engine.
+  ARelativePath
+    Case-sensitive root-relative path to locate.
+
+  Returns
+  -------
+  TArtifact
+    Matching borrowed artifact, or nil when no exact path exists.
+
+  Raises
+  ------
+  None
+}
+function FindArtifact(AArtifacts: TObjectList; const ARelativePath: string):
+  TArtifact;
+var
+  I: Integer;
+begin
+  for I := 0 to AArtifacts.Count - 1 do
+    if TArtifact(AArtifacts[I]).RelativePath = ARelativePath then
+      Exit(TArtifact(AArtifacts[I]));
+  Result := nil;
+end;
+
+{**
+  Searches a string collection for a case-insensitive diagnostic fragment.
+
+  Parameters
+  ----------
+  AStrings
+    Collection of warnings or errors to search.
+  AText
+    Required diagnostic fragment.
+
+  Returns
+  -------
+  Boolean
+    True when any entry contains AText, ignoring ASCII letter case.
+
+  Raises
+  ------
+  None
+}
+function StringListContainsText(AStrings: TStrings; const AText: string):
+  Boolean;
+var
+  I: Integer;
+  SearchText: string;
+begin
+  Result := False;
+  SearchText := LowerCase(AText);
+  for I := 0 to AStrings.Count - 1 do
+    if Pos(SearchText, LowerCase(AStrings[I])) > 0 then
+      Exit(True);
+end;
+
+{**
   Parses one named fixture through the production manifest dispatcher.
 
   Parameters
@@ -222,12 +551,73 @@ end;
   Raises
   ------
   Exception
-    Raised by the assertion helper when the display version diverges.
+    Raised when VERSION, the compiled UI value, or Lazarus file/product
+    resource metadata diverge.
 }
 procedure TestDisplayedVersion;
+var
+  VersionLines, VersionParts, ProjectLines: TStringList;
+  VersionValue, ProjectText: string;
+  PartIndex, CharacterIndex, PartValue: Integer;
 begin
-  AssertEqual(AppVersion, DisplayVersion,
-    'displayed version differs from the embedded product version');
+  VersionLines := TStringList.Create;
+  VersionParts := TStringList.Create;
+  ProjectLines := TStringList.Create;
+  try
+    VersionLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'VERSION');
+    AssertEqual(1, VersionLines.Count,
+      'VERSION should contain exactly one line');
+    VersionValue := VersionLines[0];
+    AssertEqual(Trim(VersionValue), VersionValue,
+      'VERSION should not contain surrounding whitespace');
+    AssertEqual(VersionValue, AppVersion,
+      'compiled product version differs from VERSION');
+    AssertEqual(AppVersion, DisplayVersion,
+      'displayed version differs from the embedded product version');
+
+    VersionParts.Delimiter := '.';
+    VersionParts.StrictDelimiter := True;
+    VersionParts.DelimitedText := VersionValue;
+    AssertEqual(3, VersionParts.Count,
+      'VERSION should contain three numeric components');
+    for PartIndex := 0 to VersionParts.Count - 1 do
+    begin
+      AssertTrue(VersionParts[PartIndex] <> '',
+        'VERSION components should not be empty');
+      AssertTrue((Length(VersionParts[PartIndex]) = 1) or
+        (VersionParts[PartIndex][1] <> '0'),
+        'VERSION components should not contain leading zeros');
+      for CharacterIndex := 1 to Length(VersionParts[PartIndex]) do
+        AssertTrue(VersionParts[PartIndex][CharacterIndex] in ['0'..'9'],
+          'VERSION components should contain decimal digits only');
+      AssertTrue(TryStrToInt(VersionParts[PartIndex], PartValue),
+        'VERSION component should fit a native integer');
+      AssertTrue(PartValue <= 65535,
+        'VERSION component exceeds the Windows resource range');
+    end;
+    ProjectLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'purpleray_sbom_analyzer.lpi');
+    ProjectText := ProjectLines.Text;
+    AssertTrue(Pos('<UseVersionInfo Value="True"/>', ProjectText) > 0,
+      'Lazarus version resources should be enabled');
+    AssertTrue(Pos('<MajorVersionNr Value="' + VersionParts[0] + '"/>',
+      ProjectText) > 0, 'Lazarus major file version differs from VERSION');
+    AssertTrue(Pos('<MinorVersionNr Value="' + VersionParts[1] + '"/>',
+      ProjectText) > 0, 'Lazarus minor file version differs from VERSION');
+    AssertTrue(Pos('<RevisionNr Value="' + VersionParts[2] + '"/>',
+      ProjectText) > 0, 'Lazarus revision file version differs from VERSION');
+    AssertTrue(Pos('<BuildNr Value="0"/>', ProjectText) > 0,
+      'Lazarus file-version build number should be zero');
+    AssertTrue(Pos('FileVersion="' + VersionValue + '.0"', ProjectText) > 0,
+      'Lazarus string file version differs from VERSION');
+    AssertTrue(Pos('ProductVersion="' + VersionValue + '"', ProjectText) > 0,
+      'Lazarus product version differs from VERSION');
+  finally
+    ProjectLines.Free;
+    VersionParts.Free;
+    VersionLines.Free;
+  end;
 end;
 
 procedure TestRequirementsParser;
@@ -339,6 +729,193 @@ begin
     end;
   finally
     Components.Free;
+  end;
+end;
+
+{**
+  Verifies current and legacy-compatible Lazarus package-name extraction.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised by assertion helpers when a current-format `.lpi` requirement is
+    not represented as build-scope Free Pascal component evidence.
+}
+procedure TestLazarusProjectParser;
+var
+  Components: TObjectList;
+  Artifact: TArtifact;
+  Component: uModels.TComponent;
+  DirectoryName, FileName: string;
+begin
+  Components := TObjectList.Create(True);
+  try
+    ParseFixture('lazarus-current.lpi', pkLazarusXML, Components, Artifact);
+    try
+      AssertTrue(Artifact.Status = arsParsed,
+        'current Lazarus project should parse');
+      AssertEqual(1, Artifact.ComponentCount,
+        'current Lazarus artifact component count differs');
+      AssertEqual(1, Components.Count,
+        'current Lazarus requirement count differs');
+      Component := FindComponent(Components, 'LCL');
+      AssertTrue(Component <> nil, 'LCL requirement is missing');
+      AssertEqual('', Component.Version,
+        'Lazarus requirement should not invent a version');
+      AssertEqual('FreePascal', Component.Ecosystem,
+        'Lazarus requirement ecosystem differs');
+      AssertEqual('library', Component.ComponentType,
+        'Lazarus requirement component type differs');
+      AssertEqual('lazarus-current.lpi', Component.SourceArtifact,
+        'Lazarus requirement source artifact differs');
+      AssertEqual('lazarus-project-xml', Component.SourceParser,
+        'Lazarus requirement parser evidence differs');
+      AssertEqual('build', Component.DependencyScope,
+        'Lazarus requirement scope differs');
+      AssertEqual('', Component.PackageURL,
+        'Lazarus requirement should not invent a package URL');
+      AssertEqual(1, Component.EvidencePaths.Count,
+        'Lazarus requirement evidence count differs');
+      AssertEqual('lazarus-current.lpi', Component.EvidencePaths[0],
+        'Lazarus requirement evidence path differs');
+    finally
+      Artifact.Free;
+    end;
+
+    Components.Clear;
+    DirectoryName := NewTemporaryDirectory('lazarus-parser-compatibility');
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'legacy.lpk';
+    WriteText(FileName, '<?xml version="1.0"?><CONFIG><RequiredPackages>' +
+      '<Item1><Name Value="LegacyAttr"/></Item1>' +
+      '<Item2><Name>LegacyText</Name></Item2>' +
+      '</RequiredPackages></CONFIG>');
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'legacy.lpk', pkLazarusXML, Artifact,
+        Components);
+      AssertTrue(Artifact.Status = arsParsed,
+        'legacy Lazarus package should parse');
+      AssertEqual(2, Artifact.ComponentCount,
+        'legacy Lazarus package-name variants differ');
+      AssertTrue(FindComponent(Components, 'LegacyAttr') <> nil,
+        'legacy Lazarus Name Value requirement is missing');
+      AssertTrue(FindComponent(Components, 'LegacyText') <> nil,
+        'legacy Lazarus Name text requirement is missing');
+    finally
+      Artifact.Free;
+    end;
+
+    Components.Clear;
+    FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'empty.lpi';
+    WriteText(FileName, '<?xml version="1.0"?><CONFIG><ProjectOptions>' +
+      '<RequiredPackages Count="0"/></ProjectOptions></CONFIG>');
+    Artifact := TArtifact.Create;
+    try
+      ParseArtifact(FileName, 'empty.lpi', pkLazarusXML, Artifact,
+        Components);
+      AssertTrue(Artifact.Status = arsParsed,
+        'empty valid Lazarus project should still parse');
+      AssertEqual(0, Artifact.ComponentCount,
+        'empty Lazarus project should have no components');
+      AssertTrue(Pos('No dependency components were identified.',
+        Artifact.MessageText) > 0,
+        'zero-component Lazarus parse should be visibly annotated');
+    finally
+      Artifact.Free;
+    end;
+  finally
+    Components.Free;
+  end;
+end;
+
+{**
+  Verifies deterministic parser-kind size policies and an oversized rejection.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when a parser is unbounded or an over-limit manifest is opened,
+    parsed, hashed, or omitted instead of becoming a failed artifact.
+}
+procedure TestManifestSizeLimits;
+var
+  ParserKind: TParserKind;
+  RootName, FileName, ExpectedMessage: string;
+  Stream: TFileStream;
+  Task: TScanTask;
+  Engine: TScanEngine;
+  Artifact: TArtifact;
+  LimitValue: Int64;
+begin
+  AssertEqual(0, ManifestSizeLimit(pkNone),
+    'unsupported artifacts should not receive a parser size limit');
+  for ParserKind := Low(TParserKind) to High(TParserKind) do
+    if ParserKind <> pkNone then
+      AssertTrue(ManifestSizeLimit(ParserKind) > 0,
+        'recognized parser kind has no bounded size policy');
+  AssertEqual(8 * 1024 * 1024, ManifestSizeLimit(pkPackageJSON),
+    'ordinary manifest size limit differs');
+  AssertEqual(32 * 1024 * 1024, ManifestSizeLimit(pkPackageLockJSON),
+    'JSON lockfile size limit differs');
+  AssertEqual(64 * 1024 * 1024, ManifestSizeLimit(pkCargoLock),
+    'line-oriented lockfile size limit differs');
+
+  RootName := NewTemporaryDirectory('manifest-size-limit');
+  FileName := IncludeTrailingPathDelimiter(RootName) + 'package.json';
+  LimitValue := ManifestSizeLimit(pkPackageJSON);
+  Stream := TFileStream.Create(FileName, fmCreate);
+  try
+    Stream.Size := LimitValue + 1;
+  finally
+    Stream.Free;
+  end;
+  Task := TScanTask.Create;
+  Engine := TScanEngine.Create(nil, nil);
+  try
+    Task.TargetDirectory := RootName;
+    Task.TargetRootName := 'manifest-size-limit';
+    Task.Settings.CalculateSHA256 := True;
+    AssertTrue(Engine.Scan(Task),
+      'over-limit manifest should not fail the containing scan');
+    AssertEqual(1, Task.Artifacts.Count,
+      'over-limit manifest artifact is missing');
+    Artifact := TArtifact(Task.Artifacts[0]);
+    ExpectedMessage := 'Manifest exceeds the size limit for package-json: ' +
+      IntToStr(LimitValue + 1) + ' bytes (maximum ' + IntToStr(LimitValue) +
+      ' bytes).';
+    AssertTrue(Artifact.Status = arsFailed,
+      'over-limit manifest should be a failed artifact');
+    AssertEqual(ExpectedMessage, Artifact.MessageText,
+      'over-limit manifest diagnostic differs');
+    AssertEqual(0, Artifact.ComponentCount,
+      'over-limit manifest should produce no components');
+    AssertEqual(1, Task.FailedArtifacts,
+      'over-limit manifest failed-artifact count differs');
+    AssertEqual(0, Task.ArtifactsParsed,
+      'over-limit manifest should not be counted as parsed');
+    AssertEqual(0, Task.ComponentsIdentified,
+      'over-limit manifest should not identify components');
+    AssertEqual('', Artifact.SHA256,
+      'over-limit manifest should be rejected before hashing');
+  finally
+    Engine.Free;
+    Task.Free;
   end;
 end;
 
@@ -770,6 +1347,23 @@ begin
   AssertEqual('x86_64', Info.Architecture, 'Mach-O architecture differs');
 end;
 
+{**
+  Verifies deterministic merging of duplicate component evidence and scopes.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised by assertion helpers when normalization loses evidence or cannot
+    merge two non-empty dependency scopes.
+}
 procedure TestComponentDeduplication;
 var
   Input, Output: TObjectList;
@@ -782,12 +1376,14 @@ begin
     First.Name := 'demo'; First.Version := '1.0.0'; First.Ecosystem := 'npm';
     First.PackageURL := 'pkg:npm/demo@1.0.0';
     First.SourceArtifact := 'a/package.json';
+    First.DependencyScope := ' runtime, development ';
     First.EvidencePaths.Add('a/package.json');
     Input.Add(First);
     Second := uModels.TComponent.Create;
     Second.Name := 'demo'; Second.Version := '1.0.0'; Second.Ecosystem := 'npm';
     Second.PackageURL := 'pkg:npm/demo@1.0.0';
     Second.SourceArtifact := 'b/package-lock.json';
+    Second.DependencyScope := 'optional, runtime';
     Second.EvidencePaths.Add('b/package-lock.json');
     Input.Add(Second);
     NormalizeComponents(Input, Output);
@@ -795,9 +1391,123 @@ begin
     Merged := uModels.TComponent(Output[0]);
     AssertEqual(2, Merged.EvidencePaths.Count,
       'duplicate evidence paths were not merged');
+    AssertEqual('development, optional, runtime', Merged.DependencyScope,
+      'duplicate dependency scopes were not merged deterministically');
   finally
     Output.Free;
     Input.Free;
+  end;
+end;
+
+{**
+  Verifies that an escaped scan exception still completes exactly once.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised by assertion helpers when worker containment, diagnostics, timing,
+    or queued completion delivery regresses.
+}
+procedure TestWorkerExceptionContainment;
+var
+  SourceTask: TScanTask;
+  Worker: TFailingScanWorker;
+  Observer: TCompletionObserver;
+  Deadline: QWord;
+begin
+  SourceTask := TScanTask.Create;
+  SourceTask.StartedUTC := SourceTask.CreatedUTC;
+  Observer := TCompletionObserver.Create;
+  Worker := TFailingScanWorker.Create(SourceTask, TemporaryRoot);
+  try
+    Worker.OnComplete := @Observer.Complete;
+    Worker.Start;
+    Deadline := GetTickCount64 + 5000;
+    repeat
+      CheckSynchronize(10);
+      Sleep(1);
+    until (Observer.Count > 0) or (GetTickCount64 >= Deadline);
+    Worker.WaitFor;
+    CheckSynchronize(10);
+    AssertEqual(1, Observer.Count,
+      'failed worker completion was not delivered exactly once');
+    AssertTrue(Observer.Status = tsFailed,
+      'escaped worker exception did not fail the task');
+    AssertTrue(Pos('intentional worker regression failure',
+      Observer.ErrorText) > 0,
+      'escaped worker diagnostic was not retained');
+    AssertTrue(Observer.CompletedUTC <> '',
+      'failed worker task has no completion timestamp');
+  finally
+    Worker.Free;
+    Observer.Free;
+    SourceTask.Free;
+  end;
+end;
+
+{**
+  Scans manifest, lockfile, and Lazarus fixtures through the production engine.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when scoped evidence does not merge or production artifact
+    identification omits the current-format Lazarus project.
+}
+procedure TestManifestLockScan;
+var
+  Task: TScanTask;
+  Engine: TScanEngine;
+  Component: uModels.TComponent;
+  Artifact: TArtifact;
+begin
+  Task := TScanTask.Create;
+  Engine := TScanEngine.Create(nil, nil);
+  try
+    Task.TargetDirectory := Fixture('');
+    Task.TargetRootName := 'fixtures';
+    Task.Settings.CalculateSHA256 := False;
+    AssertTrue(Engine.Scan(Task),
+      'manifest-plus-lockfile directory scan failed');
+    Component := FindComponent(Task.Components, 'lodash');
+    AssertTrue(Component <> nil,
+      'manifest-plus-lockfile scan omitted lodash');
+    AssertEqual('resolved, runtime', Component.DependencyScope,
+      'manifest and lockfile scopes were not merged');
+
+    Component := FindComponent(Task.Components, 'LCL');
+    AssertTrue(Component <> nil,
+      'production scan omitted the current-format Lazarus requirement');
+    AssertEqual('lazarus-current.lpi', Component.SourceArtifact,
+      'production Lazarus component evidence path differs');
+    Artifact := FindArtifact(Task.Artifacts, 'lazarus-current.lpi');
+    AssertTrue(Artifact <> nil,
+      'production artifact identification omitted lazarus-current.lpi');
+    AssertTrue(Artifact.Status = arsParsed,
+      'production Lazarus artifact should parse');
+    AssertEqual('lazarus-project-xml', Artifact.ParserName,
+      'production Lazarus parser identification differs');
+    AssertEqual(1, Artifact.ComponentCount,
+      'production Lazarus artifact component count differs');
+  finally
+    Engine.Free;
+    Task.Free;
   end;
 end;
 
@@ -863,6 +1573,388 @@ begin
   end;
 end;
 
+{**
+  Verifies that a named pipe is warned about and never opened by the scanner.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when FIFO creation fails or scanner counters/warnings show that the
+    special entry reached file processing.
+}
+procedure TestSpecialFileSkip;
+{$IFDEF UNIX}
+var
+  RootName, FifoName: string;
+  Task: TScanTask;
+  Engine: TScanEngine;
+  Writer: TFIFOWriter;
+begin
+  RootName := NewTemporaryDirectory('special-file-skip');
+  WriteText(IncludeTrailingPathDelimiter(RootName) + 'ordinary.txt', 'safe');
+  FifoName := IncludeTrailingPathDelimiter(RootName) + 'events.pipe';
+  if fpMkFifo(PChar(FifoName), 384) <> 0 then
+    Fail('Unable to create FIFO fixture: ' + SysErrorMessage(fpGetErrNo));
+  Task := TScanTask.Create;
+  Engine := TScanEngine.Create(nil, nil);
+  Writer := TFIFOWriter.Create(FifoName);
+  try
+    Task.TargetDirectory := RootName;
+    Task.TargetRootName := 'special-file-skip';
+    Task.Settings.CalculateSHA256 := False;
+    Writer.Start;
+    AssertTrue(Engine.Scan(Task), 'scan containing a FIFO should finish');
+    AssertEqual(1, Task.FilesInspected,
+      'FIFO should not be counted as an inspected file');
+    AssertTrue(StringListContainsText(Task.Warnings, 'events.pipe') and
+      StringListContainsText(Task.Warnings, 'non-regular'),
+      'FIFO skip warning should name the non-regular entry');
+  finally
+    Writer.Terminate;
+    Writer.WaitFor;
+    Writer.Free;
+    Engine.Free;
+    Task.Free;
+  end;
+end;
+{$ELSE}
+begin
+  SkipTest('requires Unix named-pipe support');
+end;
+{$ENDIF}
+
+{**
+  Verifies Windows device and offline attributes are rejected before opening.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when captured Windows attributes are classified as regular inputs.
+}
+procedure TestWindowsSpecialAttributeClassification;
+{$IFDEF Windows}
+var
+  Reason: string;
+begin
+  AssertTrue(ClassifyFileSystemEntry(FILE_ATTRIBUTE_DEVICE, 0, Reason) =
+    fsekUnsupported, 'Windows device attribute should be unsupported');
+  AssertEqual('device', Reason,
+    'Windows device classification reason differs');
+  AssertTrue(ClassifyFileSystemEntry(FILE_ATTRIBUTE_OFFLINE, 0, Reason) =
+    fsekUnsupported, 'Windows offline attribute should be unsupported');
+  AssertEqual('offline file', Reason,
+    'Windows offline classification reason differs');
+  AssertTrue(ClassifyFileSystemEntry(FILE_ATTRIBUTE_DIRECTORY, 0, Reason) =
+    fsekDirectory, 'Windows directory attribute classification differs');
+  AssertTrue(ClassifyFileSystemEntry(0, 0, Reason) = fsekRegularFile,
+    'ordinary Windows file classification differs');
+end;
+{$ELSE}
+begin
+  SkipTest('requires Windows file-attribute constants');
+end;
+{$ENDIF}
+
+{**
+  Verifies platform-specific end-of-directory and enumeration-error handling.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when normal enumeration exhaustion is reported as a failure or a
+    real continuation error is silently accepted.
+}
+procedure TestDirectoryEnumerationErrors;
+var
+  Reason: string;
+{$IFDEF Windows}
+  RootName, MissingName: string;
+{$ENDIF}
+begin
+  ResetDirectoryEnumerationError;
+  {$IFDEF UNIX}
+  AssertTrue(not DirectoryEnumerationContinuationFailed(-1, Reason),
+    'Unix end-of-directory sentinel should not be an enumeration failure');
+  AssertEqual('', Reason,
+    'Unix normal end-of-directory should have no diagnostic');
+  try
+    fpSetErrNo(ESysEIO);
+    AssertTrue(DirectoryEnumerationContinuationFailed(-1, Reason),
+      'Unix FindNext I/O error should be reported');
+    AssertTrue(Reason <> '',
+      'Unix FindNext I/O error should retain a diagnostic');
+  finally
+    ResetDirectoryEnumerationError;
+  end;
+  {$ENDIF}
+  {$IFDEF Windows}
+  AssertTrue(not DirectoryEnumerationContinuationFailed(
+    ERROR_NO_MORE_FILES, Reason),
+    'Windows end-of-directory code should not be an enumeration failure');
+  AssertEqual('', Reason,
+    'Windows normal end-of-directory should have no diagnostic');
+  AssertTrue(DirectoryEnumerationContinuationFailed(
+    ERROR_ACCESS_DENIED, Reason),
+    'Windows FindNext access denial should be reported');
+  AssertTrue(Reason <> '',
+    'Windows FindNext access denial should retain a diagnostic');
+
+  RootName := NewTemporaryDirectory('windows-directory-errors');
+  AssertTrue(not DirectoryEnumerationFailed(RootName,
+    ERROR_FILE_NOT_FOUND, Reason),
+    'Windows empty existing directory should not be an enumeration failure');
+  AssertEqual('', Reason,
+    'Windows empty existing directory should have no diagnostic');
+  MissingName := IncludeTrailingPathDelimiter(RootName) + 'missing';
+  AssertTrue(DirectoryEnumerationFailed(MissingName,
+    ERROR_PATH_NOT_FOUND, Reason),
+    'Windows missing directory should be an enumeration failure');
+  AssertTrue(Reason <> '',
+    'Windows missing directory should retain a diagnostic');
+  {$ENDIF}
+  {$IFNDEF UNIX}
+  {$IFNDEF Windows}
+  SkipTest('requires Unix or Windows enumeration semantics');
+  {$ENDIF}
+  {$ENDIF}
+end;
+
+{**
+  Verifies case-preserving Linux enumeration and ordinal artifact ordering.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when either case-variant is dropped, receives incorrect metadata,
+    or is emitted outside ordinal path order.
+}
+procedure TestCasePreservingEnumeration;
+{$IFDEF LINUX}
+var
+  RootName: string;
+  Task: TScanTask;
+  Engine: TScanEngine;
+  Artifact: TArtifact;
+  UpperContent, LowerContent: RawByteString;
+begin
+  RootName := NewTemporaryDirectory('case-preserving-enumeration');
+  LowerContent := 'lower-package==2.0.0' + LineEnding;
+  UpperContent := 'upper-package==1.0.0' + LineEnding;
+  WriteText(IncludeTrailingPathDelimiter(RootName) + 'requirements.txt',
+    LowerContent);
+  WriteText(IncludeTrailingPathDelimiter(RootName) + 'Requirements.txt',
+    UpperContent);
+  Task := TScanTask.Create;
+  Engine := TScanEngine.Create(nil, nil);
+  try
+    Task.TargetDirectory := RootName;
+    Task.TargetRootName := 'case-preserving-enumeration';
+    Task.Settings.CalculateSHA256 := False;
+    AssertTrue(Engine.Scan(Task), 'case-variant scan should finish');
+    AssertEqual(2, Task.FilesInspected,
+      'case-variant filename was silently dropped');
+    AssertEqual(Length(UpperContent) + Length(LowerContent),
+      Task.BytesInspected,
+      'case-variant file sizes were not retained');
+    AssertEqual(2, Task.Artifacts.Count,
+      'case-variant requirements artifacts were not both retained');
+    Artifact := FindArtifact(Task.Artifacts, 'Requirements.txt');
+    AssertTrue(Artifact <> nil,
+      'uppercase requirements artifact is missing');
+    AssertEqual(Length(UpperContent), Artifact.FileSize,
+      'uppercase requirements artifact size differs');
+    Artifact := FindArtifact(Task.Artifacts, 'requirements.txt');
+    AssertTrue(Artifact <> nil,
+      'lowercase requirements artifact is missing');
+    AssertEqual(Length(LowerContent), Artifact.FileSize,
+      'lowercase requirements artifact size differs');
+    AssertEqual('Requirements.txt',
+      TArtifact(Task.Artifacts[0]).RelativePath,
+      'case-variant artifacts are not in ordinal order');
+    AssertEqual('requirements.txt',
+      TArtifact(Task.Artifacts[1]).RelativePath,
+      'case-variant artifact ordinal order differs');
+  finally
+    Engine.Free;
+    Task.Free;
+  end;
+end;
+{$ELSE}
+begin
+  SkipTest('requires a case-sensitive Linux filesystem');
+end;
+{$ENDIF}
+
+{**
+  Verifies literal wildcard characters cannot redirect artifact metadata.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when a literal question-mark artifact is lost, assigned another
+    entry's size, or emitted outside ordinal path order.
+}
+procedure TestGlobMetacharacterEnumeration;
+{$IFDEF UNIX}
+var
+  RootName: string;
+  Task: TScanTask;
+  Engine: TScanEngine;
+  LiteralArtifact, AlternateArtifact: TArtifact;
+  LiteralContent, AlternateContent: RawByteString;
+begin
+  RootName := NewTemporaryDirectory('glob-metachar-enumeration');
+  AlternateContent := 'alternate-package==22.0.0' + LineEnding;
+  LiteralContent := 'literal-package==1.0.0' + LineEnding;
+  WriteText(IncludeTrailingPathDelimiter(RootName) + 'requirementsA.txt',
+    AlternateContent);
+  WriteText(IncludeTrailingPathDelimiter(RootName) + 'requirements?.txt',
+    LiteralContent);
+  Task := TScanTask.Create;
+  Engine := TScanEngine.Create(nil, nil);
+  try
+    Task.TargetDirectory := RootName;
+    Task.TargetRootName := 'glob-metachar-enumeration';
+    Task.Settings.CalculateSHA256 := False;
+    AssertTrue(Engine.Scan(Task), 'glob-metacharacter scan should finish');
+    AssertEqual(2, Task.FilesInspected,
+      'glob-metacharacter filename was not independently processed');
+    AssertEqual(2, Task.Artifacts.Count,
+      'glob-metacharacter requirements artifacts were not both retained');
+    LiteralArtifact := FindArtifact(Task.Artifacts, 'requirements?.txt');
+    AlternateArtifact := FindArtifact(Task.Artifacts, 'requirementsA.txt');
+    AssertTrue(LiteralArtifact <> nil,
+      'literal question-mark artifact is missing');
+    AssertTrue(AlternateArtifact <> nil,
+      'alternate wildcard-match artifact is missing');
+    AssertEqual(Length(LiteralContent), LiteralArtifact.FileSize,
+      'literal question-mark artifact received another entry''s size');
+    AssertEqual(Length(AlternateContent), AlternateArtifact.FileSize,
+      'alternate wildcard-match artifact size differs');
+    AssertEqual('requirements?.txt',
+      TArtifact(Task.Artifacts[0]).RelativePath,
+      'glob-metacharacter artifacts are not in ordinal order');
+    AssertEqual('requirementsA.txt',
+      TArtifact(Task.Artifacts[1]).RelativePath,
+      'glob-metacharacter artifact ordinal order differs');
+  finally
+    Engine.Free;
+    Task.Free;
+  end;
+end;
+{$ELSE}
+begin
+  SkipTest('requires Unix support for a literal question mark in a filename');
+end;
+{$ENDIF}
+
+{**
+  Verifies unreadable directories are reported instead of silently omitted.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when a permission-denied subtree or target root produces no warning.
+}
+procedure TestUnreadableDirectoryWarning;
+{$IFDEF UNIX}
+var
+  RootName, RestrictedName: string;
+  Task: TScanTask;
+  Engine: TScanEngine;
+begin
+  if fpGetUID = 0 then
+    SkipTest('chmod 000 is not an effective denial fixture for UID 0');
+  RootName := NewTemporaryDirectory('unreadable-directory');
+  RestrictedName := IncludeTrailingPathDelimiter(RootName) + 'restricted';
+  ForceDirectories(RestrictedName);
+  WriteText(IncludeTrailingPathDelimiter(RootName) + 'visible.txt', 'v');
+  WriteText(IncludeTrailingPathDelimiter(RestrictedName) + 'hidden.txt', 'x');
+  if fpChmod(PChar(RestrictedName), 0) <> 0 then
+    Fail('Unable to restrict directory fixture: ' +
+      SysErrorMessage(fpGetErrNo));
+  Task := TScanTask.Create;
+  Engine := TScanEngine.Create(nil, nil);
+  try
+    Task.TargetDirectory := RootName;
+    Task.TargetRootName := 'unreadable-directory';
+    Task.Settings.CalculateSHA256 := False;
+    AssertTrue(Engine.Scan(Task),
+      'scan with an unreadable subtree should retain partial results');
+    AssertEqual(1, Task.FilesInspected,
+      'unreadable subtree contents should not be reported as inspected');
+    AssertTrue(StringListContainsText(Task.Warnings, 'restricted') and
+      StringListContainsText(Task.Warnings, 'unable to enumerate'),
+      'unreadable subtree warning should name the omitted directory');
+
+    Task.TargetDirectory := RestrictedName;
+    Task.TargetRootName := 'restricted';
+    AssertTrue(Engine.Scan(Task),
+      'unreadable target root should complete with an explicit warning');
+    AssertEqual(0, Task.FilesInspected,
+      'unreadable target root should not report inspected files');
+    AssertTrue(StringListContainsText(Task.Warnings, 'unable to enumerate'),
+      'unreadable target root was presented as a clean empty scan');
+  finally
+    fpChmod(PChar(RestrictedName), 448);
+    Engine.Free;
+    Task.Free;
+  end;
+end;
+{$ELSE}
+begin
+  SkipTest('requires Unix permission semantics');
+end;
+{$ENDIF}
+
 procedure TestSymlinkLoopPrevention;
 {$IFDEF UNIX}
 var
@@ -895,6 +1987,7 @@ begin
 end;
 {$ELSE}
 begin
+  SkipTest('requires Unix symbolic-link support');
 end;
 {$ENDIF}
 
@@ -944,15 +2037,22 @@ end;
   Raises
   ------
   None
-    Test exceptions are caught and counted as failures.
+    Test exceptions are counted as failures; ETestSkipped is counted and
+    reported separately.
 }
 procedure RunTest(const AName: string; AMethod: TTestMethod);
 begin
   Inc(TestCount);
   try
     AMethod();
+    Inc(PassCount);
     WriteLn('[PASS] ', AName);
   except
+    on E: ETestSkipped do
+    begin
+      Inc(SkipCount);
+      WriteLn('[SKIP] ', AName, ': ', E.Message);
+    end;
     on E: Exception do
     begin
       Inc(FailureCount);
@@ -973,6 +2073,8 @@ begin
   RunTest('package.json parser', @TestPackageJSONParser);
   RunTest('package-lock.json parser', @TestPackageLockParser);
   RunTest('XML dependency parsers', @TestXMLParsers);
+  RunTest('Lazarus project parser', @TestLazarusProjectParser);
+  RunTest('manifest size limits', @TestManifestSizeLimits);
   RunTest('XML document type rejection', @TestXMLDocumentTypeRejection);
   RunTest('task-history round trip', @TestHistoryRoundTrip);
   RunTest('atomic-history recovery', @TestAtomicHistoryRecovery);
@@ -985,11 +2087,23 @@ begin
   RunTest('native dependency tables', @TestNativeDependencyTables);
   RunTest('PE/ELF/Mach-O inspection', @TestBinaryInspection);
   RunTest('component deduplication', @TestComponentDeduplication);
+  RunTest('worker exception containment', @TestWorkerExceptionContainment);
+  RunTest('manifest and lockfile scan', @TestManifestLockScan);
   RunTest('deterministic CycloneDX', @TestDeterministicCycloneDX);
   RunTest('ignore and wildcard matching', @TestIgnoreMatching);
+  RunTest('special-file skip', @TestSpecialFileSkip);
+  RunTest('Windows special attributes',
+    @TestWindowsSpecialAttributeClassification);
+  RunTest('filesystem enumeration errors',
+    @TestDirectoryEnumerationErrors);
+  RunTest('case-preserving enumeration', @TestCasePreservingEnumeration);
+  RunTest('glob-metacharacter enumeration', @TestGlobMetacharacterEnumeration);
+  RunTest('unreadable-directory warnings', @TestUnreadableDirectoryWarning);
   RunTest('symbolic-link loop prevention', @TestSymlinkLoopPrevention);
   RunTest('scan cancellation', @TestScanCancellation);
-  WriteLn(Format('%d tests, %d failures', [TestCount, FailureCount]));
+  WriteLn(Format('%d tests: %d passed, %d failed, %d skipped',
+    [TestCount, PassCount, FailureCount, SkipCount]));
+  RemoveTemporaryTree(TemporaryRoot);
   if FailureCount <> 0 then
     Halt(1);
 end.

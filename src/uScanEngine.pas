@@ -214,6 +214,54 @@ uses
   uPlatform, uComponentNormalizer, uTimeUtils, uSystemInspector,
   uNativeDependencyInspector;
 
+type
+  {**
+    Owns one immutable metadata snapshot from a directory enumeration.
+
+    Attributes
+    ----------
+    Name
+      Entry name exactly as returned by the host filesystem.
+    Size
+      File size from the initial FindFirst or FindNext result.
+    Attributes
+      Platform attributes from the initial enumeration result.
+    UnixMode
+      Unix file-type and permission mode, or zero on other platforms.
+  }
+  TDirectoryEntry = class
+  public
+    Name: string;
+    Size: Int64;
+    Attributes: LongInt;
+    UnixMode: QWord;
+  end;
+
+{**
+  Compares directory-entry names using deterministic ordinal ordering.
+
+  Parameters
+  ----------
+  AItem1
+    First TDirectoryEntry pointer.
+  AItem2
+    Second TDirectoryEntry pointer.
+
+  Returns
+  -------
+  Integer
+    Negative, zero, or positive according to CompareStr.
+
+  Raises
+  ------
+  None
+}
+function CompareDirectoryEntries(AItem1, AItem2: Pointer): Integer;
+begin
+  Result := CompareStr(TDirectoryEntry(AItem1).Name,
+    TDirectoryEntry(AItem2).Name);
+end;
+
 constructor TScanEngine.Create(ACancelCheck: TCancelCheck;
   AProgressCallback: TScanProgressCallback);
 begin
@@ -328,64 +376,83 @@ function TScanEngine.ScanDirectory(const ADirectory,
   ARelativeDirectory: string): Boolean;
 var
   SearchRecord: TSearchRec;
-  Names: TStringList;
+  Entries: TObjectList;
+  Entry: TDirectoryEntry;
   I, FindResult: Integer;
-  NameValue, AbsolutePath, RelativePath: string;
+  AbsolutePath, RelativePath, EntryReason, EnumerationReason,
+    EnumerationPath: string;
   IsDirectoryValue, IsLink: Boolean;
+  EntryKind: TFileSystemEntryKind;
 begin
   Result := False;
   if IsCancelled then
     Exit;
-  Names := TStringList.Create;
+  EnumerationPath := NormalizeRelativePath(ARelativeDirectory);
+  if EnumerationPath = '' then
+    EnumerationPath := '.';
+  Entries := TObjectList.Create(True);
   try
-    Names.Sorted := True;
-    Names.Duplicates := dupIgnore;
     try
+      ResetDirectoryEnumerationError;
       FindResult := FindFirst(IncludeTrailingPathDelimiter(ADirectory) + '*',
         faAnyFile, SearchRecord);
+      if FindResult <> 0 then
+      begin
+        if DirectoryEnumerationFailed(ADirectory, FindResult,
+          EnumerationReason) then
+          AddWarning('Unable to enumerate directory ' + EnumerationPath +
+            ': ' + EnumerationReason);
+        Exit(True);
+      end;
       try
         while FindResult = 0 do
         begin
           if IsCancelled then
             Exit;
           if (SearchRecord.Name <> '.') and (SearchRecord.Name <> '..') then
-            Names.Add(SearchRecord.Name);
+          begin
+            Entry := TDirectoryEntry.Create;
+            Entry.Name := SearchRecord.Name;
+            Entry.Size := SearchRecord.Size;
+            Entry.Attributes := SearchRecord.Attr;
+            {$IFDEF UNIX}
+            Entry.UnixMode := QWord(SearchRecord.Mode);
+            {$ELSE}
+            Entry.UnixMode := 0;
+            {$ENDIF}
+            Entries.Add(Entry);
+          end;
+          ResetDirectoryEnumerationError;
           FindResult := FindNext(SearchRecord);
         end;
+        if DirectoryEnumerationContinuationFailed(FindResult,
+          EnumerationReason) then
+          AddWarning('Unable to finish enumerating directory ' +
+            EnumerationPath + ': ' + EnumerationReason);
       finally
         FindClose(SearchRecord);
       end;
     except
       on E: Exception do
       begin
-        AddWarning('Unable to enumerate directory ' + ADirectory + ': ' +
-          E.Message);
+        AddWarning('Unable to enumerate directory ' + EnumerationPath +
+          ': ' + E.Message);
         Exit(True);
       end;
     end;
 
-    for I := 0 to Names.Count - 1 do
+    Entries.Sort(@CompareDirectoryEntries);
+    for I := 0 to Entries.Count - 1 do
     begin
       if IsCancelled then
         Exit;
-      NameValue := Names[I];
-      AbsolutePath := IncludeTrailingPathDelimiter(ADirectory) + NameValue;
+      Entry := TDirectoryEntry(Entries[I]);
+      AbsolutePath := IncludeTrailingPathDelimiter(ADirectory) + Entry.Name;
       if ARelativeDirectory = '' then
-        RelativePath := NameValue
+        RelativePath := Entry.Name
       else
-        RelativePath := ARelativeDirectory + '/' + NameValue;
-      FindResult := FindFirst(AbsolutePath, faAnyFile, SearchRecord);
-      if FindResult <> 0 then
-      begin
-        AddWarning('A directory entry disappeared during the scan: ' +
-          RelativePath);
-        Continue;
-      end;
-      try
-        IsDirectoryValue := (SearchRecord.Attr and faDirectory) <> 0;
-      finally
-        FindClose(SearchRecord);
-      end;
+        RelativePath := ARelativeDirectory + '/' + Entry.Name;
+      IsDirectoryValue := (Entry.Attributes and faDirectory) <> 0;
       if ShouldIgnorePath(RelativePath, IsDirectoryValue,
         FTask.Settings.IgnorePatterns) then
         Continue;
@@ -401,7 +468,16 @@ begin
         Continue;
       end;
 
-      if IsDirectoryValue then
+      EntryKind := ClassifyFileSystemEntry(Entry.Attributes,
+        Entry.UnixMode, EntryReason);
+      if EntryKind = fsekUnsupported then
+      begin
+        AddWarning('Skipped non-regular filesystem entry ' + RelativePath +
+          ' (' + EntryReason + ')');
+        Continue;
+      end;
+
+      if EntryKind = fsekDirectory then
       begin
         if EnterDirectory(AbsolutePath) then
           if not ScanDirectory(AbsolutePath, RelativePath) then
@@ -409,22 +485,13 @@ begin
       end
       else
       begin
-        FindResult := FindFirst(AbsolutePath, faAnyFile, SearchRecord);
-        if FindResult = 0 then
-        begin
-          try
-            if not ProcessFile(AbsolutePath, RelativePath,
-              SearchRecord.Size) then
-              Exit;
-          finally
-            FindClose(SearchRecord);
-          end;
-        end;
+        if not ProcessFile(AbsolutePath, RelativePath, Entry.Size) then
+          Exit;
       end;
     end;
     Result := True;
   finally
-    Names.Free;
+    Entries.Free;
   end;
 end;
 
@@ -450,6 +517,7 @@ var
   HashValue: string;
   InspectionSummary: string;
   I: Integer;
+  ManifestLimit: Int64;
   IsArtifact, IsBinary: Boolean;
 begin
   Result := False;
@@ -504,6 +572,25 @@ begin
   end;
   FTask.Artifacts.Add(Artifact);
   Inc(FTask.ArtifactsDetected);
+
+  if not IsBinary and (Definition.ParserKind <> pkNone) then
+  begin
+    ManifestLimit := ManifestSizeLimit(Definition.ParserKind);
+    if AFileSize < 0 then
+      Artifact.MessageText :=
+        'Manifest size is unavailable; parsing was not attempted.'
+    else if (ManifestLimit > 0) and (AFileSize > ManifestLimit) then
+      Artifact.MessageText := 'Manifest exceeds the size limit for ' +
+        Definition.ParserName + ': ' + IntToStr(AFileSize) +
+        ' bytes (maximum ' + IntToStr(ManifestLimit) + ' bytes).';
+    if Artifact.MessageText <> '' then
+    begin
+      Artifact.Status := arsFailed;
+      CountArtifactStatus(Artifact);
+      ReportProgress(True);
+      Exit(not IsCancelled);
+    end;
+  end;
 
   try
     if FTask.Settings.CalculateSHA256 and
@@ -623,7 +710,7 @@ end;
 
 function TScanEngine.Scan(ATask: TScanTask): Boolean;
 var
-  CompletedNormally: Boolean;
+  CompletedNormally, FinalizationAttempted: Boolean;
 begin
   FTask := ATask;
   FTask.Artifacts.Clear;
@@ -649,10 +736,12 @@ begin
   FRootCanonical := CanonicalPath(FTask.TargetDirectory);
   FVisitedDirectories.Add(FRootCanonical);
   CompletedNormally := False;
+  FinalizationAttempted := False;
   try
     if not DirectoryExists(FTask.TargetDirectory) then
       raise Exception.Create('The selected target directory does not exist');
     CompletedNormally := ScanDirectory(FTask.TargetDirectory, '');
+    FinalizationAttempted := True;
     FinalizeComponents;
     if IsCancelled or not CompletedNormally then
       FTask.Status := tsCancelled
@@ -661,9 +750,19 @@ begin
   except
     on E: Exception do
     begin
-      FinalizeComponents;
       FTask.Status := tsFailed;
       FTask.Errors.Add(E.Message);
+      if not FinalizationAttempted then
+      begin
+        FinalizationAttempted := True;
+        try
+          FinalizeComponents;
+        except
+          on FinalizationError: Exception do
+            FTask.Errors.Add('Unable to preserve partial component results: ' +
+              FinalizationError.Message);
+        end;
+      end;
     end;
   end;
   FTask.CompletedUTC := UTCNowISO8601;

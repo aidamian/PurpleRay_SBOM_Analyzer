@@ -19,6 +19,11 @@ The application uses one Object Pascal/Lazarus LCL codebase for Windows x64
   parsing for formats such as TOML, YAML, Gradle, and Ruby lock files.
 - Keeps unsupported and partially parsed artifacts visible instead of silently
   dropping them.
+- Skips pipes, sockets, devices, and other non-regular filesystem entries with
+  an explicit warning, and reports initial or mid-stream directory-enumeration
+  failures.
+- Applies deterministic 8 MiB, 32 MiB, or 64 MiB parser-specific input limits
+  before hashing or loading manifests into memory.
 - Uses applicable built-in OS evidence to enrich native binaries with declared
   linked libraries, build identifiers, signing metadata, or version resources.
 - Reads ELF dynamic entries, PE normal and delay-load imports, and Mach-O load
@@ -205,8 +210,14 @@ requirements, npm manifests and locks, Maven and MSBuild XML, atomic history
 recovery and location migration, database archive export, export naming,
 SHA-256, native binary headers and dependency tables, OS-evidence parsing,
 component deduplication,
+worker exception containment, bounded manifest parsing, case-preserving and
+glob-safe enumeration, special-file and permission handling,
 deterministic/path-safe CycloneDX generation, ignore matching, symbolic-link
-loops, and cancellation. Tests require no network or downloaded scanner.
+loops, and cancellation. Platform-inapplicable cases are reported explicitly
+as `SKIP`: Linux exercises literal wildcard and case-variant filenames, FIFOs,
+and `chmod`-based denial, while Windows exercises device/offline attribute and
+directory-enumeration error classification. The suite does not claim a Windows
+ACL-denial integration test. Tests require no network or downloaded scanner.
 
 For an explicit local invocation:
 
@@ -297,17 +308,28 @@ tests/                     deterministic non-UI test runner and fixtures
 .github/workflows/         native three-platform CI and release automation
 ```
 
-The tracked root `VERSION` file is the operator-managed version authority. It
-contains exactly one `MAJOR.MINOR.PATCH` value and may be edited directly; no
-version-setting helper script is mandatory. CI reads that file, generates
-`src/uVersionInfo.pas`, and updates the Lazarus PE version-resource fields in
-its ephemeral workspace using the same version and full commit SHA. Generated
-changes are never committed back to `main`.
+The tracked root `VERSION` file is the sole operator-managed version authority.
+It contains exactly one canonical `MAJOR.MINOR.PATCH` value: no prefix, suffix,
+or leading zero is accepted, and each numeric component must fit the Windows
+version-resource range (`0` through `65535`). No version-setting helper script
+is mandatory. CI reads that file, generates `src/uVersionInfo.pas`, and updates
+the Lazarus PE version-resource fields in its ephemeral workspace using the
+same version and full commit SHA. Generated changes are never committed back to
+`main`.
 
 The checked-in Pascal and Lazarus version fields are synchronized fallbacks for
-direct IDE builds. `scripts/write-version.sh` remains available as an optional
-convenience when an operator wants to synchronize them locally after editing
-`VERSION`.
+direct IDE builds. After editing `VERSION`, an operator can validate or
+synchronize those fallbacks with the optional helpers:
+
+```bash
+scripts/check-version.sh
+scripts/write-version.sh
+```
+
+The writer always reads the root `VERSION`; a supplied version is accepted only
+when it matches that file. Its commit defaults to `unknown` for checked-in local
+fallbacks. CI first runs the non-mutating check against the tracked fallbacks,
+then generates build-only metadata with the full commit SHA.
 
 The checked-in `src/app_icon.res` embeds the Windows/LCL icon. After changing
 `assets/app-icon.ico`, regenerate it with:

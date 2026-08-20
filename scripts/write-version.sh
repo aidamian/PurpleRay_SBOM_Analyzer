@@ -4,21 +4,39 @@
 
 set -euo pipefail
 
-if [[ $# -lt 2 || $# -gt 4 ]]; then
-  echo 'usage: write-version.sh VERSION COMMIT [UNIT_DESTINATION] [PROJECT_FILE]' >&2
+if [[ $# -gt 4 ]]; then
+  echo 'usage: write-version.sh [VERSION [COMMIT [UNIT_DESTINATION [PROJECT_FILE]]]]' >&2
   exit 2
 fi
 
-version=$1
-commit=$2
-unit_destination=${3:-src/uVersionInfo.pas}
-project_file=${4:-src/purpleray_sbom_analyzer.lpi}
-
-if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-  echo "invalid application version: $version" >&2
+repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+version_file="$repository_root/VERSION"
+if [[ ! -f $version_file ]]; then
+  echo "canonical VERSION file was not found: $version_file" >&2
   exit 2
 fi
-if [[ ! $commit =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+if [[ $(awk 'END { print NR }' "$version_file") -ne 1 ]]; then
+  echo 'VERSION must contain exactly one line.' >&2
+  exit 2
+fi
+
+canonical_version=$(<"$version_file")
+version_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+if [[ ! $canonical_version =~ $version_pattern ]]; then
+  echo "VERSION must contain MAJOR.MINOR.PATCH without prefixes, suffixes, or leading zeros: '$canonical_version'" >&2
+  exit 2
+fi
+
+version=${1:-$canonical_version}
+commit=${2:-unknown}
+unit_destination=${3:-"$repository_root/src/uVersionInfo.pas"}
+project_file=${4:-"$repository_root/src/purpleray_sbom_analyzer.lpi"}
+
+if [[ $version != "$canonical_version" ]]; then
+  echo "requested version '$version' differs from canonical VERSION '$canonical_version'" >&2
+  exit 2
+fi
+if [[ $commit != unknown && ! $commit =~ ^[0-9a-fA-F]{7,40}$ ]]; then
   echo "invalid Git commit: $commit" >&2
   exit 2
 fi
@@ -27,14 +45,9 @@ if [[ ! -f $project_file ]]; then
   exit 2
 fi
 
-numeric_version=${version%%[-+]*}
-IFS=. read -r major_version minor_version revision_version extra_version <<<"$numeric_version"
-if [[ -n ${extra_version:-} ]]; then
-  echo "invalid numeric application version: $numeric_version" >&2
-  exit 2
-fi
+IFS=. read -r major_version minor_version revision_version <<<"$version"
 for version_part in "$major_version" "$minor_version" "$revision_version"; do
-  if [[ ! $version_part =~ ^[0-9]+$ ]] || (( 10#$version_part > 65535 )); then
+  if (( 10#$version_part > 65535 )); then
     echo "version component is outside the Windows resource range: $version_part" >&2
     exit 2
   fi

@@ -44,6 +44,26 @@ type
     FOnProgress: TWorkerProgressEvent;
     FOnComplete: TWorkerCompleteEvent;
     {**
+      Records an unexpected worker failure without discarding partial results.
+
+      Parameters
+      ----------
+      AMessage
+        Diagnostic text to append to the task error collection.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if the diagnostic cannot be stored; task status is changed
+        before the allocation is attempted.
+    }
+    procedure MarkTaskFailed(const AMessage: string);
+
+    {**
       Reports whether TThread termination has been requested.
 
       Parameters
@@ -134,6 +154,25 @@ type
     procedure GenerateSBOM;
   protected
     {**
+      Runs the scanner and conditionally generates the completed task's SBOM.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      Exception
+        Scanner construction, execution, or teardown failures propagate to
+        Execute's last-resort containment boundary.
+    }
+    procedure PerformScan; virtual;
+
+    {**
       Owns the complete background scan/SBOM lifecycle and queues completion.
 
       Parameters
@@ -201,6 +240,18 @@ implementation
 
 uses
   uCycloneDX, uAtomicFiles, uSHA256, uTimeUtils;
+
+procedure TScanWorker.MarkTaskFailed(const AMessage: string);
+var
+  MessageValue: string;
+begin
+  FTask.Status := tsFailed;
+  MessageValue := Trim(AMessage);
+  if MessageValue = '' then
+    MessageValue := 'Unexpected scan failure';
+  if FTask.Errors.IndexOf(MessageValue) < 0 then
+    FTask.Errors.Add(MessageValue);
+end;
 
 constructor TScanWorker.Create(ATask: TScanTask; const ADataDirectory: string);
 begin
@@ -288,14 +339,16 @@ begin
   FTask.GeneratedSBOMSHA256 := Digest;
 end;
 
-procedure TScanWorker.Execute;
+procedure TScanWorker.PerformScan;
 var
   Engine: TScanEngine;
 begin
   Engine := TScanEngine.Create(@CancellationRequested, @EngineProgress);
   try
     Engine.Scan(FTask);
-    if (FTask.Status = tsCompleted) and not Terminated then
+    if Terminated and (FTask.Status = tsCompleted) then
+      FTask.Status := tsCancelled
+    else if FTask.Status = tsCompleted then
     begin
       try
         GenerateSBOM;
@@ -305,17 +358,42 @@ begin
         on E: Exception do
         begin
           FTask.Status := tsFailed;
-          FTask.Errors.Add('Unable to generate the CycloneDX file: ' + E.Message);
+          FTask.Errors.Add('Unable to generate the CycloneDX file: ' +
+            E.Message);
         end;
       end;
     end;
-    FTask.CompletedUTC := UTCNowISO8601;
-    FTask.DurationMS := DurationMilliseconds(FTask.StartedUTC,
-      FTask.CompletedUTC);
   finally
     Engine.Free;
   end;
-  TThread.Queue(Self, @DeliverCompletion);
+end;
+
+procedure TScanWorker.Execute;
+begin
+  try
+    try
+      PerformScan;
+    except
+      on E: Exception do
+        MarkTaskFailed('Unexpected scan failure (' + E.ClassName + '): ' +
+          E.Message);
+      else
+        MarkTaskFailed('Unexpected non-standard scan failure');
+    end;
+    try
+      FTask.CompletedUTC := UTCNowISO8601;
+      FTask.DurationMS := DurationMilliseconds(FTask.StartedUTC,
+        FTask.CompletedUTC);
+    except
+      on E: Exception do
+        MarkTaskFailed('Unable to finalize scan timing (' + E.ClassName +
+          '): ' + E.Message);
+      else
+        MarkTaskFailed('Unable to finalize scan timing');
+    end;
+  finally
+    TThread.Queue(Self, @DeliverCompletion);
+  end;
 end;
 
 end.
