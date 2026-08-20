@@ -38,6 +38,10 @@ only feature currently exposed, so no unfinished placeholder is shown.
 - Normalizes and deduplicates components, canonicalizes supported Package URLs,
   merges evidence paths, and emits stable CycloneDX 1.7 JSON with a primary
   component and directly evidenced dependency graph.
+- Preserves licenses and publishers explicitly declared by supported manifests,
+  and can add an operator-supplied organization/email as SBOM author metadata.
+- Marks each generated document as a post-build, incomplete best-effort
+  inventory using standard CycloneDX lifecycle and composition fields.
 - Persists scan history and settings as recoverable atomic JSON files.
 - Excludes absolute filesystem paths from the SBOM unless the user explicitly
   enables them for that scan.
@@ -49,7 +53,9 @@ discovered.
 ## Using the application
 
 Select **SBOM Analyzer**, choose **New Scan**, and select a folder, or drop a
-local folder onto the main window. Review the settings, then start the scan.
+local folder onto the main window. The settings dialog identifies that exact
+target in both its title and a copyable read-only field. Review the settings,
+then start the scan.
 The history pane keeps old tasks and has its own search box. Drag the vertical
 splitter to resize it. The detail tabs expose the summary, components,
 artifacts, generated JSON, warnings, and parser messages.
@@ -57,20 +63,32 @@ artifacts, generated JSON, warnings, and parser messages.
 **Export SBOM** suggests a filename beginning with the scan timestamp and
 folder name, for example
 `20260818_143205_example_00112233-4455-6677-8899-aabbccddeeff.cdx.json`.
-**Export all** creates one ZIP archive containing the complete persisted task
-history, settings, backups, diagnostic history files, and generated SBOMs.
+**Back up data...** creates one ZIP archive containing the complete persisted
+task history, settings, backups, diagnostic history files, and generated SBOMs.
+Both export commands ask before replacing an existing file and retain
+open-folder and copy-path actions in the footer after success.
 
 The default settings calculate SHA-256 hashes, do not follow symbolic links,
 and do not include absolute paths in exported data. Ignore patterns are
-editable. When link following is enabled, canonical paths prevent loops and
-links cannot leave the selected root unless the corresponding advanced option
-is also enabled.
+editable and can be restored to their built-in defaults. Optional SBOM author
+organization and email values persist locally. Absolute-path and outside-root
+choices reset before each scan unless **Remember absolute-path and outside-root
+choices for future scans** is explicitly selected; accepted one-off values
+still apply to that scan. When link following is enabled, canonical paths
+prevent loops and links cannot leave the selected root unless the corresponding
+advanced option is also enabled.
+
+Cancel always targets the running scan even when an older history row is
+selected, and asks for confirmation. `Escape` does not cancel while focus is in
+an edit, memo, or combo box. Closing during a scan offers to cancel and then
+finishes shutdown asynchronously so the UI thread remains responsive.
 
 Keyboard shortcuts:
 
 - `Ctrl+N` (`Cmd+N` on macOS): new scan
 - `Ctrl+E` (`Cmd+E` on macOS): export the selected SBOM
-- `Ctrl+C` (`Cmd+C` on macOS): copy the selected component or artifact row
+- `Ctrl+C` (`Cmd+C` on macOS): copy the selected summary, component, or
+  artifact row (including the full SHA-256 when its table cell is shortened)
 - `F5`: reload persisted history
 - `Escape`: cancel the active scan
 
@@ -217,7 +235,9 @@ Lazarus form designer.
 requirements, npm manifests and locks, Maven and MSBuild XML, atomic history
 recovery and location migration, database archive export, export naming,
 SHA-256, native binary headers and dependency tables, OS-evidence parsing,
-component deduplication,
+component deduplication, declared-license/publisher persistence and parsing,
+bounded SPDX-expression validation, CycloneDX author/lifecycle/composition
+metadata,
 worker exception containment, bounded manifest parsing, case-preserving and
 glob-safe enumeration, special-file and permission handling,
 application-shell/frame ownership and Lazarus resource registration,
@@ -276,12 +296,17 @@ Reliable parsers cover `package.json`, `package-lock.json`,
 `Directory.Packages.props`, `composer.json`, `composer.lock`, and Lazarus
 `*.lpi`/`*.lpk` files.
 
-The scanner also detects Yarn, pnpm, Cargo, Poetry, Pipfile, Conda, Gradle,
-RubyGems, vcpkg, Conan, Swift Package Manager, and CocoaPods evidence. Those
+The scanner also detects Yarn, pnpm, Cargo, `pyproject.toml`, Poetry, Pipfile,
+Conda, Gradle, RubyGems, vcpkg, Conan, Swift Package Manager, and CocoaPods
+evidence. Those
 formats use conservative partial parsing where a dependency can be identified
 without guessing; otherwise the artifact is marked unsupported. `LICENSE`,
 `COPYING`, and `NOTICE` variants are recorded only as possible license
-evidence—no license is inferred from a filename.
+evidence—no license is inferred from a filename or file contents. License and
+publisher values are emitted only when supported manifest fields declare them.
+A sole registry-valid SPDX declaration is serialized as an expression;
+multiple or non-SPDX declarations remain separate names without inventing an
+`AND`/`OR` relationship.
 
 Component versions are written to CycloneDX only when the scanned evidence
 identifies one exact version, such as a resolved lock-file version, an exact
