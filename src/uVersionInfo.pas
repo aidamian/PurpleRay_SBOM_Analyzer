@@ -29,7 +29,7 @@ interface
 const
   AppName = 'PurpleRay SBOM Analyzer';
   AppExecutableName = 'purpleray-sbom-analyzer';
-  AppVersion = '0.1.0-dev';
+  AppVersion = '0.3.4';
   AppCommit = 'unknown';
 
 {**
@@ -51,7 +51,7 @@ const
 function AbbreviatedCommit: string;
 
 {**
-  Combines semantic version and abbreviated commit metadata for the UI.
+  Returns the operator-managed product version for display in the UI.
 
   Parameters
   ----------
@@ -60,7 +60,7 @@ function AbbreviatedCommit: string;
   Returns
   -------
   string
-    Version alone or version followed by the short commit in parentheses.
+    The exact product version embedded in generated release metadata.
 
   Raises
   ------
@@ -69,9 +69,6 @@ function AbbreviatedCommit: string;
 function DisplayVersion: string;
 
 implementation
-
-uses
-  SysUtils;
 
 function AbbreviatedCommit: string;
 begin
@@ -83,13 +80,8 @@ begin
 end;
 
 function DisplayVersion: string;
-var
-  CommitValue: string;
 begin
   Result := AppVersion;
-  CommitValue := AbbreviatedCommit;
-  if CommitValue <> '' then
-    Result := Result + ' (' + CommitValue + ')';
 end;
 
 end.

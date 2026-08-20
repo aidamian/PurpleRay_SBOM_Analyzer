@@ -100,7 +100,7 @@ printf '%s\n' \
   'function AbbreviatedCommit: string;' \
   '' \
   '{**' \
-  '  Combines semantic version and abbreviated commit metadata for the UI.' \
+  '  Returns the operator-managed product version for display in the UI.' \
   '' \
   '  Parameters' \
   '  ----------' \
@@ -109,7 +109,7 @@ printf '%s\n' \
   '  Returns' \
   '  -------' \
   '  string' \
-  '    Version alone or version followed by the short commit in parentheses.' \
+  '    The exact product version embedded in generated release metadata.' \
   '' \
   '  Raises' \
   '  ------' \
@@ -129,13 +129,8 @@ printf '%s\n' \
   'end;' \
   '' \
   'function DisplayVersion: string;' \
-  'var' \
-  '  CommitValue: string;' \
   'begin' \
   '  Result := AppVersion;' \
-  '  CommitValue := AbbreviatedCommit;' \
-  "  if CommitValue <> '' then" \
-  "    Result := Result + ' (' + CommitValue + ')';" \
   'end;' \
   '' \
   'end.' >"$unit_temporary"

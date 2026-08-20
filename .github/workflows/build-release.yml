@@ -30,7 +30,7 @@ env:
 
 jobs:
   prepare:
-    name: Determine build version
+    name: Read build version
     runs-on: ubuntu-latest
     timeout-minutes: 3
     outputs:
@@ -45,29 +45,74 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Calculate semantic version
+      - name: Read operator-managed version
         id: version
         shell: bash
         env:
           PUBLISH_RELEASE: ${{ inputs.publish_release || false }}
         run: |
-          mode=development
-          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
-            mode=release
-          elif [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
-            if [[ "$PUBLISH_RELEASE" == true ]]; then
-              mode=release
-            else
-              mode=rebuild
-            fi
+          if [[ ! -f VERSION ]]; then
+            echo 'The tracked VERSION file is missing.' >&2
+            exit 1
           fi
-          scripts/calculate-version.sh "$mode" "$GITHUB_SHA" "$GITHUB_OUTPUT"
+          if [[ $(awk 'END { print NR }' VERSION) -ne 1 ]]; then
+            echo 'VERSION must contain exactly one line.' >&2
+            exit 1
+          fi
+
+          version=$(<VERSION)
+          version_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          if [[ ! "$version" =~ $version_pattern ]]; then
+            echo "VERSION must contain MAJOR.MINOR.PATCH without prefixes or suffixes: '$version'" >&2
+            exit 1
+          fi
+          IFS=. read -r major minor patch <<< "$version"
+          for version_part in "$major" "$minor" "$patch"; do
+            if (( 10#$version_part > 65535 )); then
+              echo "VERSION component exceeds the Windows resource limit: $version_part" >&2
+              exit 1
+            fi
+          done
+
+          tag="v${version}"
+          short_commit=$(git rev-parse --short=8 "$GITHUB_SHA")
+          tagged_commit=''
+          if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+            tagged_commit=$(git rev-list -n 1 "$tag")
+          fi
+          previous_tag=$(
+            git tag --merged "$GITHUB_SHA" --list 'v*' --sort=-v:refname |
+              grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' |
+              grep -vxF "$tag" |
+              head -n 1 || true
+          )
+
+          is_release=false
+          if [[ "$GITHUB_EVENT_NAME" == push && -z "$tagged_commit" ]]; then
+            # A push releases only when the operator has selected a VERSION
+            # that does not have a release tag yet.
+            is_release=true
+          elif [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$PUBLISH_RELEASE" == true ]]; then
+            if [[ -n "$tagged_commit" && "$tagged_commit" != "$GITHUB_SHA" ]]; then
+              echo "$tag already belongs to $tagged_commit; update VERSION before publishing." >&2
+              exit 1
+            fi
+            is_release=true
+          fi
+
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "previous_tag=$previous_tag"
+            echo "short_commit=$short_commit"
+            echo "is_release=$is_release"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Show selected version
         shell: bash
         run: |
           echo "Version: ${{ steps.version.outputs.version }}"
-          echo "Release: ${{ steps.version.outputs.is_release }}"
+          echo "Publish release: ${{ steps.version.outputs.is_release }}"
 
   build:
     name: ${{ matrix.config.name }}

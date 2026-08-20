@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Optional legacy version-suggestion helper. GitHub Actions does not invoke this
+# script, it never changes VERSION, and its output is not authoritative.
 set -euo pipefail
 
 if [[ $# -ne 3 ]]; then

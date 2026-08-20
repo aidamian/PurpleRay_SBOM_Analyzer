@@ -30,7 +30,7 @@ uses
   uModels, uSHA256, uBinaryInspector, uManifestParsers, uArtifactIdentifier,
   uTaskHistory, uJSONUtils, uComponentNormalizer, uCycloneDX, uIgnoreMatcher,
   uScanEngine, uPlatform, uSystemInspector, uNativeDependencyInspector,
-  uExportUtils;
+  uExportUtils, uVersionInfo;
 
 type
   TTestMethod = procedure;
@@ -206,6 +206,28 @@ begin
     SHA256String(''), 'SHA-256 empty vector differs');
   AssertEqual('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
     SHA256String('abc'), 'SHA-256 abc vector differs');
+end;
+
+{**
+  Verifies that the UI exposes the exact embedded product version.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised by the assertion helper when the display version diverges.
+}
+procedure TestDisplayedVersion;
+begin
+  AssertEqual(AppVersion, DisplayVersion,
+    'displayed version differs from the embedded product version');
 end;
 
 procedure TestRequirementsParser;
@@ -946,6 +968,7 @@ begin
     'purpleray-sbom-analyzer-tests-' + NewTaskID;
   ForceDirectories(TemporaryRoot);
   RunTest('SHA-256 vectors', @TestSHA256);
+  RunTest('displayed product version', @TestDisplayedVersion);
   RunTest('requirements parser', @TestRequirementsParser);
   RunTest('package.json parser', @TestPackageJSONParser);
   RunTest('package-lock.json parser', @TestPackageLockParser);

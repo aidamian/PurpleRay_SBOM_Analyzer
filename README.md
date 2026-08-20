@@ -297,10 +297,17 @@ tests/                     deterministic non-UI test runner and fixtures
 .github/workflows/         native three-platform CI and release automation
 ```
 
-`src/uVersionInfo.pas` is a development fallback. CI generates that unit and
-updates the Lazarus PE version-resource fields in its ephemeral workspace from
-the selected semantic version and full commit SHA; it never commits generated
-version changes back to `main`.
+The tracked root `VERSION` file is the operator-managed version authority. It
+contains exactly one `MAJOR.MINOR.PATCH` value and may be edited directly; no
+version-setting helper script is mandatory. CI reads that file, generates
+`src/uVersionInfo.pas`, and updates the Lazarus PE version-resource fields in
+its ephemeral workspace using the same version and full commit SHA. Generated
+changes are never committed back to `main`.
+
+The checked-in Pascal and Lazarus version fields are synchronized fallbacks for
+direct IDE builds. `scripts/write-version.sh` remains available as an optional
+convenience when an operator wants to synchronize them locally after editing
+`VERSION`.
 
 The checked-in `src/app_icon.res` embeds the Windows/LCL icon. After changing
 `assets/app-icon.ico`, regenerate it with:
@@ -327,23 +334,21 @@ obsolete runs, and preparation, dependency installation, builds, and publishing
 have bounded timeouts so a stalled hosted runner cannot consume minutes
 indefinitely. Markdown-only changes do not start the native build matrix.
 
-Pull requests get a `MAJOR.MINOR.PATCH-dev.<commit>` version, run all tests, and
-upload temporary packages without tags or releases. Pushes to `main` serialize
-release work, inspect conventional commit subjects since the latest reachable
-`vMAJOR.MINOR.PATCH` tag, then apply the highest required increment:
+Pull requests and branch builds use the exact version recorded in `VERSION`, run
+all tests, and upload temporary packages without changing it. GitHub Actions no
+longer calculates or increments semantic versions from commit messages.
 
-- `fix:` → patch
-- `feat:` → minor
-- `fix!:` / `feat!:` / `BREAKING CHANGE:` → major
-- no recognized prefix → patch
+A push to `main` publishes only when the operator-selected `vMAJOR.MINOR.PATCH`
+tag does not exist. Once that version has been released, later commits using the
+same `VERSION` still build and test but do not create another release. To publish
+the next release, edit `VERSION` to a new value and commit it. Manual workflow
+runs rebuild without publishing by default; when publishing is explicitly
+selected, the workflow rejects a version whose tag belongs to another commit.
 
-After every active native build succeeds, the workflow creates the tag and
-publishes the complete platform set together with `SHA256SUMS.txt`. Any failed
-platform keeps the workflow marked as failed and prevents a partial release. If
-the current commit is already version-tagged, that version is reused. Manual
-runs rebuild without publishing by default; publishing must be selected
-explicitly. Existing tags and releases are verified and updated idempotently
-instead of duplicated.
+After every active native build succeeds, the release workflow creates the tag
+and publishes the complete platform set together with `SHA256SUMS.txt`. Any
+failed platform keeps the workflow marked as failed and prevents a partial
+release. An existing tag on the same commit can be rebuilt idempotently.
 
 ### Verifying release provenance
 

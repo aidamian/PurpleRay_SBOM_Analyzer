@@ -61,7 +61,7 @@ begin
   RequireDerivedFormResource := True;
   Application.Scaled := True;
   Application.Initialize;
-  Application.Title := AppName;
+  Application.Title := AppName + ' ' + DisplayVersion;
   LoadApplicationIcon;
   Application.CreateForm(TMainForm, MainForm);
   Application.Run;
