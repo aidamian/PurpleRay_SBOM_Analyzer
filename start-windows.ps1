@@ -7,7 +7,7 @@ the BibTeX entry in NOTICE.
 #>
 
 $ErrorActionPreference = 'Stop'
-$ProjectRepository = 'aidamian/SBOM_Analyzer'
+$ProjectRepository = 'aidamian/PurpleRay_SBOM_Analyzer'
 
 function Stop-WithError {
     param([Parameter(Mandatory = $true)][string]$Message)

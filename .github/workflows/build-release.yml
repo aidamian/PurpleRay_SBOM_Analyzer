@@ -283,18 +283,26 @@ jobs:
           $expectedFileVersion = "$expectedVersion.0"
           $executable = Get-Item 'build/release/purpleray-sbom-analyzer.exe'
           $versionInfo = $executable.VersionInfo
-          $expectedMetadata = @{
+          $expectedMetadata = [ordered]@{
             ProductName = 'PurpleRay SBOM Analyzer'
             ProductVersion = $expectedVersion
             FileVersion = $expectedFileVersion
+            FileDescription = 'PurpleRay SBOM Analyzer'
             CompanyName = 'Andrei Ionut Damian'
+            InternalName = 'purpleray-sbom-analyzer'
             LegalCopyright = 'Copyright (c) 2026 Andrei Ionut Damian'
             OriginalFilename = 'purpleray-sbom-analyzer.exe'
           }
+          $metadataErrors = [System.Collections.Generic.List[string]]::new()
           foreach ($field in $expectedMetadata.Keys) {
             if ($versionInfo.$field -ne $expectedMetadata[$field]) {
-              throw "Invalid Windows $field metadata: '$($versionInfo.$field)'"
+              $metadataErrors.Add(
+                "$field expected '$($expectedMetadata[$field])', got '$($versionInfo.$field)'"
+              )
             }
+          }
+          if ($metadataErrors.Count -gt 0) {
+            throw "Invalid Windows version metadata:`n - $($metadataErrors -join "`n - ")"
           }
           $stage = 'build/package-windows'
           $package = 'dist/purpleray-sbom-analyzer-v${{ needs.prepare.outputs.version }}-windows-x64.zip'
@@ -442,12 +450,12 @@ jobs:
             echo 'Download an artifact and run:'
             echo
             echo '```text'
-            echo 'gh attestation verify <downloaded-file> --repo aidamian/SBOM_Analyzer'
+            echo 'gh attestation verify <downloaded-file> --repo aidamian/PurpleRay_SBOM_Analyzer'
             echo '```'
             echo
             echo '### Code signing policy'
             echo
-            echo 'Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). Signing will be activated after project approval. [Read the policy](https://github.com/aidamian/SBOM_Analyzer#code-signing-policy).'
+            echo 'Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). Signing will be activated after project approval. [Read the policy](https://github.com/aidamian/PurpleRay_SBOM_Analyzer#code-signing-policy).'
           } > release-notes.md
 
       - name: Create or update GitHub Release

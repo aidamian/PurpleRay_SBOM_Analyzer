@@ -17,7 +17,7 @@
     author = {Andrei Ionut Damian},
     title  = {{PurpleRay SBOM Analyzer}},
     year   = {2026},
-    url    = {https://github.com/aidamian/SBOM_Analyzer}
+    url    = {https://github.com/aidamian/PurpleRay_SBOM_Analyzer}
   }
 *)
 unit uScanSettingsDialog;

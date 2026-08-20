@@ -114,11 +114,22 @@ WSLg normally sets `WAYLAND_DISPLAY` and `DISPLAY` automatically. If neither is
 present, update WSL from Windows with `wsl --update`, restart it with
 `wsl --shutdown`, and open the WSL workspace again.
 
+### One-command release launchers
+
 To check WSL2/WSLg support, download the latest checksum-verified Linux release,
 and launch it in one command, run:
 
 ```bash
 ./start-wsl2.sh
+```
+
+To download that launcher directly from GitHub and run it in the current WSL2
+directory:
+
+```bash
+curl --fail --show-error --silent --location \
+  https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-wsl2.sh \
+  | bash
 ```
 
 The script creates a versioned directory such as
@@ -134,6 +145,14 @@ Native Linux users can use the equivalent launcher:
 ./start-linux.sh
 ```
 
+Or download and run it directly in the current directory:
+
+```bash
+curl --fail --show-error --silent --location \
+  https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-linux.sh \
+  | bash
+```
+
 The launcher stops before downloading anything unless `DISPLAY` or
 `WAYLAND_DISPLAY` identifies a graphical session. If it reports that no Linux
 UI is available, run it from a UI-enabled Linux desktop session with Wayland or
@@ -145,8 +164,19 @@ From Windows PowerShell, use:
 powershell -ExecutionPolicy Bypass -File .\start-windows.ps1
 ```
 
-Both launchers use the same versioned-directory layout and shared per-user
+Or download and run it directly in the current PowerShell directory:
+
+```powershell
+irm 'https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-windows.ps1' | iex
+```
+
+All three launchers use the same versioned-directory layout and shared per-user
 `.purpleray/sbom-analyzer` data directory.
+
+The macOS release build is currently paused and there is no macOS root launcher
+yet. Do not pipe `start-linux.sh` into Bash on macOS: it deliberately accepts
+Linux only. A macOS one-line command will be added when that release target is
+re-enabled.
 
 The current Windows release is not Authenticode-signed. Windows 11 Smart App
 Control can therefore block it, and Windows does not provide a per-application
@@ -323,14 +353,14 @@ exact SHA-256 digest with a build from this repository:
 
 ```bash
 gh attestation verify purpleray-sbom-analyzer-vX.Y.Z-linux-x64 \
-  --repo aidamian/SBOM_Analyzer
+  --repo aidamian/PurpleRay_SBOM_Analyzer
 ```
 
 For Windows, pass the downloaded ZIP instead:
 
 ```powershell
 gh attestation verify .\purpleray-sbom-analyzer-vX.Y.Z-windows-x64.zip `
-  --repo aidamian/SBOM_Analyzer
+  --repo aidamian/PurpleRay_SBOM_Analyzer
 ```
 
 The command requires the GitHub CLI and network access only for explicit
@@ -348,7 +378,7 @@ the Foundation approves the project and supplies its project identifiers.
 
 - Committers and reviewers: [Andrei Ionut Damian](https://github.com/aidamian)
 - Approvers: [Andrei Ionut Damian](https://github.com/aidamian)
-- Source repository: <https://github.com/aidamian/SBOM_Analyzer>
+- Source repository: <https://github.com/aidamian/PurpleRay_SBOM_Analyzer>
 - Release artifacts are built exclusively from this repository by GitHub
   Actions on GitHub-hosted runners.
 - Every release signing request requires manual approval by the signing
@@ -381,7 +411,7 @@ software, please cite the original project:
   author = {Andrei Ionut Damian},
   title  = {{PurpleRay SBOM Analyzer}},
   year   = {2026},
-  url    = {https://github.com/aidamian/SBOM_Analyzer}
+  url    = {https://github.com/aidamian/PurpleRay_SBOM_Analyzer}
 }
 ```
 

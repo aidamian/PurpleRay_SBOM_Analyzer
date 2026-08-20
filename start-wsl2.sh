@@ -6,7 +6,7 @@
 
 set -Eeuo pipefail
 
-readonly PROJECT_URL='https://github.com/aidamian/SBOM_Analyzer'
+readonly PROJECT_URL='https://github.com/aidamian/PurpleRay_SBOM_Analyzer'
 
 # Print an error and stop.
 fail() {

@@ -6,7 +6,7 @@
 
 set -Eeuo pipefail
 
-readonly PROJECT_URL='https://github.com/aidamian/SBOM_Analyzer'
+readonly PROJECT_URL='https://github.com/aidamian/PurpleRay_SBOM_Analyzer'
 
 fail() {
   printf 'start-linux.sh: %s\n' "$1" >&2
