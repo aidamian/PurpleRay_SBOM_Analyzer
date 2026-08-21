@@ -1710,6 +1710,11 @@ begin
     Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'scripts' +
       DirectorySeparator + 'validate-package-manifests.py');
     PackageValidatorText := Lines.Text;
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      '.gitattributes');
+    AssertTrue((Lines.IndexOf('LICENSE text eol=lf') >= 0) and
+      (Lines.IndexOf('NOTICE text eol=lf') >= 0),
+      'release notices are no longer forced to byte-stable LF checkouts');
 
     AssertTrue(Pos('cancel-in-progress: ${{ github.event_name == ' +
       '''pull_request'' }}', WorkflowText) > 0,
