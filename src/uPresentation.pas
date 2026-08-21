@@ -57,12 +57,14 @@ function LocalTimestampText(const AValue: string): string;
   Parameters
   ----------
   ATask
-    Scan task whose warning, error, and empty-scan state is inspected.
+    Scan task whose warning, error, empty-scan, and known-issue state is
+    inspected.
 
   Returns
   -------
   Boolean
-    True when the task completed with warnings, errors, or no inspected files.
+    True when the task completed with warnings, errors, no inspected files, or
+    one or more matched known-issue advisories.
 
   Raises
   ------
@@ -223,7 +225,8 @@ function TaskNeedsReview(ATask: TScanTask): Boolean;
 begin
   Result := (ATask <> nil) and (ATask.Status = tsCompleted) and
     ((ATask.Warnings.Count > 0) or (ATask.Errors.Count > 0) or
-    (ATask.FilesInspected = 0));
+    (ATask.FilesInspected = 0) or
+    (ATask.KnownIssueCheck.MatchCount > 0));
 end;
 
 function TaskStatusDisplayText(ATask: TScanTask): string;
@@ -280,6 +283,7 @@ begin
   if ATask = nil then
     Exit;
   Result := ATask.Warnings.Count + ATask.Errors.Count;
+  Inc(Result, ATask.KnownIssueCheck.MatchCount);
   for I := 0 to ATask.Artifacts.Count - 1 do
     if Trim(TArtifact(ATask.Artifacts[I]).MessageText) <> '' then
       Inc(Result);

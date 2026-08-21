@@ -163,7 +163,7 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Installed-Size: $installed_size
-Depends: libc6 (>= 2.34), libgtk-3-0
+Depends: ca-certificates, libc6 (>= 2.34), libgtk-3-0, libssl3
 Maintainer: Andrei Ionut Damian <aidamian@users.noreply.github.com>
 Homepage: https://github.com/aidamian/PurpleRay_SBOM_Analyzer
 Description: local CycloneDX SBOM generator and comparison tool
@@ -175,10 +175,11 @@ find "$debian_stage" -exec touch --date="@$source_date_epoch" {} +
 SOURCE_DATE_EPOCH="$source_date_epoch" \
   dpkg-deb --root-owner-group --build "$debian_stage" "$debian_package"
 
+expected_dependencies='ca-certificates, libc6 (>= 2.34), libgtk-3-0, libssl3'
 if [[ $(dpkg-deb --field "$debian_package" Package) != 'purpleray-sbom-analyzer' ||
       $(dpkg-deb --field "$debian_package" Version) != "$version" ||
       $(dpkg-deb --field "$debian_package" Architecture) != 'amd64' ||
-      $(dpkg-deb --field "$debian_package" Depends) != 'libc6 (>= 2.34), libgtk-3-0' ]]; then
+      $(dpkg-deb --field "$debian_package" Depends) != "$expected_dependencies" ]]; then
   echo 'Debian control metadata verification failed.' >&2
   exit 1
 fi

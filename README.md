@@ -3,10 +3,11 @@
 PurpleRay SBOM Analyzer is a small, native desktop application that inventories
 local software artifacts and produces deterministic CycloneDX 1.7 JSON. The
 serializer retains tested CycloneDX 1.6 compatibility. It scans without network
-access and never executes files from the selected folder. Its native parsers
-are supplemented, when applicable, by bounded static-inspection facilities
-already present on the operating system; it never downloads or requires a
-separate scanner.
+access by default and never executes files from the selected folder. An
+explicit, per-scan OSV.dev check can send only eligible versioned Package URLs
+after the inventory SBOM has been written; it is unchecked again every time.
+Its native parsers read each artifact through one verified, size-bounded input;
+the application never downloads or requires a separate scanner.
 
 Published builds support Windows x64 and Linux x64 (GTK3), including Linux
 under WSL2 with WSLg. The Cocoa code and packaging are experimental and
@@ -39,8 +40,10 @@ package, then install it:
 - **WSL2:** use the Linux tar package from a WSL2 distribution with WSLg.
 
 The Linux build requires x86-64, glibc 2.34 or newer, GTK3, and a working
-Wayland or X11 display. WSL2 additionally requires WSLg. macOS builds are not
-currently shipped.
+Wayland or X11 display. The optional online OSV.dev check additionally needs
+the OpenSSL 3 runtime and a system CA certificate store; the Debian package
+declares those dependencies. WSL2 additionally requires WSLg. macOS builds are
+not currently shipped.
 
 ### One-line launchers
 
@@ -121,8 +124,10 @@ For a small application folder:
 
 1. Launch PurpleRay, leave **SBOM Analyzer** selected, choose **New Scan**, and
    select the folder.
-2. Review the safe offline defaults and choose **Start Scan**.
-3. When the task completes, choose **Export SBOM** to save the CycloneDX JSON.
+2. Review the safe offline defaults, leave the online check unchecked, and
+   choose **Start Scan**.
+3. When the task completes, choose **Export...**, then **CycloneDX SBOM...**,
+   to save the inventory JSON.
 
 ![PurpleRay SBOM Analyzer main window](docs/purpleray-sbom-analyzer.png)
 
@@ -173,18 +178,28 @@ PurpleRay-managed data; export a backup from the application first if needed.
 - Normalizes and deduplicates components, canonicalizes supported Package URLs,
   merges evidence paths, and emits stable CycloneDX 1.7 JSON with a primary
   component and directly evidenced dependency graph.
+- Emits deterministic CycloneDX occurrence locations and preserves supported
+  lock-file hashes as explicitly declared, not locally verified, evidence.
 - Preserves licenses and publishers explicitly declared by supported manifests,
   and can add an operator-supplied organization/email as SBOM author metadata.
 - Marks each generated document as a post-build, incomplete best-effort
   inventory using standard CycloneDX lifecycle and composition fields.
 - Persists scan history and settings as recoverable atomic JSON files.
+- Can perform an explicitly requested, bounded OSV.dev point-in-time lookup
+  after the immutable inventory is written, without adding vulnerability data
+  to that CycloneDX document.
+- Can export a separate, deterministic
+  [BSI TR-03183-2 v2.1.0](https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/tr-03183.html)
+  readiness report that lists observed and missing fields without claiming
+  compliance.
 - Compares any two completed retained scans without reading the targets again.
 - Excludes absolute filesystem paths from the SBOM unless the user explicitly
   enables them for that scan.
 
-This is static, best-effort inventory. It is not a vulnerability scanner, a
-license-compliance assessment, or a guarantee that every dependency can be
-discovered.
+This is static, best-effort inventory. Its optional OSV.dev lookup is not a
+comprehensive vulnerability scanner; the application is also not a
+license-compliance assessment or a guarantee that every dependency can be
+discovered. A lookup with no finding is not a clean bill of health.
 
 ## Using the application
 
@@ -215,7 +230,13 @@ and evidence-path differences alone are not reported as component changes in
 this release. Target, diagnostic, and scanner-version differences are shown as
 cautions.
 
-**Export SBOM** suggests a filename beginning with the scan timestamp and
+**Export...** offers the immutable **CycloneDX SBOM...** and a separate
+**BSI TR-03183-2 v2.1.0 readiness report...**. The latter verifies the managed
+SBOM bytes against their stored SHA-256 and reports deterministic field-level
+gaps; it is not a BSI compliance certificate and does not alter the SBOM or
+task history. Its closed JSON contract is published as
+[`purpleray-bsi-readiness-v1.schema.json`](schemas/purpleray-bsi-readiness-v1.schema.json).
+The SBOM export suggests a filename beginning with the scan timestamp and
 folder name, for example
 `20260818_143205_example_00112233-4455-6677-8899-aabbccddeeff.cdx.json`.
 **Back up data...** creates one ZIP archive containing the complete persisted
@@ -259,7 +280,7 @@ Keyboard shortcuts:
 - `Ctrl+N`: new scan
 - `Ctrl+1`: switch to SBOM Analyzer
 - `Ctrl+2`: switch to Compare Scans
-- `Ctrl+E`: export the selected SBOM
+- `Ctrl+E`: open export choices for the selected completed task
 - `Ctrl+C`: copy the selected summary, component, or
   artifact row, or selected comparison rows (including full values hidden by
   compact table cells)
@@ -284,12 +305,26 @@ scan-settings object or the desktop wrapper
 `{"format_version":1,"scan_settings":{...}}`. Without a settings file, the
 command uses safe offline defaults.
 
-Headless scans never read, write, or migrate desktop history and settings.
+Headless scans are structurally offline and never read, write, or migrate
+desktop history and settings.
 They atomically replace the requested output, print warnings on standard
 error, and print `SBOM written: <absolute path>` on success. Exit status `0`
 means success, `1` means a scan/settings/output failure, and `2` means invalid
 command syntax. Use `--help` (or `-h`) and `--version` for concise command
 information.
+
+The final desktop scan-settings choice, **Check identified packages for known
+issues with OSV.dev (online)**, is always unchecked when the dialog opens and
+is never saved as a default. If explicitly selected, PurpleRay first writes
+and hashes the inventory SBOM, then sends only canonical, exact-version Package
+URLs from supported ecosystems to the fixed OSV.dev batch endpoint. It does
+not upload source files, file paths, the SBOM, author details, generic Package
+URLs, qualifiers, or subpaths. The task retains only the check time, bounded
+outcome and counts, and advisory-to-Package-URL matches; raw requests, raw
+responses, pagination tokens, and rejected coordinate values are not
+persisted. Network failure or cancellation does not invalidate the completed
+inventory. Results are point-in-time advisory matches, and no finding is not a
+clean bill of health.
 
 ## Development
 
@@ -373,7 +408,9 @@ shared-history ownership and safe task deletion, deterministic component
 identity reconciliation and directional scan comparison,
 deterministic/path-safe CycloneDX 1.6/1.7 generation, root-component promotion,
 observed dependency edges, honest version/scope fields, Package URL
-normalization, ignore matching, symbolic-link loops, and cancellation.
+normalization, declared hashes and occurrence locations, bounded fake-transport
+OSV.dev pagination/failure/cancellation, privacy-minimized known-issue history,
+ignore matching, symbolic-link loops, and cancellation.
 Platform-inapplicable cases are reported explicitly as `SKIP`: Linux exercises
 literal wildcard and case-variant filenames, FIFOs, and `chmod`-based denial,
 while Windows exercises device/offline attribute and directory-enumeration
@@ -409,7 +446,8 @@ problem is reported without silently discarding the old data.
 Files in that directory are user data:
 
 - `settings.json`: last-used scan settings
-- `history.json`: task history, artifact records, and normalized components
+- `history.json`: task history, artifact records, normalized components, and
+  privacy-minimized outcomes from explicitly requested OSV.dev checks
 - `history.json.bak`: previous valid history
 - `history.corrupt-<timestamp>.json`: a malformed history preserved for
   diagnosis
@@ -421,6 +459,11 @@ backup retained. A malformed active history is preserved and the backup is
 loaded when valid. Both compiled features use one shared in-memory history
 service, so completed scans and deletions become visible without maintaining
 divergent copies of the task database.
+
+Known-issue history contains no raw network payload, pagination token, rejected
+coordinate value, file path sent to OSV.dev, or remembered online-consent flag.
+The generated CycloneDX file remains inventory-only and byte-identical whether
+the post-export check is selected or not.
 
 ## Supported evidence
 
@@ -440,6 +483,14 @@ publisher values are emitted only when supported manifest fields declare them.
 A sole registry-valid SPDX declaration is serialized as an expression;
 multiple or non-SPDX declarations remain separate names without inventing an
 `AND`/`OR` relationship.
+
+When supported lock files declare cryptographic package/archive hashes,
+PurpleRay preserves canonical SHA-1, SHA-256, SHA-384, and SHA-512 values in
+the component's CycloneDX hashes and emits a deterministic provenance property.
+Those values are labeled `declared-not-locally-verified`: they describe the
+lock-file declaration and are not a claim that PurpleRay downloaded or
+rehashed the referenced package archive. Component occurrence locations are
+the privacy-filtered union of directly observed source and evidence paths.
 
 Component versions are written to CycloneDX only when the scanned evidence
 identifies one exact version, such as a resolved lock-file version, an exact
@@ -463,6 +514,54 @@ SBOM may include a checksum-qualified `pkg:generic` identifier. PE
 `CompanyName` and `ProductName` values may also produce a clearly marked,
 conservative CPE candidate. These are inventory evidence synthesized from the
 file itself, not a package-registry or NVD CPE-dictionary resolution.
+
+## Handoff to vulnerability scanners
+
+PurpleRay's optional OSV.dev check is a bounded, point-in-time convenience over
+eligible exact Package URLs. Deeper vulnerability analysis remains a separate,
+time-sensitive handoff. Export the inventory SBOM, then pass that file to a
+scanner you trust. The external tool's findings do not modify PurpleRay
+history or the original CycloneDX document.
+
+[Grype](https://oss.anchore.com/docs/guides/vulnerability/scan-targets/)
+accepts CycloneDX files through its `sbom:` source. Fetch or refresh its public
+database while connected:
+
+```bash
+grype db update
+```
+
+The same database can then be used without an update check or external package
+lookups:
+
+```bash
+GRYPE_DB_AUTO_UPDATE=false \
+GRYPE_CHECK_FOR_APP_UPDATE=false \
+GRYPE_EXTERNAL_SOURCES_ENABLE=false \
+grype sbom:./example.cdx.json --output json --file ./grype-report.json
+```
+
+[OSV-Scanner](https://google.github.io/osv-scanner/usage/) can download the
+public databases needed by the ecosystems present in an SBOM without sending
+the package list to the query service:
+
+```bash
+osv-scanner scan source --offline --offline-vulnerabilities \
+  --download-offline-databases --no-resolve \
+  --lockfile ./example.cdx.json
+```
+
+After that one connected database refresh, omit
+`--download-offline-databases` to keep the check offline. OSV-Scanner v2 uses
+the SBOM filename suffix to identify its format; keep `.cdx.json`. The
+databases can be large and age quickly, so refresh them deliberately before a
+release or audit. A finding is evidence to investigate, while no finding is
+not a clean bill of health.
+
+CI verifies this independent handoff against a generated, synthetic
+`lodash@4.17.20` fixture. It checksum-pins Grype, OSV-Scanner, and immutable
+database snapshots, then runs both tools configured for offline operation.
+Neither scanner is packaged, invoked by, or required to run PurpleRay.
 
 ## Project layout
 
@@ -581,7 +680,8 @@ gh attestation verify .\purpleray-sbom-analyzer-vX.Y.Z-windows-x64.zip `
 ```
 
 The command requires the GitHub CLI and network access only for explicit
-verification; the application itself remains offline. Attestations establish
+verification; application scans remain offline unless the operator explicitly
+selects the per-scan OSV.dev check. Attestations establish
 which repository, commit, and workflow produced a file. They complement the
 published checksums but are not Authenticode signatures and do not cause
 Windows to trust an otherwise unsigned executable.
@@ -605,9 +705,11 @@ the Foundation approves the project and supplies its project identifiers.
 
 This program will not transfer any information to other networked systems
 unless specifically requested by the user or the person installing or
-operating it. The application performs scans locally without network access.
-The optional launcher scripts contact GitHub only when the user runs them to
-request and download a release.
+operating it. Inventory scanning and headless operation are local and offline.
+The desktop OSV.dev choice is unchecked every time and, when selected, sends
+only eligible exact-version Package URLs after the managed SBOM is complete;
+the UI discloses this before the scan begins. Optional launcher scripts contact
+GitHub only when the user runs them to request and download a release.
 
 ## License
 
@@ -650,4 +752,6 @@ appropriately using the citation above.
   PE, and Mach-O binaries, but the scanner does not invoke a loader, execute
   targets, resolve libraries to host-specific absolute paths, or infer every
   transitive/runtime-loaded dependency. It also does not contact registries,
-  execute package managers, or evaluate build scripts.
+  execute package managers, or evaluate build scripts. The explicitly selected
+  OSV.dev check is a separate post-inventory advisory query, not dependency
+  discovery.

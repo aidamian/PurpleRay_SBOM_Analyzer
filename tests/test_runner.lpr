@@ -34,7 +34,8 @@ uses
   uExportUtils, uVersionInfo, uScanWorker, uPresentation, uSPDXExpressions,
   uComponentComparison, uCommandLine, uScanService, uAtomicFiles,
   uVerifiedInput, uArchiveInspector, uBinaryIdentifiers, uBoundedBinaryReader,
-  uPEVersionInfo, uScanAnalysis, uScanPool, uScanCache, uSettingsStore;
+  uPEVersionInfo, uScanAnalysis, uScanPool, uScanCache, uSettingsStore,
+  uOSVCore, uKnownIssues, uKnownIssueService, uBSIReadiness;
 
 type
   TTestMethod = procedure;
@@ -2464,9 +2465,14 @@ begin
       Pos('object FCalculateSHA256: TCheckBox', SettingsResource)),
       'settings checkbox visual order differs from the privacy workflow');
 
-    AssertEqual(2, CountTextOccurrences(AnalyzerSource,
+    AssertEqual(3, CountTextOccurrences(AnalyzerSource,
       'Dialog.Options := Dialog.Options + [ofOverwritePrompt]'),
-      'both export dialogs must request overwrite confirmation');
+      'all three export dialogs must request overwrite confirmation');
+    AssertTrue((Pos(
+      'Caption = ''BSI TR-03183-2 v2.1.0 readiness report...''',
+      AnalyzerResource) > 0) and
+      (Pos('OnClick = ExportBSIReadinessClicked', AnalyzerResource) > 0),
+      'the BSI readiness export action is missing or not wired');
     AssertTrue(Pos('Caption = ''Back up data...''', AnalyzerResource) > 0,
       'the database backup action has an ambiguous caption');
     AssertTrue(Pos('Caption = ''Created (local)''', AnalyzerResource) > 0,
@@ -6612,6 +6618,7 @@ begin
 end;
 
 {$I sprint7_regressions.inc}
+{$I sprint8_regressions.inc}
 
 begin
   ProjectRoot := ExpandFileName(ExtractFilePath(ParamStr(0)) + '..' +
@@ -6682,6 +6689,7 @@ begin
   RunTest('empty-directory warning', @TestEmptyDirectoryWarning);
   RunTest('scan cancellation', @TestScanCancellation);
   RunSprint7RegressionTests;
+  RunSprint8RegressionTests;
   WriteLn(Format('%d tests: %d passed, %d failed, %d skipped',
     [TestCount, PassCount, FailureCount, SkipCount]));
   RemoveTemporaryTree(TemporaryRoot);

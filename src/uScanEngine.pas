@@ -1614,6 +1614,7 @@ begin
   FTask.Warnings.Clear;
   FTask.Errors.Clear;
   FTask.InspectionTools.Clear;
+  FTask.KnownIssueCheck.Clear;
   FTask.FilesInspected := 0;
   FTask.BytesInspected := 0;
   FTask.ArtifactsDetected := 0;

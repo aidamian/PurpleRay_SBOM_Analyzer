@@ -172,10 +172,12 @@ type
       ------
       EAccessViolation
         Raised when ATasks is nil or contains incompatible objects.
-      EJSON, EOutOfMemory
-        Propagated if deterministic UTF-8 serialization cannot complete.
+      EJSONParser, EScannerError, EJSON, EOutOfMemory
+        Propagated if deterministic UTF-8 serialization or the matching
+        strict-reader preflight cannot complete.
       EFCreateError, EWriteError, EInOutError
-        Propagated by atomic persistence.
+        Propagated when the complete history exceeds the matching read limit
+        or atomic persistence fails.
     }
     procedure Save(ATasks: TObjectList);
 
@@ -1094,6 +1096,7 @@ procedure TTaskHistoryStore.Save(ATasks: TObjectList);
 var
   Root: TJSONObject;
   TasksArray: TJSONArray;
+  ValidationData: TJSONData;
   I: Integer;
   Content: UTF8String;
 begin
@@ -1105,6 +1108,13 @@ begin
       TasksArray.Add(TScanTask(ATasks[I]).ToJSON);
     Root.Add('tasks', TasksArray);
     Content := SerializeJSONUTF8(Root, [], 2, True);
+    FreeAndNil(Root);
+    if Int64(Length(Content)) > DefaultMaximumJSONBytes then
+      raise EWriteError.CreateFmt(
+        'Task history exceeds the %d-byte persistence limit',
+        [DefaultMaximumJSONBytes]);
+    ValidationData := ParseStrictUTF8JSON(RawByteString(Content));
+    ValidationData.Free;
     WriteAtomicUTF8(HistoryFileName, Content, True);
   finally
     Root.Free;

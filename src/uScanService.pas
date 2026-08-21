@@ -27,7 +27,7 @@ unit uScanService;
 interface
 
 uses
-  SysUtils, uModels, uScanEngine, uSHA256;
+  SysUtils, uModels, uOSVCore, uScanEngine, uSHA256;
 
 type
   TScanOutputPolicy = (
@@ -92,6 +92,11 @@ function ResolveScanOutputFileName(const ATargetDirectory,
     Optional application-data directory for the explicitly enabled GUI rescan
     cache. An empty value disables cache access regardless of task settings;
     command-line callers intentionally retain that default.
+  ARunKnownIssueCheck
+    Explicit per-scan opt-in. False preserves the offline inventory-only path.
+  AOSVTransport
+    Injected verified transport used only when ARunKnownIssueCheck is True.
+    A nil transport records a bounded unavailable outcome without networking.
 
   Returns
   -------
@@ -117,12 +122,14 @@ function ExecuteScanToFile(ATask: TScanTask; const AOutputFileName: string;
   ACancelCheck: TCancelCheck = nil;
   AProgressCallback: TScanProgressCallback = nil;
   AOutputPolicy: TScanOutputPolicy = sopRequireOutsideTarget;
-  const ACacheProfileDirectory: string = ''): Boolean;
+  const ACacheProfileDirectory: string = '';
+  ARunKnownIssueCheck: Boolean = False;
+  const AOSVTransport: IOSVTransport = nil): Boolean;
 
 implementation
 
 uses
-  uAtomicFiles, uCycloneDX, uPlatform, uTimeUtils;
+  uAtomicFiles, uCycloneDX, uKnownIssueService, uPlatform, uTimeUtils;
 
 {**
   Pins and revalidates the strict command-line output parent.
@@ -269,7 +276,8 @@ end;
 function ExecuteScanToFile(ATask: TScanTask; const AOutputFileName: string;
   ACancelCheck: TCancelCheck; AProgressCallback: TScanProgressCallback;
   AOutputPolicy: TScanOutputPolicy;
-  const ACacheProfileDirectory: string): Boolean;
+  const ACacheProfileDirectory: string; ARunKnownIssueCheck: Boolean;
+  const AOSVTransport: IOSVTransport): Boolean;
 var
   Content: UTF8String;
   CacheDiagnostic, Digest, OutputFileName, OutputLeafName: string;
@@ -277,6 +285,25 @@ var
   ExecutionOptions: TScanExecutionOptions;
   OutputDirectoryPin: TPinnedDirectory;
   PinnedOutputActivated: Boolean;
+  Progress: TScanProgress;
+
+  procedure RecordKnownIssueFailure;
+  begin
+    { The inventory transaction is already complete. Even allocation failure
+      while recording the optional lookup must not invalidate that output. }
+    try
+      ATask.KnownIssueCheck.MarkUnavailable(UTCNowISO8601,
+        'lookup-failed',
+        'The optional OSV.dev known-issue check failed locally.');
+      if ATask.Warnings.IndexOf(
+        'The optional OSV.dev known-issue check did not complete.') < 0 then
+        ATask.Warnings.Add(
+          'The optional OSV.dev known-issue check did not complete.');
+    except
+      { Preserve the completed inventory if diagnostic allocation also fails. }
+    end;
+  end;
+
 begin
   if ATask = nil then
     raise EArgumentNilException.Create('Scan task must not be nil');
@@ -355,6 +382,31 @@ begin
           AddTaskError(ATask, 'Unable to generate the CycloneDX file: ' +
             E.Message);
         end;
+      end;
+    end;
+
+    { Online enrichment is deliberately sequenced after inventory activation,
+      digesting, and cache commit. Its outcome cannot alter the managed SBOM
+      bytes or invalidate an otherwise completed inventory. }
+    if (ATask.Status = tsCompleted) and ARunKnownIssueCheck then
+    begin
+      try
+        Progress.CurrentRelativePath :=
+          'Checking known issues with OSV.dev...';
+        Progress.FilesInspected := ATask.FilesInspected;
+        Progress.BytesInspected := ATask.BytesInspected;
+        Progress.ArtifactsDetected := ATask.ArtifactsDetected;
+        Progress.ComponentsIdentified := ATask.ComponentsIdentified;
+        Progress.ElapsedMS := DurationMilliseconds(ATask.StartedUTC,
+          UTCNowISO8601);
+        if Assigned(AProgressCallback) then
+          AProgressCallback(Progress);
+        ExecuteKnownIssueCheck(ATask, AOSVTransport, ACancelCheck);
+      except
+        on Exception do
+          RecordKnownIssueFailure;
+        else
+          RecordKnownIssueFailure;
       end;
     end;
 

@@ -1,47 +1,60 @@
 object ScanSettingsDialog: TScanSettingsDialog
   Left = 330
-  Height = 680
+  Height = 500
   Top = 100
   Width = 620
   BorderStyle = bsDialog
   Caption = 'Scan settings'
-  ClientHeight = 680
+  ClientHeight = 500
   ClientWidth = 620
-  Constraints.MinHeight = 620
+  Constraints.MinHeight = 486
   Constraints.MinWidth = 540
   Position = poScreenCenter
   LCLVersion = '3.0.0.3'
-  object SettingsContentPanel: TPanel
+  object SettingsScrollBox: TScrollBox
     Left = 0
-    Height = 634
+    Height = 454
     Top = 0
     Width = 620
     Align = alClient
-    BevelOuter = bvNone
-    ClientHeight = 634
+    HorzScrollBar.Visible = False
+    VertScrollBar.Increment = 24
+    VertScrollBar.Tracking = True
+    BorderStyle = bsNone
+    ClientHeight = 454
     ClientWidth = 620
     TabOrder = 0
-    object DescriptionTopSpacer: TPanel
+    object SettingsContentPanel: TPanel
       Left = 0
-      Height = 12
+      Height = 694
       Top = 0
       Width = 620
-      Anchors = [akTop, akLeft, akRight]
+      Align = alTop
       BevelOuter = bvNone
-      ClientHeight = 12
+      ClientHeight = 694
       ClientWidth = 620
-      TabOrder = 12
-    end
-    object DescriptionLabel: TLabel
-      Left = 12
-      Height = 44
-      Top = 12
-      Width = 596
-      Anchors = [akTop, akLeft, akRight]
-      AutoSize = False
-      Caption = 'Review the selected target and choose how this scan treats paths, symbolic links, hashes, verified cache data, and ignored files.'
-      WordWrap = True
-    end
+      TabOrder = 0
+      object DescriptionTopSpacer: TPanel
+        Left = 0
+        Height = 12
+        Top = 0
+        Width = 620
+        Anchors = [akTop, akLeft, akRight]
+        BevelOuter = bvNone
+        ClientHeight = 12
+        ClientWidth = 620
+        TabOrder = 13
+      end
+      object DescriptionLabel: TLabel
+        Left = 12
+        Height = 44
+        Top = 12
+        Width = 596
+        Anchors = [akTop, akLeft, akRight]
+        AutoSize = False
+        Caption = 'Review the selected target and choose how this scan treats paths, symbolic links, hashes, verified cache data, and ignored files.'
+        WordWrap = True
+      end
     object TargetFolderLabel: TLabel
       Left = 12
       Height = 18
@@ -58,6 +71,7 @@ object ScanSettingsDialog: TScanSettingsDialog
       Anchors = [akTop, akLeft, akRight]
       AutoSelect = True
       ReadOnly = True
+      OnEnter = ScrollFocusedControlIntoView
       TabOrder = 0
     end
     object FIncludeAbsolutePaths: TCheckBox
@@ -67,6 +81,7 @@ object ScanSettingsDialog: TScanSettingsDialog
       Width = 596
       Anchors = [akTop, akLeft, akRight]
       Caption = 'Include absolute paths in exported SBOM'
+      OnEnter = ScrollFocusedControlIntoView
       TabOrder = 1
     end
     object FFollowSymbolicLinks: TCheckBox
@@ -77,6 +92,7 @@ object ScanSettingsDialog: TScanSettingsDialog
       Anchors = [akTop, akLeft, akRight]
       Caption = 'Follow symbolic links'
       OnChange = FollowLinksChanged
+      OnEnter = ScrollFocusedControlIntoView
       TabOrder = 2
     end
     object FAllowOutsideRoot: TCheckBox
@@ -86,6 +102,7 @@ object ScanSettingsDialog: TScanSettingsDialog
       Width = 574
       Anchors = [akTop, akLeft, akRight]
       Caption = 'Allow followed links to leave the selected root'
+      OnEnter = ScrollFocusedControlIntoView
       TabOrder = 3
     end
     object FRememberPrivacyChoices: TCheckBox
@@ -96,6 +113,7 @@ object ScanSettingsDialog: TScanSettingsDialog
       Anchors = [akTop, akLeft, akRight]
       Caption = 'Remember absolute-path and outside-root choices for future scans'
       Hint = 'When unchecked, both privacy-sensitive choices reset before the next scan.'
+      OnEnter = ScrollFocusedControlIntoView
       ShowHint = True
       TabOrder = 4
     end
@@ -106,6 +124,7 @@ object ScanSettingsDialog: TScanSettingsDialog
       Width = 596
       Anchors = [akTop, akLeft, akRight]
       Caption = 'Calculate SHA-256 for manifests and binaries'
+      OnEnter = ScrollFocusedControlIntoView
       TabOrder = 5
     end
     object FUseRescanCache: TCheckBox
@@ -117,6 +136,7 @@ object ScanSettingsDialog: TScanSettingsDialog
       Caption = 'Reuse verified evidence from the last successful scan'
       Hint = 'Every candidate is freshly SHA-256 hashed before a cache hit. Cache data stays in this application profile; turning reuse off does not delete it.'
       OnChange = RescanCacheChanged
+      OnEnter = ScrollFocusedControlIntoView
       ShowHint = True
       TabOrder = 6
     end
@@ -128,13 +148,36 @@ object ScanSettingsDialog: TScanSettingsDialog
       Anchors = [akTop, akLeft, akRight]
       Caption = 'Full rescan this time and replace the verified cache'
       Hint = 'Bypass existing cached evidence for this scan, then replace it only after the SBOM is written successfully.'
+      OnEnter = ScrollFocusedControlIntoView
       ShowHint = True
       TabOrder = 7
+    end
+    object FCheckKnownIssues: TCheckBox
+      Left = 12
+      Height = 23
+      Top = 312
+      Width = 596
+      Anchors = [akTop, akLeft, akRight]
+      Caption = 'Check identified packages for known issues with OSV.dev (online)'
+      Hint = 'This choice applies to this scan only and is never remembered.'
+      OnEnter = ScrollFocusedControlIntoView
+      ShowHint = True
+      TabOrder = 8
+    end
+    object KnownIssuesDisclosureLabel: TLabel
+      Left = 34
+      Height = 50
+      Top = 339
+      Width = 574
+      Anchors = [akTop, akLeft, akRight]
+      AutoSize = False
+      Caption = 'Unchecked every time. If selected, only eligible versioned Package URLs are sent after the inventory SBOM is written. No source files or SBOM are uploaded.'
+      WordWrap = True
     end
     object AuthorPersistenceLabel: TLabel
       Left = 12
       Height = 44
-      Top = 312
+      Top = 395
       Width = 596
       Anchors = [akTop, akLeft, akRight]
       AutoSize = False
@@ -144,13 +187,13 @@ object ScanSettingsDialog: TScanSettingsDialog
     object AuthorOrganizationPanel: TPanel
       Left = 0
       Height = 32
-      Top = 362
+      Top = 445
       Width = 620
       Anchors = [akTop, akLeft, akRight]
       BevelOuter = bvNone
       ClientHeight = 32
       ClientWidth = 620
-      TabOrder = 8
+      TabOrder = 9
       object AuthorOrganizationLabel: TLabel
         Left = 12
         Height = 32
@@ -172,19 +215,20 @@ object ScanSettingsDialog: TScanSettingsDialog
         BorderSpacing.Right = 12
         BorderSpacing.Bottom = 3
         MaxLength = 4096
+        OnEnter = ScrollFocusedControlIntoView
         TabOrder = 0
       end
     end
     object AuthorEmailPanel: TPanel
       Left = 0
       Height = 32
-      Top = 394
+      Top = 477
       Width = 620
       Anchors = [akTop, akLeft, akRight]
       BevelOuter = bvNone
       ClientHeight = 32
       ClientWidth = 620
-      TabOrder = 9
+      TabOrder = 10
       object AuthorEmailLabel: TLabel
         Left = 12
         Height = 32
@@ -206,19 +250,20 @@ object ScanSettingsDialog: TScanSettingsDialog
         BorderSpacing.Right = 12
         BorderSpacing.Bottom = 3
         MaxLength = 254
+        OnEnter = ScrollFocusedControlIntoView
         TabOrder = 0
       end
     end
     object IgnoreHeaderPanel: TPanel
       Left = 0
       Height = 32
-      Top = 426
+      Top = 509
       Width = 620
       Anchors = [akTop, akLeft, akRight]
       BevelOuter = bvNone
       ClientHeight = 32
       ClientWidth = 620
-      TabOrder = 10
+      TabOrder = 11
       object IgnorePatternsLabel: TLabel
         Left = 12
         Height = 32
@@ -241,25 +286,28 @@ object ScanSettingsDialog: TScanSettingsDialog
         Caption = 'Restore defaults'
         Hint = 'Restore the built-in ignore patterns only.'
         OnClick = RestoreDefaultsClicked
+        OnEnter = ScrollFocusedControlIntoView
         ShowHint = True
         TabOrder = 0
       end
     end
     object FIgnorePatterns: TMemo
       Left = 12
-      Height = 164
-      Top = 458
+      Height = 141
+      Top = 541
       Width = 596
       Anchors = [akTop, akLeft, akRight, akBottom]
+      OnEnter = ScrollFocusedControlIntoView
       ScrollBars = ssAutoVertical
-      TabOrder = 11
+      TabOrder = 12
       WordWrap = False
     end
+  end
   end
   object ButtonsPanel: TPanel
     Left = 0
     Height = 46
-    Top = 634
+    Top = 454
     Width = 620
     Align = alBottom
     BevelOuter = bvNone

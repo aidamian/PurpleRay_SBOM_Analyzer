@@ -1,0 +1,911 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:purpleray:schema:bsi-readiness:v1",
+  "title": "PurpleRay BSI TR-03183-2 v2.1.0 readiness report",
+  "description": "Closed schema for a deterministic, privacy-minimal field-availability assessment. A conforming instance is not a statement of BSI compliance or certification.",
+  "$comment": "Producer order is fixed: document fields follow guideline order; components place the primary first and then compare raw bom-ref UTF-8 bytes, with missing refs last by source ordinal; blockers follow their associated field/component assessment order; advisories follow ascending code order.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "formatVersion",
+    "target",
+    "claim",
+    "source",
+    "privacy",
+    "summary",
+    "documentFields",
+    "components",
+    "blockers",
+    "advisories"
+  ],
+  "properties": {
+    "format": {
+      "const": "purpleray-bsi-tr-03183-2-readiness"
+    },
+    "formatVersion": {
+      "const": 1
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "guideline",
+        "guidelineVersion",
+        "guidelineDate",
+        "guidelinePdfSha256",
+        "cycloneDxMinimum",
+        "taxonomyVersion",
+        "taxonomyCommit"
+      ],
+      "properties": {
+        "guideline": {
+          "const": "BSI TR-03183-2"
+        },
+        "guidelineVersion": {
+          "const": "2.1.0"
+        },
+        "guidelineDate": {
+          "const": "2025-08-20"
+        },
+        "guidelinePdfSha256": {
+          "const": "dda0ccd9b6148571d1d12241a1618b30027f22bc15e24248fdd21a011e62845c"
+        },
+        "cycloneDxMinimum": {
+          "const": "1.6"
+        },
+        "taxonomyVersion": {
+          "const": "0.1.2"
+        },
+        "taxonomyCommit": {
+          "const": "f4c887cae2f46ec284e52ea0a86407bcffaecb91"
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "complianceClaimed", "text"],
+      "properties": {
+        "kind": {
+          "const": "readiness-assessment"
+        },
+        "complianceClaimed": {
+          "const": false
+        },
+        "text": {
+          "const": "This is a deterministic field-availability assessment, not a statement of conformity or certification."
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "taskId",
+        "managedSbomSha256",
+        "bomFormat",
+        "specVersion",
+        "sourceSchemaValidation"
+      ],
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "managedSbomSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bomFormat": {
+          "enum": ["CycloneDX", "unrecognized"]
+        },
+        "specVersion": {
+          "enum": ["1.6", "1.7", "unrecognized"]
+        },
+        "sourceSchemaValidation": {
+          "const": "not-performed"
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile",
+        "absolutePathsIncluded",
+        "relativePathsIncluded",
+        "contactValuesIncluded",
+        "diagnosticsIncluded",
+        "dynamicSecurityFindingsIncluded"
+      ],
+      "properties": {
+        "profile": {
+          "const": "shareable-minimal"
+        },
+        "absolutePathsIncluded": {
+          "const": false
+        },
+        "relativePathsIncluded": {
+          "const": false
+        },
+        "contactValuesIncluded": {
+          "const": false
+        },
+        "diagnosticsIncluded": {
+          "const": false
+        },
+        "dynamicSecurityFindingsIncluded": {
+          "const": false
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "componentsAssessed",
+        "mapped",
+        "derivable",
+        "notApplicable",
+        "notObserved",
+        "blocked",
+        "advisoryCount"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["blocked", "review-required"]
+        },
+        "componentsAssessed": {
+          "$ref": "#/$defs/nonnegativeInteger"
+        },
+        "mapped": {
+          "$ref": "#/$defs/nonnegativeInteger"
+        },
+        "derivable": {
+          "$ref": "#/$defs/nonnegativeInteger"
+        },
+        "notApplicable": {
+          "$ref": "#/$defs/nonnegativeInteger"
+        },
+        "notObserved": {
+          "$ref": "#/$defs/nonnegativeInteger"
+        },
+        "blocked": {
+          "$ref": "#/$defs/nonnegativeInteger"
+        },
+        "advisoryCount": {
+          "$ref": "#/$defs/nonnegativeInteger"
+        }
+      }
+    },
+    "documentFields": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/documentFormatField"
+        },
+        {
+          "$ref": "#/$defs/documentVulnerabilityField"
+        },
+        {
+          "$ref": "#/$defs/documentCreatorField"
+        },
+        {
+          "$ref": "#/$defs/documentTimestampField"
+        },
+        {
+          "$ref": "#/$defs/documentUriField"
+        },
+        {
+          "$ref": "#/$defs/documentDependenciesField"
+        },
+        {
+          "$ref": "#/$defs/documentBuildField"
+        }
+      ],
+      "items": false,
+      "minItems": 7
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/componentAssessment"
+            },
+            {
+              "properties": {
+                "role": {
+                  "const": "primary"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/componentAssessment"
+          },
+          {
+            "properties": {
+              "role": {
+                "const": "component"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/blocker"
+      }
+    },
+    "advisories": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/advisorySchemaValidation"
+        },
+        {
+          "$ref": "#/$defs/advisoryLicenceSpelling"
+        },
+        {
+          "$ref": "#/$defs/advisoryCurrentness"
+        }
+      ],
+      "items": false,
+      "minItems": 3
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nonnegativeInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "mapping": {
+      "enum": [
+        "bomFormat",
+        "specVersion",
+        "vulnerabilities",
+        "properties",
+        "externalReferences[type=advisories]",
+        "metadata.manufacturer.contact[].email",
+        "metadata.manufacturer.url[]",
+        "metadata.authors[].email",
+        "metadata.author",
+        "metadata.publisher",
+        "metadata.timestamp",
+        "serialNumber",
+        "dependencies",
+        "compositions",
+        "metadata.lifecycles",
+        "metadata.component.manufacturer.contact[].email",
+        "metadata.component.manufacturer.url[]",
+        "metadata.component.authors[].email",
+        "metadata.component.author",
+        "metadata.component.publisher",
+        "metadata.component.name",
+        "metadata.component.version",
+        "metadata.component.properties[name=bsi:component:filename].value",
+        "dependencies[ref].dependsOn",
+        "metadata.component.licenses[].expression[acknowledgement=concluded]",
+        "metadata.component.externalReferences[type=distribution].hashes[alg=SHA-512].content",
+        "metadata.component.properties[name=bsi:component:executable].value",
+        "metadata.component.properties[name=bsi:component:archive].value",
+        "metadata.component.properties[name=bsi:component:structured].value",
+        "metadata.component.externalReferences[type=source-distribution].url",
+        "metadata.component.externalReferences[type=distribution].url",
+        "metadata.component.purl",
+        "metadata.component.cpe",
+        "metadata.component.swid.tagId",
+        "metadata.component.licenses[].expression[acknowledgement=declared]",
+        "metadata.component.properties[name=bsi:component:effectiveLicence].value",
+        "metadata.component.externalReferences[type=source-distribution].hashes[alg=SHA-512].content",
+        "metadata.component.externalReferences[type=rfc-9116].url",
+        "metadata.component.externalReferences[type=bom].url",
+        "components[].manufacturer.contact[].email",
+        "components[].manufacturer.url[]",
+        "components[].authors[].email",
+        "components[].author",
+        "components[].publisher",
+        "components[].name",
+        "components[].version",
+        "components[].properties[name=bsi:component:filename].value",
+        "components[].licenses[].expression[acknowledgement=concluded]",
+        "components[].externalReferences[type=distribution].hashes[alg=SHA-512].content",
+        "components[].properties[name=bsi:component:executable].value",
+        "components[].properties[name=bsi:component:archive].value",
+        "components[].properties[name=bsi:component:structured].value",
+        "components[].externalReferences[type=source-distribution].url",
+        "components[].externalReferences[type=distribution].url",
+        "components[].purl",
+        "components[].cpe",
+        "components[].swid.tagId",
+        "components[].licenses[].expression[acknowledgement=declared]",
+        "components[].properties[name=bsi:component:effectiveLicence].value",
+        "components[].externalReferences[type=source-distribution].hashes[alg=SHA-512].content",
+        "components[].externalReferences[type=rfc-9116].url",
+        "components[].externalReferences[type=bom].url"
+      ]
+    },
+    "evidence": {
+      "enum": [
+        "cyclonedx-supported",
+        "unsupported-or-unrecognized",
+        "recognized-security-section-present",
+        "recognized-security-sections-absent",
+        "manufacturer-contact",
+        "author-contact",
+        "author-or-publisher-contact",
+        "missing-or-untyped",
+        "rfc3339-or-invalid",
+        "serial-number-uri",
+        "task-uuid",
+        "missing-or-invalid",
+        "complete-graph-or-unproven",
+        "not-proven",
+        "present-or-missing",
+        "exact-value-or-missing",
+        "single-filename-property",
+        "missing-invalid-or-ambiguous",
+        "dependency-entry-and-complete-graph",
+        "concluded-expression-or-missing",
+        "distribution-sha512",
+        "declared-unverified",
+        "missing-or-wrong-location",
+        "single-valid-property",
+        "source-uri-or-existence-unknown",
+        "distribution-uri-or-existence-unknown",
+        "purl-cpe-swid-or-existence-unknown",
+        "declared-expression-or-existence-unknown",
+        "registered-property-or-not-observed",
+        "source-sha512",
+        "source-hash-invalid-or-unverified",
+        "source-hash-not-observed",
+        "rfc9116-url-or-not-observed",
+        "bom-reference-or-not-observed"
+      ]
+    },
+    "fieldName": {
+      "enum": [
+        "sbom.format",
+        "sbom.vulnerabilityInformation",
+        "sbom.creator",
+        "sbom.timestamp",
+        "sbom.uri",
+        "sbom.dependencies",
+        "sbom.buildEquivalence",
+        "component.descriptionKind",
+        "component.descriptionLevel",
+        "component.creator",
+        "component.name",
+        "component.version",
+        "component.filename",
+        "component.dependencies",
+        "component.distributionLicences",
+        "component.deployableHash",
+        "component.executable",
+        "component.archive",
+        "component.structured",
+        "component.sourceCodeUri",
+        "component.deployableUri",
+        "component.otherIdentifiers",
+        "component.originalLicences",
+        "component.effectiveLicence",
+        "component.sourceCodeHash",
+        "component.securityTxt",
+        "component.referencedBom"
+      ]
+    },
+    "blockerCode": {
+      "enum": [
+        "BSI210-D001-FORMAT-NOT-CYCLONEDX-1_6-PLUS",
+        "BSI210-D002-VULNERABILITY-INFORMATION-PRESENT",
+        "BSI210-D003-SBOM-CREATOR-CONTACT-NOT-MAPPED",
+        "BSI210-D004-TIMESTAMP-NOT-MAPPED",
+        "BSI210-D005-DEPENDENCY-ENUMERATION-INCOMPLETE",
+        "BSI210-D006-BUILD-EQUIVALENCE-UNPROVEN",
+        "BSI210-C001-DESCRIPTION-KIND-UNKNOWN",
+        "BSI210-C002-DESCRIPTION-LEVEL-UNKNOWN",
+        "BSI210-C003-CREATOR-CONTACT-NOT-MAPPED",
+        "BSI210-C004-NAME-NOT-MAPPED",
+        "BSI210-C005-VERSION-NOT-MAPPED",
+        "BSI210-C006-FILENAME-NOT-MAPPED",
+        "BSI210-C007-DEPENDENCY-COMPLETENESS-UNPROVEN",
+        "BSI210-C008-DISTRIBUTION-LICENCE-NOT-MAPPED",
+        "BSI210-C009-DEPLOYABLE-SHA512-NOT-MAPPED",
+        "BSI210-C010-EXECUTABLE-CLASSIFICATION-UNKNOWN",
+        "BSI210-C011-ARCHIVE-CLASSIFICATION-UNKNOWN",
+        "BSI210-C012-STRUCTURED-CLASSIFICATION-UNKNOWN",
+        "BSI210-C013-SOURCE-URI-EXISTENCE-UNKNOWN",
+        "BSI210-C014-DEPLOYABLE-URI-EXISTENCE-UNKNOWN",
+        "BSI210-C015-OTHER-IDENTIFIER-EXISTENCE-UNKNOWN",
+        "BSI210-C016-ORIGINAL-LICENCE-EXISTENCE-UNKNOWN",
+        "BSI210-C017-SOURCE-SHA512-NOT-MAPPED",
+        "BSI210-C018-EFFECTIVE-LICENCE-PROPERTY-INVALID"
+      ]
+    },
+    "fieldAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "requirement", "status", "mappings", "evidence"],
+      "properties": {
+        "field": {
+          "$ref": "#/$defs/fieldName"
+        },
+        "requirement": {
+          "enum": ["MUST", "MUST_IF_EXISTS", "MAY"]
+        },
+        "status": {
+          "enum": [
+            "mapped",
+            "derivable",
+            "not-applicable",
+            "not-observed",
+            "blocked"
+          ]
+        },
+        "mappings": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/mapping"
+          }
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidence"
+        },
+        "blockerCode": {
+          "$ref": "#/$defs/blockerCode"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "blocked"
+              }
+            }
+          },
+          "then": {
+            "required": ["blockerCode"]
+          },
+          "else": {
+            "not": {
+              "required": ["blockerCode"]
+            }
+          }
+        }
+      ]
+    },
+    "documentFormatField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/fieldAssessment"
+        },
+        {
+          "properties": {
+            "field": {
+              "const": "sbom.format"
+            }
+          }
+        }
+      ]
+    },
+    "documentVulnerabilityField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/fieldAssessment"
+        },
+        {
+          "properties": {
+            "field": {
+              "const": "sbom.vulnerabilityInformation"
+            }
+          }
+        }
+      ]
+    },
+    "documentCreatorField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/fieldAssessment"
+        },
+        {
+          "properties": {
+            "field": {
+              "const": "sbom.creator"
+            }
+          }
+        }
+      ]
+    },
+    "documentTimestampField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/fieldAssessment"
+        },
+        {
+          "properties": {
+            "field": {
+              "const": "sbom.timestamp"
+            }
+          }
+        }
+      ]
+    },
+    "documentUriField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/fieldAssessment"
+        },
+        {
+          "properties": {
+            "field": {
+              "const": "sbom.uri"
+            }
+          }
+        }
+      ]
+    },
+    "documentDependenciesField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/fieldAssessment"
+        },
+        {
+          "properties": {
+            "field": {
+              "const": "sbom.dependencies"
+            }
+          }
+        }
+      ]
+    },
+    "documentBuildField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/fieldAssessment"
+        },
+        {
+          "properties": {
+            "field": {
+              "const": "sbom.buildEquivalence"
+            }
+          }
+        }
+      ]
+    },
+    "componentAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "componentId",
+        "role",
+        "kind",
+        "descriptionLevel",
+        "fields",
+        "blockers"
+      ],
+      "properties": {
+        "componentId": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "role": {
+          "enum": ["primary", "component"]
+        },
+        "kind": {
+          "enum": ["file", "logical", "unknown"]
+        },
+        "descriptionLevel": {
+          "enum": ["fully-described", "identified", "referenced", "unknown"]
+        },
+        "fields": {
+          "$ref": "#/$defs/componentFields"
+        },
+        "blockers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "BSI210-C001-DESCRIPTION-KIND-UNKNOWN",
+              "BSI210-C002-DESCRIPTION-LEVEL-UNKNOWN",
+              "BSI210-C003-CREATOR-CONTACT-NOT-MAPPED",
+              "BSI210-C004-NAME-NOT-MAPPED",
+              "BSI210-C005-VERSION-NOT-MAPPED",
+              "BSI210-C006-FILENAME-NOT-MAPPED",
+              "BSI210-C007-DEPENDENCY-COMPLETENESS-UNPROVEN",
+              "BSI210-C008-DISTRIBUTION-LICENCE-NOT-MAPPED",
+              "BSI210-C009-DEPLOYABLE-SHA512-NOT-MAPPED",
+              "BSI210-C010-EXECUTABLE-CLASSIFICATION-UNKNOWN",
+              "BSI210-C011-ARCHIVE-CLASSIFICATION-UNKNOWN",
+              "BSI210-C012-STRUCTURED-CLASSIFICATION-UNKNOWN",
+              "BSI210-C013-SOURCE-URI-EXISTENCE-UNKNOWN",
+              "BSI210-C014-DEPLOYABLE-URI-EXISTENCE-UNKNOWN",
+              "BSI210-C015-OTHER-IDENTIFIER-EXISTENCE-UNKNOWN",
+              "BSI210-C016-ORIGINAL-LICENCE-EXISTENCE-UNKNOWN",
+              "BSI210-C017-SOURCE-SHA512-NOT-MAPPED",
+              "BSI210-C018-EFFECTIVE-LICENCE-PROPERTY-INVALID"
+            ]
+          }
+        }
+      }
+    },
+    "componentFields": {
+      "type": "array",
+      "minItems": 18,
+      "maxItems": 18,
+      "items": {
+        "$ref": "#/$defs/fieldAssessment"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.creator"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.name"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.version"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.filename"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.dependencies"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.distributionLicences"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.deployableHash"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.executable"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.archive"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.structured"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.sourceCodeUri"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.deployableUri"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.otherIdentifiers"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.originalLicences"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.effectiveLicence"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.sourceCodeHash"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.securityTxt"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"field": {"const": "component.referencedBom"}},
+            "required": ["field"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    },
+    "blocker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "scope", "field", "reason"],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/blockerCode"
+        },
+        "scope": {
+          "enum": ["document", "component"]
+        },
+        "componentId": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "field": {
+          "$ref": "#/$defs/fieldName"
+        },
+        "reason": {
+          "enum": [
+            "The source is not recognized as supported CycloneDX 1.6 or 1.7.",
+            "Recognized vulnerability or advisory data is present; no values were copied into this report.",
+            "A contactable SBOM creator is not mapped.",
+            "The SBOM timestamp is missing or not valid RFC 3339.",
+            "Dependency enumeration is absent, incomplete, or not complete for every component.",
+            "Build-time information or equivalent information is not proven.",
+            "The CycloneDX component type does not prove logical or file status.",
+            "Fully described, identified, or referenced status is not established.",
+            "A contactable component creator is not mapped.",
+            "The component name is missing or invalid.",
+            "An exact component version is not mapped.",
+            "Exactly one basename-only filename is not mapped.",
+            "This component lacks a dependency entry in a proven-complete graph.",
+            "A concluded SPDX expression for distribution is not mapped.",
+            "A verified deployable SHA-512 at the BSI mapping is not established.",
+            "Executable status is missing, invalid, or ambiguous.",
+            "Archive status is missing, invalid, or ambiguous.",
+            "Structured status is missing, invalid, or ambiguous.",
+            "The existence of a source-code URI cannot be resolved safely.",
+            "The existence of a deployable URI cannot be resolved safely.",
+            "No evidence-backed purl, CPE, or SWID is mapped.",
+            "The existence of an original SPDX licence expression is unresolved.",
+            "A valid, verified source-code SHA-512 at the BSI mapping is not established.",
+            "The optional effective-licence property is ambiguous or uses the unregistered PDF spelling."
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "scope": {
+                "const": "component"
+              }
+            }
+          },
+          "then": {
+            "required": ["componentId"]
+          },
+          "else": {
+            "not": {
+              "required": ["componentId"]
+            }
+          }
+        }
+      ]
+    },
+    "advisorySchemaValidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "const": "BSI210-A001-SOURCE-SCHEMA-NOT-VALIDATED"
+        },
+        "message": {
+          "const": "The runtime assessment performs strict structural checks but does not claim official CycloneDX schema validation."
+        }
+      }
+    },
+    "advisoryLicenceSpelling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "const": "BSI210-A002-EFFECTIVE-LICENCE-SPELLING-CONFLICT"
+        },
+        "message": {
+          "const": "The registered BSI taxonomy uses effectiveLicence; the guideline PDF mapping table prints effectiveLicense. The registered spelling is used."
+        }
+      }
+    },
+    "advisoryCurrentness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "const": "BSI210-A003-TARGET-CURRENTNESS-NOT-ASSERTED"
+        },
+        "message": {
+          "const": "The report is pinned to v2.1.0 and does not assert that it is the currently applicable BSI version."
+        }
+      }
+    }
+  }
+}

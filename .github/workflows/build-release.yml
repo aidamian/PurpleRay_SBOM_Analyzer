@@ -119,7 +119,7 @@ jobs:
   build:
     name: ${{ matrix.config.name }}
     needs: prepare
-    timeout-minutes: 10
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -332,7 +332,7 @@ jobs:
           output="$cli_root/result-ță.cdx.json"
           mkdir -p "$target"
           printf '%s\n' \
-            '{"name":"ci-headless-fixture","version":"1.0.0","dependencies":{"left-pad":"1.3.0"}}' \
+            '{"name":"ci-headless-fixture","version":"1.0.0","dependencies":{"lodash":"4.17.20"}}' \
             > "$target/package.json"
 
           profile_fingerprint() {
@@ -388,7 +388,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $target | Out-Null
           [IO.File]::WriteAllText(
             (Join-Path $target 'package.json'),
-            '{"name":"ci-headless-fixture","version":"1.0.0","dependencies":{"left-pad":"1.3.0"}}',
+            '{"name":"ci-headless-fixture","version":"1.0.0","dependencies":{"lodash":"4.17.20"}}',
             [Text.UTF8Encoding]::new($false)
           )
 
@@ -508,6 +508,108 @@ jobs:
           "$RUNNER_TEMP/cyclonedx-fixtures/compliance-1.7.cdx.json"
           "$RUNNER_TEMP/purpleray-cli-smoke/result-ță.cdx.json"
 
+      - name: Cache pinned external-scanner handoff inputs
+        if: runner.os == 'Linux'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/external-scanner-downloads
+          key: external-scanners-linux-amd64-v1-grype-0.117.0-db-1787293044-osv-2.5.1-npm-1787320137148317
+
+      - name: Verify external vulnerability-scanner SBOM handoff
+        if: runner.os == 'Linux'
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          download_dir="$RUNNER_TEMP/external-scanner-downloads"
+          runtime_dir="$RUNNER_TEMP/external-scanner-runtime"
+          fixture="$RUNNER_TEMP/purpleray-cli-smoke/result-ță.cdx.json"
+          grype_archive="$download_dir/grype_0.117.0_linux_amd64.tar.gz"
+          grype_db_archive="$download_dir/grype-db-v6.1.9-20260821.tar.zst"
+          osv_binary="$download_dir/osv-scanner-v2.5.1-linux-amd64"
+          osv_db_archive="$download_dir/osv-npm-1787320137148317.zip"
+          mkdir -p "$download_dir" "$runtime_dir/tools" \
+            "$runtime_dir/grype-db" "$runtime_dir/osv-cache/osv-scalibr/npm"
+
+          download() {
+            local url="$1"
+            local output="$2"
+            if [[ -e "$output" || -L "$output" ]]; then
+              if [[ ! -f "$output" || -L "$output" ]]; then
+                echo "Cached scanner input is not a regular file: $output" >&2
+                exit 1
+              fi
+              return
+            fi
+            curl --fail --location --silent --show-error --retry 2 \
+              --connect-timeout 15 --max-time 180 \
+              --proto '=https' --tlsv1.2 --output "$output" "$url"
+          }
+
+          download \
+            'https://github.com/anchore/grype/releases/download/v0.117.0/grype_0.117.0_linux_amd64.tar.gz' \
+            "$grype_archive"
+          download \
+            'https://grype.anchore.io/databases/v6/vulnerability-db_v6.1.9_2026-08-20T16:14:23Z_1787293044.tar.zst?checksum=sha256%3Adca26dd65bd0c4ba626af404a2e60d983d9302863eabdd8a7e7d42008fb4da3c' \
+            "$grype_db_archive"
+          download \
+            'https://github.com/google/osv-scanner/releases/download/v2.5.1/osv-scanner_linux_amd64' \
+            "$osv_binary"
+          download \
+            'https://storage.googleapis.com/osv-vulnerabilities/npm/all.zip?generation=1787320137148317' \
+            "$osv_db_archive"
+
+          printf '%s  %s\n' \
+            '38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777edf1a7b9c26' \
+            "$grype_archive" \
+            'dca26dd65bd0c4ba626af404a2e60d983d9302863eabdd8a7e7d42008fb4da3c' \
+            "$grype_db_archive" \
+            'f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be' \
+            "$osv_binary" \
+            '3633650cc04496aec35012c42ecc809bb3ff6fab8420b333120791ce2dba34a3' \
+            "$osv_db_archive" |
+            sha256sum --check --strict
+
+          tar -xzf "$grype_archive" -C "$runtime_dir/tools" grype
+          chmod +x "$osv_binary"
+          grype="$runtime_dir/tools/grype"
+          test "$("$grype" version | awk '$1 == "Version:" { print $2; exit }')" = \
+            '0.117.0'
+          test "$("$osv_binary" --version | \
+            awk '$1 == "osv-scanner" && $2 == "version:" { print $3; exit }')" = \
+            '2.5.1'
+          jq -e '.components[] | select(.purl == "pkg:npm/lodash@4.17.20")' \
+            "$fixture" >/dev/null
+
+          export GRYPE_DB_CACHE_DIR="$runtime_dir/grype-db"
+          export GRYPE_DB_AUTO_UPDATE=false
+          export GRYPE_DB_VALIDATE_AGE=false
+          export GRYPE_CHECK_FOR_APP_UPDATE=false
+          export GRYPE_EXTERNAL_SOURCES_ENABLE=false
+          "$grype" db import "$grype_db_archive"
+          "$grype" "sbom:$fixture" --output json \
+            --file "$runtime_dir/grype-report.json"
+          jq -e '.matches[] | select(
+            .artifact.purl == "pkg:npm/lodash@4.17.20" and
+            .vulnerability.id == "GHSA-35jh-r3h4-6jhm")' \
+            "$runtime_dir/grype-report.json" >/dev/null
+
+          cp "$osv_db_archive" \
+            "$runtime_dir/osv-cache/osv-scalibr/npm/all.zip"
+          set +e
+          XDG_CACHE_HOME="$runtime_dir/osv-cache" "$osv_binary" scan source \
+            --offline --offline-vulnerabilities --no-resolve --all-packages \
+            --experimental-no-default-plugins --experimental-plugins=sbom \
+            --lockfile "$fixture" --format json \
+            --output-file "$runtime_dir/osv-report.json" \
+            >"$runtime_dir/osv.stdout" 2>"$runtime_dir/osv.stderr"
+          osv_status=$?
+          set -e
+          test "$osv_status" -eq 1
+          jq -e '.results[].packages[] | select(
+            .package.name == "lodash" and .package.version == "4.17.20" and
+            any(.vulnerabilities[]; .id == "GHSA-35jh-r3h4-6jhm"))' \
+            "$runtime_dir/osv-report.json" >/dev/null
+
       - name: Package and verify Windows executable
         if: runner.os == 'Windows'
         shell: pwsh
@@ -614,7 +716,8 @@ jobs:
           test "$(dpkg-deb --field "$debian" Package)" = 'purpleray-sbom-analyzer'
           test "$(dpkg-deb --field "$debian" Version)" = "$version"
           test "$(dpkg-deb --field "$debian" Architecture)" = 'amd64'
-          test "$(dpkg-deb --field "$debian" Depends)" = 'libc6 (>= 2.34), libgtk-3-0'
+          expected_dependencies='ca-certificates, libc6 (>= 2.34), libgtk-3-0, libssl3'
+          test "$(dpkg-deb --field "$debian" Depends)" = "$expected_dependencies"
           mapfile -t debian_files < <(
             dpkg-deb --fsys-tarfile "$debian" |
               tar -tf - |

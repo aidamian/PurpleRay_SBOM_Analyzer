@@ -27,7 +27,7 @@ unit uScanWorker;
 interface
 
 uses
-  Classes, SysUtils, uModels, uScanEngine;
+  Classes, SysUtils, uModels, uOSVCore, uScanEngine;
 
 type
   TWorkerProgressEvent = procedure(Sender: TObject;
@@ -38,9 +38,14 @@ type
   private
     FTask: TScanTask;
     FDataDirectory: string;
+    FCheckKnownIssues: Boolean;
+    FOSVTransport: IOSVTransport;
     FLatestProgress: TScanProgress;
     FProgressQueued: LongInt;
     FProgressLock: TRTLCriticalSection;
+    FProgressLockInitialized: Boolean;
+    FStarted: Boolean;
+    FThreadInitialized: Boolean;
     FOnProgress: TWorkerProgressEvent;
     FOnComplete: TWorkerCompleteEvent;
     {**
@@ -182,6 +187,8 @@ type
         Task definition to clone before the caller starts the thread.
       ADataDirectory
         Directory in which generated SBOM files are persisted.
+      ACheckKnownIssues
+        Explicit transient opt-in for one post-inventory OSV.dev check.
 
       Returns
       -------
@@ -190,13 +197,31 @@ type
 
       Raises
       ------
-      EAccessViolation
+      EArgumentNilException
         Raised when ATask is nil.
       EOutOfMemory
         Propagated if the thread, task clone, or lock cannot be initialized.
     }
-    constructor Create(ATask: TScanTask; const ADataDirectory: string);
+    constructor Create(ATask: TScanTask; const ADataDirectory: string;
+      ACheckKnownIssues: Boolean = False);
     destructor Destroy; override;
+
+    {**
+      Starts the suspended worker and records that teardown must join it.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    **}
+    procedure Start; reintroduce;
 
     {**
       Requests cooperative cancellation without blocking the caller.
@@ -222,7 +247,7 @@ type
 implementation
 
 uses
-  uScanService, uTimeUtils;
+  uOSVTransportFactory, uScanService, uTimeUtils;
 
 procedure TScanWorker.MarkTaskFailed(const AMessage: string);
 var
@@ -236,33 +261,71 @@ begin
     FTask.Errors.Add(MessageValue);
 end;
 
-constructor TScanWorker.Create(ATask: TScanTask; const ADataDirectory: string);
+constructor TScanWorker.Create(ATask: TScanTask; const ADataDirectory: string;
+  ACheckKnownIssues: Boolean);
 begin
   inherited Create(True);
+  FThreadInitialized := True;
+  FProgressLockInitialized := False;
+  FStarted := False;
   FreeOnTerminate := False;
+  InitCriticalSection(FProgressLock);
+  FProgressLockInitialized := True;
+  if ATask = nil then
+    raise EArgumentNilException.Create('Scan worker task must not be nil');
   FTask := ATask.Clone;
   FDataDirectory := ExcludeTrailingPathDelimiter(ADataDirectory);
-  InitCriticalSection(FProgressLock);
+  FCheckKnownIssues := ACheckKnownIssues;
 end;
 
 destructor TScanWorker.Destroy;
 begin
   FOnProgress := nil;
   FOnComplete := nil;
-  if not Finished then
+  if FThreadInitialized and not Finished then
   begin
-    Terminate;
+    if FStarted then
+      Cancel
+    else
+    begin
+      { Wake the suspended base thread only after marking it terminated.  It
+        then exits without entering Execute, so partially built fields remain
+        untouched while TThread completes its own teardown. }
+      Terminate;
+      inherited Start;
+    end;
     WaitFor;
   end;
   TThread.RemoveQueuedEvents(Self);
-  DoneCriticalSection(FProgressLock);
+  if FProgressLockInitialized then
+  begin
+    FProgressLockInitialized := False;
+    DoneCriticalSection(FProgressLock);
+  end;
   FTask.Free;
   inherited Destroy;
 end;
 
+procedure TScanWorker.Start;
+begin
+  inherited Start;
+  FStarted := True;
+end;
+
 procedure TScanWorker.Cancel;
+var
+  Transport: IOSVTransport;
 begin
   Terminate;
+  Transport := nil;
+  EnterCriticalSection(FProgressLock);
+  try
+    Transport := FOSVTransport;
+  finally
+    LeaveCriticalSection(FProgressLock);
+  end;
+  if Transport <> nil then
+    Transport.Cancel;
 end;
 
 function TScanWorker.CancellationRequested: Boolean;
@@ -306,6 +369,7 @@ end;
 procedure TScanWorker.PerformScan;
 var
   DirectoryName, FileName: string;
+  Transport: IOSVTransport;
 begin
   DirectoryName := IncludeTrailingPathDelimiter(FDataDirectory) + 'sboms';
   if not ForceDirectories(DirectoryName) then
@@ -313,21 +377,75 @@ begin
       [DirectoryName]);
   FileName := IncludeTrailingPathDelimiter(DirectoryName) + FTask.ID +
     '.cdx.json';
-  ExecuteScanToFile(FTask, FileName, @CancellationRequested, @EngineProgress,
-    sopManagedApplicationData, FDataDirectory);
+  Transport := nil;
+  if FCheckKnownIssues then
+    try
+      Transport := CreateProductionOSVTransport;
+    except
+      { Native transport setup is optional enrichment. Even allocation failure
+        here must not prevent the inventory transaction from running. }
+      on EOutOfMemory do
+        Transport := nil;
+      on EOSVProductionTransportUnavailable do
+        Transport := nil;
+    end;
+  EnterCriticalSection(FProgressLock);
+  try
+    FOSVTransport := Transport;
+  finally
+    LeaveCriticalSection(FProgressLock);
+  end;
+  try
+    ExecuteScanToFile(FTask, FileName, @CancellationRequested,
+      @EngineProgress, sopManagedApplicationData, FDataDirectory,
+      FCheckKnownIssues, Transport);
+  finally
+    EnterCriticalSection(FProgressLock);
+    try
+      FOSVTransport := nil;
+    finally
+      LeaveCriticalSection(FProgressLock);
+    end;
+  end;
 end;
 
 procedure TScanWorker.Execute;
+
+  function InventoryWasCommitted: Boolean;
+  begin
+    Result := (FTask.Status = tsCompleted) and
+      (Trim(FTask.GeneratedSBOMPath) <> '') and
+      (Trim(FTask.GeneratedSBOMSHA256) <> '');
+  end;
+
+  procedure PreserveCommittedInventory;
+  const
+    WarningText = 'A post-inventory operation did not complete.';
+  begin
+    try
+      if FTask.Warnings.IndexOf(WarningText) < 0 then
+        FTask.Warnings.Add(WarningText);
+    except
+      { The committed inventory remains authoritative if allocation fails. }
+    end;
+  end;
+
 begin
   try
     try
       PerformScan;
     except
       on E: Exception do
-        MarkTaskFailed('Unexpected scan failure (' + E.ClassName + '): ' +
-          E.Message);
+        if InventoryWasCommitted then
+          PreserveCommittedInventory
+        else
+          MarkTaskFailed('Unexpected scan failure (' + E.ClassName + '): ' +
+            E.Message);
       else
-        MarkTaskFailed('Unexpected non-standard scan failure');
+        if InventoryWasCommitted then
+          PreserveCommittedInventory
+        else
+          MarkTaskFailed('Unexpected non-standard scan failure');
     end;
     try
       FTask.CompletedUTC := UTCNowISO8601;
@@ -335,10 +453,16 @@ begin
         FTask.CompletedUTC);
     except
       on E: Exception do
-        MarkTaskFailed('Unable to finalize scan timing (' + E.ClassName +
-          '): ' + E.Message);
+        if InventoryWasCommitted then
+          PreserveCommittedInventory
+        else
+          MarkTaskFailed('Unable to finalize scan timing (' + E.ClassName +
+            '): ' + E.Message);
       else
-        MarkTaskFailed('Unable to finalize scan timing');
+        if InventoryWasCommitted then
+          PreserveCommittedInventory
+        else
+          MarkTaskFailed('Unable to finalize scan timing');
     end;
   finally
     TThread.Queue(Self, @DeliverCompletion);

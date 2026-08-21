@@ -655,6 +655,137 @@ begin
     Result := Trim(AComponent.Version);
 end;
 
+procedure AddHashJSON(AHashes: TJSONArray; const AAlgorithm,
+  ADigest: string);
+var
+  HashValue: TJSONObject;
+begin
+  HashValue := TJSONObject.Create;
+  try
+    HashValue.Add('alg', AAlgorithm);
+    HashValue.Add('content', LowerCase(ADigest));
+    AHashes.Add(HashValue);
+    HashValue := nil;
+  finally
+    HashValue.Free;
+  end;
+end;
+
+function BuildComponentHashes(AComponent: uModels.TComponent): TJSONArray;
+var
+  Values: TStringList;
+  I, SplitAt: Integer;
+  HashValue: TDeclaredHash;
+begin
+  Result := nil;
+  Values := TStringList.Create;
+  try
+    Values.Sorted := True;
+    Values.CaseSensitive := True;
+    Values.UseLocale := False;
+    Values.Duplicates := dupIgnore;
+    if AComponent.SHA256 <> '' then
+      Values.Add('SHA-256' + #1 + LowerCase(AComponent.SHA256));
+    for I := 0 to AComponent.DeclaredHashes.Count - 1 do
+    begin
+      HashValue := AComponent.DeclaredHashes[I];
+      if IsValidDeclaredHash(HashValue) then
+        Values.Add(HashValue.Algorithm + #1 + HashValue.Digest);
+    end;
+    if Values.Count = 0 then
+      Exit;
+    Result := TJSONArray.Create;
+    try
+      for I := 0 to Values.Count - 1 do
+      begin
+        SplitAt := Pos(#1, Values[I]);
+        AddHashJSON(Result, Copy(Values[I], 1, SplitAt - 1),
+          Copy(Values[I], SplitAt + 1, MaxInt));
+      end;
+    except
+      Result.Free;
+      Result := nil;
+      raise;
+    end;
+  finally
+    Values.Free;
+  end;
+end;
+
+function DeclaredHashProvenanceJSON(ATask: TScanTask;
+  AHash: TDeclaredHash): string;
+var
+  Value: TJSONObject;
+begin
+  Value := TJSONObject.Create;
+  try
+    { Fixed insertion order is part of the provenance wire contract. }
+    Value.Add('algorithm', AHash.Algorithm);
+    Value.Add('digest', AHash.Digest);
+    Value.Add('subject', AHash.Subject);
+    Value.Add('sourceArtifact', OutputPath(ATask, AHash.SourceArtifact));
+    Value.Add('sourceParser', AHash.SourceParser);
+    Value.Add('status', 'declared-not-locally-verified');
+    Result := Value.FormatJSON(AsCompressedJSON);
+  finally
+    Value.Free;
+  end;
+end;
+
+procedure AddComponentOccurrences(ATask: TScanTask;
+  AComponent: uModels.TComponent; AJSON: TJSONObject);
+var
+  RawPaths, OutputPaths: TStringList;
+  EvidenceValue, OccurrenceValue: TJSONObject;
+  Occurrences: TJSONArray;
+  I: Integer;
+begin
+  RawPaths := TStringList.Create;
+  OutputPaths := TStringList.Create;
+  try
+    RawPaths.Sorted := True;
+    RawPaths.CaseSensitive := True;
+    RawPaths.UseLocale := False;
+    RawPaths.Duplicates := dupIgnore;
+    OutputPaths.Sorted := True;
+    OutputPaths.CaseSensitive := True;
+    OutputPaths.UseLocale := False;
+    OutputPaths.Duplicates := dupIgnore;
+    if AComponent.SourceArtifact <> '' then
+      RawPaths.Add(AComponent.SourceArtifact);
+    for I := 0 to AComponent.EvidencePaths.Count - 1 do
+      if AComponent.EvidencePaths[I] <> '' then
+        RawPaths.Add(AComponent.EvidencePaths[I]);
+    for I := 0 to RawPaths.Count - 1 do
+      OutputPaths.Add(OutputPath(ATask, RawPaths[I]));
+    if OutputPaths.Count = 0 then
+      Exit;
+    EvidenceValue := TJSONObject.Create;
+    try
+      Occurrences := TJSONArray.Create;
+      EvidenceValue.Add('occurrences', Occurrences);
+      for I := 0 to OutputPaths.Count - 1 do
+      begin
+        OccurrenceValue := TJSONObject.Create;
+        try
+          OccurrenceValue.Add('location', OutputPaths[I]);
+          Occurrences.Add(OccurrenceValue);
+          OccurrenceValue := nil;
+        finally
+          OccurrenceValue.Free;
+        end;
+      end;
+      AJSON.Add('evidence', EvidenceValue);
+      EvidenceValue := nil;
+    finally
+      EvidenceValue.Free;
+    end;
+  finally
+    OutputPaths.Free;
+    RawPaths.Free;
+  end;
+end;
+
 {**
   Adds deterministic provenance and honest unresolved-version properties.
 
@@ -688,6 +819,8 @@ begin
   Values := TStringList.Create;
   try
     Values.Sorted := True;
+    Values.CaseSensitive := True;
+    Values.UseLocale := False;
     Values.Duplicates := dupIgnore;
     if AComponent.Ecosystem <> '' then
       Values.Add('purpleray-sbom-analyzer:ecosystem' + #1 + AComponent.Ecosystem);
@@ -729,6 +862,10 @@ begin
     for I := 0 to AComponent.EvidencePaths.Count - 1 do
       Values.Add('purpleray-sbom-analyzer:evidence-path' + #1 +
         OutputPath(ATask, AComponent.EvidencePaths[I]));
+    for I := 0 to AComponent.DeclaredHashes.Count - 1 do
+      if IsValidDeclaredHash(AComponent.DeclaredHashes[I]) then
+        Values.Add('purpleray-sbom-analyzer:declared-hash-provenance' + #1 +
+          DeclaredHashProvenanceJSON(ATask, AComponent.DeclaredHashes[I]));
     for I := 0 to Values.Count - 1 do
     begin
       SplitAt := Pos(#1, Values[I]);
@@ -767,7 +904,6 @@ function BuildCycloneComponent(ATask: TScanTask;
   AComponent: uModels.TComponent): TJSONObject;
 var
   Hashes, Properties: TJSONArray;
-  HashValue: TJSONObject;
   ScopeValue: string;
 begin
   Result := TJSONObject.Create;
@@ -785,21 +921,16 @@ begin
     Result.Add('purl', AComponent.PackageURL);
   if AComponent.CPE <> '' then
     Result.Add('cpe', AComponent.CPE);
-  if AComponent.SHA256 <> '' then
-  begin
-    Hashes := TJSONArray.Create;
-    HashValue := TJSONObject.Create;
-    HashValue.Add('alg', 'SHA-256');
-    HashValue.Add('content', LowerCase(AComponent.SHA256));
-    Hashes.Add(HashValue);
+  Hashes := BuildComponentHashes(AComponent);
+  if Hashes <> nil then
     Result.Add('hashes', Hashes);
-  end;
   Properties := TJSONArray.Create;
   AddSortedComponentProperties(ATask, AComponent, Properties);
   if Properties.Count > 0 then
     Result.Add('properties', Properties)
   else
     Properties.Free;
+  AddComponentOccurrences(ATask, AComponent, Result);
 end;
 
 {**
@@ -831,7 +962,6 @@ function BuildPrimaryComponent(ATask: TScanTask;
   AProjectComponent: uModels.TComponent): TJSONObject;
 var
   Hashes, Properties: TJSONArray;
-  HashValue: TJSONObject;
   NameValue, ScopeValue: string;
 begin
   NameValue := TargetComponentName(ATask);
@@ -855,21 +985,16 @@ begin
     Result.Add('purl', AProjectComponent.PackageURL);
   if AProjectComponent.CPE <> '' then
     Result.Add('cpe', AProjectComponent.CPE);
-  if AProjectComponent.SHA256 <> '' then
-  begin
-    Hashes := TJSONArray.Create;
-    HashValue := TJSONObject.Create;
-    HashValue.Add('alg', 'SHA-256');
-    HashValue.Add('content', LowerCase(AProjectComponent.SHA256));
-    Hashes.Add(HashValue);
+  Hashes := BuildComponentHashes(AProjectComponent);
+  if Hashes <> nil then
     Result.Add('hashes', Hashes);
-  end;
   Properties := TJSONArray.Create;
   AddSortedComponentProperties(ATask, AProjectComponent, Properties);
   if Properties.Count > 0 then
     Result.Add('properties', Properties)
   else
     Properties.Free;
+  AddComponentOccurrences(ATask, AProjectComponent, Result);
 end;
 
 {**

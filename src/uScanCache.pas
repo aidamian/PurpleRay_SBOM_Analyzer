@@ -32,7 +32,7 @@ uses
   Classes, SysUtils, Contnrs, uModels, uVerifiedInput, uPlatform;
 
 const
-  ScanCacheFormatVersion = 1;
+  ScanCacheFormatVersion = 2;
   DefaultScanCacheFileName = 'scan-cache.json';
   MaximumScanCacheBytes = 16 * 1024 * 1024;
   MaximumScanCacheEntries = 4096;
@@ -2167,6 +2167,9 @@ end;
 function ComponentToCacheJSON(AComponent: TComponent): TJSONObject;
 var
   Values: TJSONArray;
+  HashObject: TJSONObject;
+  HashValue: TDeclaredHash;
+  I: Integer;
 begin
   Result := TJSONObject.Create;
   try
@@ -2209,6 +2212,28 @@ begin
       Values := TJSONArray.Create;
       StringsToJSONArray(AComponent.DeclaredPublishers, Values);
       Result.Add('declared_publishers', Values);
+    end;
+    if AComponent.DeclaredHashes.Count > 0 then
+    begin
+      Values := TJSONArray.Create;
+      Result.Add('declared_hashes', Values);
+      for I := 0 to AComponent.DeclaredHashes.Count - 1 do
+      begin
+        HashValue := AComponent.DeclaredHashes[I];
+        HashObject := TJSONObject.Create;
+        try
+          AddCacheString(HashObject, 'algorithm', HashValue.Algorithm);
+          AddCacheString(HashObject, 'digest', HashValue.Digest);
+          AddCacheString(HashObject, 'subject', HashValue.Subject);
+          AddCacheString(HashObject, 'source_artifact',
+            HashValue.SourceArtifact);
+          AddCacheString(HashObject, 'source_parser', HashValue.SourceParser);
+          Values.Add(HashObject);
+          HashObject := nil;
+        finally
+          HashObject.Free;
+        end;
+      end;
     end;
   except
     Result.Free;
@@ -2286,7 +2311,9 @@ begin
       (AComponent.SHA256 = AContentSHA256)) and
     (AComponent.EvidencePaths.Count <= MaximumScanCacheListValues) and
     (AComponent.DeclaredLicenses.Count <= MaximumScanCacheListValues) and
-    (AComponent.DeclaredPublishers.Count <= MaximumScanCacheListValues);
+    (AComponent.DeclaredPublishers.Count <= MaximumScanCacheListValues) and
+    (AComponent.DeclaredHashes <> nil) and
+    (AComponent.DeclaredHashes.Count <= MaximumDeclaredHashesPerComponent);
   if not Result then
     Exit;
   for I := 0 to AComponent.EvidencePaths.Count - 1 do
@@ -2298,6 +2325,13 @@ begin
       Exit(False);
   for I := 0 to AComponent.DeclaredPublishers.Count - 1 do
     if not ValidField(AComponent.DeclaredPublishers[I]) then
+      Exit(False);
+  for I := 0 to AComponent.DeclaredHashes.Count - 1 do
+    if not IsValidDeclaredHash(AComponent.DeclaredHashes[I]) or
+      (AComponent.DeclaredHashes[I].SourceArtifact <> ARelativePath) or
+      not IsSafeRelativePath(AComponent.DeclaredHashes[I].SourceArtifact) or
+      not ValidField(AComponent.DeclaredHashes[I].Subject, False) or
+      not ValidField(AComponent.DeclaredHashes[I].SourceParser, False) then
       Exit(False);
 end;
 
@@ -2342,6 +2376,45 @@ begin
     ((AArtifact.SHA256 = '') or (AArtifact.SHA256 = AContentSHA256));
 end;
 
+function ParseDeclaredHashJSON(AObject: TJSONObject;
+  out AHash: TDeclaredHash): Boolean;
+const
+  Allowed: array[0..4] of string = (
+    'algorithm', 'digest', 'subject', 'source_artifact', 'source_parser');
+var
+  AlgorithmValue, DigestValue, SubjectValue, SourceArtifactValue,
+    SourceParserValue: string;
+begin
+  Result := False;
+  AHash := nil;
+  if not ObjectHasOnlyMembers(AObject, Allowed) or
+    not ReadJSONString(AObject, 'algorithm', True, AlgorithmValue) or
+    not ReadJSONString(AObject, 'digest', True, DigestValue) or
+    not ReadJSONString(AObject, 'subject', True, SubjectValue) or
+    not ReadJSONString(AObject, 'source_artifact', True,
+      SourceArtifactValue) or
+    not ReadJSONString(AObject, 'source_parser', True, SourceParserValue) then
+    Exit;
+  AHash := TDeclaredHash.Create;
+  try
+    AHash.Algorithm := AlgorithmValue;
+    AHash.Digest := DigestValue;
+    AHash.Subject := SubjectValue;
+    AHash.SourceArtifact := SourceArtifactValue;
+    AHash.SourceParser := SourceParserValue;
+    Result := IsValidDeclaredHash(AHash) and
+      IsBoundedToken(AHash.Subject, MaximumScanCacheStringBytes, False) and
+      IsBoundedToken(AHash.SourceArtifact, MaximumScanCacheStringBytes,
+        False) and
+      IsBoundedToken(AHash.SourceParser, MaximumScanCacheStringBytes, False);
+    if not Result then
+      FreeAndNil(AHash);
+  except
+    FreeAndNil(AHash);
+    raise;
+  end;
+end;
+
 {**
   Parses and validates one cached component object.
 
@@ -2370,11 +2443,12 @@ function ValidateComponentJSON(AObject: TJSONObject;
   const ARelativePath, AContentSHA256: string;
   out AComponent: TComponent): Boolean;
 const
-  Allowed: array[0..17] of string = (
+  Allowed: array[0..18] of string = (
     'component_type', 'name', 'version', 'ecosystem', 'package_url', 'cpe',
     'cpe_evidence', 'company_name', 'product_name', 'native_soname',
     'native_build_id', 'source_artifact', 'source_parser', 'dependency_scope',
-    'sha256', 'evidence_paths', 'declared_licenses', 'declared_publishers');
+    'sha256', 'evidence_paths', 'declared_licenses', 'declared_publishers',
+    'declared_hashes');
   StringFields: array[0..14] of string = (
     'component_type', 'name', 'version', 'ecosystem', 'package_url', 'cpe',
     'cpe_evidence', 'company_name', 'product_name', 'native_soname',
@@ -2384,6 +2458,7 @@ var
   I: Integer;
   Value: string;
   Values: TJSONArray;
+  HashValue: TDeclaredHash;
 begin
   Result := False;
   AComponent := nil;
@@ -2409,6 +2484,15 @@ begin
     if not ReadJSONArray(AObject, 'declared_publishers', Values) or
       not ValidateStringListJSON(Values) then
       Exit;
+  if AObject.Find('declared_hashes') <> nil then
+  begin
+    if not ReadJSONArray(AObject, 'declared_hashes', Values) or
+      (Values.Count > MaximumDeclaredHashesPerComponent) then
+      Exit;
+    for I := 0 to Values.Count - 1 do
+      if Values.Items[I].JSONType <> jtObject then
+        Exit;
+  end;
   try
     AComponent := TComponent.Create;
     ReadJSONString(AObject, 'component_type', False,
@@ -2437,6 +2521,15 @@ begin
       JSONStringsToList(Values, AComponent.DeclaredLicenses);
     if ReadJSONArray(AObject, 'declared_publishers', Values) then
       JSONStringsToList(Values, AComponent.DeclaredPublishers);
+    if ReadJSONArray(AObject, 'declared_hashes', Values) then
+      for I := 0 to Values.Count - 1 do
+      begin
+        HashValue := nil;
+        if not ParseDeclaredHashJSON(TJSONObject(Values.Items[I]),
+          HashValue) then
+          raise EJSON.Create('invalid cached declared hash');
+        AComponent.DeclaredHashes.Add(HashValue);
+      end;
     Result := ValidateComponentModel(AComponent, ARelativePath,
       AContentSHA256);
     if not Result then
@@ -2874,9 +2967,13 @@ begin
       if not ObjectHasOnlyMembers(Root, RootAllowed) or
         not ReadJSONString(Root, 'format', True, FormatName) or
         (FormatName <> ScanCacheFormatName) or
-        not ReadJSONInteger(Root, 'format_version', VersionValue) or
-        (VersionValue <> ScanCacheFormatVersion) or
-        not ReadJSONObject(Root, 'context', ContextObject) or
+        not ReadJSONInteger(Root, 'format_version', VersionValue) then
+        raise EJSONParser.Create('document schema is invalid');
+      { A snapshot from another cache format is an ordinary cold miss. Do not
+        attempt to reinterpret its entry schema and do not alarm the user. }
+      if VersionValue <> ScanCacheFormatVersion then
+        Exit(False);
+      if not ReadJSONObject(Root, 'context', ContextObject) or
         not ValidateContextJSON(ContextObject, LoadedContext) or
         not ReadJSONArray(Root, 'entries', EntriesArray) or
         (EntriesArray.Count > MaximumScanCacheEntries) then

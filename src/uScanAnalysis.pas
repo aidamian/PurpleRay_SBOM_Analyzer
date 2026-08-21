@@ -33,7 +33,7 @@ const
   { Increment whenever per-file evidence semantics, parser contracts, or
     identifier synthesis changes. It is deliberately independent of release
     and commit versions so unrelated builds do not invalidate safe evidence. }
-  ScanAnalysisContract = 'purpleray-file-analysis-v1';
+  ScanAnalysisContract = 'purpleray-file-analysis-v2';
 
 type
   {**

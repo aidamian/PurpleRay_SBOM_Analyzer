@@ -32,6 +32,7 @@ uses
 type
   TScanSettingsDialog = class(TForm)
   published
+    SettingsScrollBox: TScrollBox;
     SettingsContentPanel: TPanel;
     DescriptionTopSpacer: TPanel;
     DescriptionLabel: TLabel;
@@ -44,6 +45,8 @@ type
     FCalculateSHA256: TCheckBox;
     FUseRescanCache: TCheckBox;
     FRefreshRescanCache: TCheckBox;
+    FCheckKnownIssues: TCheckBox;
+    KnownIssuesDisclosureLabel: TLabel;
     AuthorPersistenceLabel: TLabel;
     AuthorOrganizationPanel: TPanel;
     AuthorOrganizationLabel: TLabel;
@@ -115,6 +118,24 @@ type
     procedure RestoreDefaultsClicked(Sender: TObject);
 
     {**
+      Keeps the focused settings control visible during keyboard navigation.
+
+      Parameters
+      ----------
+      Sender
+        Focusable control inside the scrolling settings content.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure ScrollFocusedControlIntoView(Sender: TObject);
+
+    {**
       Validates optional author contact data before allowing the dialog to close.
 
       Parameters
@@ -177,12 +198,47 @@ type
         May propagate if form creation fails.
     }
     class function Execute(ASettings: TScanSettings;
-      const ATargetDirectory: string): Boolean;
+      const ATargetDirectory: string): Boolean; overload;
+
+    {**
+      Edits scan settings and returns the separate one-scan online opt-in.
+
+      Parameters
+      ----------
+      ASettings
+        Existing persistent settings, updated only after confirmation.
+      ATargetDirectory
+        Folder shown in the dialog caption and read-only target field.
+      ACheckKnownIssues
+        Receives True only when the user explicitly selects the OSV.dev check
+        for this invocation. It is initialized False and is never persisted.
+
+      Returns
+      -------
+      Boolean
+        True when the user confirms the dialog.
+
+      Raises
+      ------
+      EArgumentNilException
+        Raised when ASettings is nil.
+      EResNotFound, EReadError
+        May propagate if form creation fails.
+    *}
+    class function Execute(ASettings: TScanSettings;
+      const ATargetDirectory: string;
+      out ACheckKnownIssues: Boolean): Boolean; overload;
   end;
 
 implementation
 
 {$R *.lfm}
+
+procedure TScanSettingsDialog.ScrollFocusedControlIntoView(Sender: TObject);
+begin
+  if (SettingsScrollBox <> nil) and (Sender is TControl) then
+    SettingsScrollBox.ScrollInView(TControl(Sender));
+end;
 
 {**
   Derives a single-line root name suitable for the native window caption.
@@ -328,9 +384,18 @@ end;
 class function TScanSettingsDialog.Execute(ASettings: TScanSettings;
   const ATargetDirectory: string): Boolean;
 var
+  IgnoredKnownIssueChoice: Boolean;
+begin
+  Result := Execute(ASettings, ATargetDirectory, IgnoredKnownIssueChoice);
+end;
+
+class function TScanSettingsDialog.Execute(ASettings: TScanSettings;
+  const ATargetDirectory: string; out ACheckKnownIssues: Boolean): Boolean;
+var
   Dialog: TScanSettingsDialog;
   I: Integer;
 begin
+  ACheckKnownIssues := False;
   if ASettings = nil then
     raise EArgumentNilException.Create('ASettings must not be nil');
   Dialog := TScanSettingsDialog.Create(nil);
@@ -346,6 +411,8 @@ begin
     Dialog.FCalculateSHA256.Checked := ASettings.CalculateSHA256;
     Dialog.FUseRescanCache.Checked := ASettings.UseRescanCache;
     Dialog.FRefreshRescanCache.Checked := ASettings.RefreshRescanCache;
+    { Online consent is deliberately transient and unchecked on every open. }
+    Dialog.FCheckKnownIssues.Checked := False;
     Dialog.FAuthorOrganization.Text := ASettings.SBOMAuthorOrganization;
     Dialog.FAuthorEmail.Text := ASettings.SBOMAuthorEmail;
     Dialog.FIgnorePatterns.Lines.Assign(ASettings.IgnorePatterns);
@@ -354,6 +421,7 @@ begin
     Result := Dialog.ShowModal = mrOK;
     if Result then
     begin
+      ACheckKnownIssues := Dialog.FCheckKnownIssues.Checked;
       ASettings.IncludeAbsolutePaths := Dialog.FIncludeAbsolutePaths.Checked;
       ASettings.FollowSymbolicLinks := Dialog.FFollowSymbolicLinks.Checked;
       ASettings.AllowOutsideRoot := Dialog.FAllowOutsideRoot.Checked;

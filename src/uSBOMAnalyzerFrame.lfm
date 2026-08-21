@@ -26,7 +26,7 @@ object SBOMAnalyzerFrame: TSBOMAnalyzerFrame
       BorderSpacing.Right = 6
       BorderSpacing.Top = 11
       BorderSpacing.Bottom = 11
-      Caption = 'Export SBOM'
+      Caption = 'Export...'
       OnClick = ExportClicked
       TabOrder = 5
     end
@@ -488,6 +488,7 @@ object SBOMAnalyzerFrame: TSBOMAnalyzerFrame
               item Caption = 'Ecosystem' Width = 80 end
               item Caption = 'Type' Width = 75 end
               item Caption = 'Status' Width = 110 end
+              item Caption = 'Known issues' Width = 95 end
               item Caption = 'License' Width = 95 end
               item Caption = 'Publisher' Width = 100 end
               item Caption = 'Scope' Width = 85 end
@@ -650,6 +651,18 @@ object SBOMAnalyzerFrame: TSBOMAnalyzerFrame
     object CopySelectedMenuItem: TMenuItem
       Caption = 'Copy selected row (full values)'
       OnClick = CopySelectedClicked
+    end
+  end
+  object FExportMenu: TPopupMenu
+    Left = 808
+    Top = 104
+    object ExportSBOMMenuItem: TMenuItem
+      Caption = 'CycloneDX SBOM...'
+      OnClick = ExportSBOMClicked
+    end
+    object ExportBSIReadinessMenuItem: TMenuItem
+      Caption = 'BSI TR-03183-2 v2.1.0 readiness report...'
+      OnClick = ExportBSIReadinessClicked
     end
   end
   object FTaskMenu: TPopupMenu

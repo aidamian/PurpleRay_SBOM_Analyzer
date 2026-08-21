@@ -250,6 +250,10 @@ begin
     ATarget.DeclaredLicenses.Add(ASource.DeclaredLicenses[I]);
   for I := 0 to ASource.DeclaredPublishers.Count - 1 do
     ATarget.DeclaredPublishers.Add(ASource.DeclaredPublishers[I]);
+  { Declared digests are provenance records rather than scalar component
+    identity. Preserve same-digest archive alternatives and collapse only an
+    exact match across all five fields. }
+  ATarget.DeclaredHashes.AddClones(ASource.DeclaredHashes);
   if (ATarget.SourceArtifact = '') or
     ((ASource.SourceArtifact <> '') and
     (CompareStr(ASource.SourceArtifact, ATarget.SourceArtifact) < 0)) then

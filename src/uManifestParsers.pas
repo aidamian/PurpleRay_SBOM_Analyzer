@@ -220,7 +220,7 @@ function IsEcosystemVersionRange(const AEcosystem,
 implementation
 
 uses
-  fpjson, DOM, XMLRead, streamex, uJSONUtils;
+  base64, fpjson, DOM, XMLRead, streamex, uJSONUtils;
 
 const
   MaximumManifestJSONBytes = Int64(32) * 1024 * 1024;
@@ -885,6 +885,136 @@ begin
       if Trim(ADeclaredPublishers[I]) <> '' then
         Component.DeclaredPublishers.Add(Trim(ADeclaredPublishers[I]));
   AComponents.Add(Component);
+end;
+
+function BytesToLowerHex(const AValue: string): string;
+const
+  HexDigits = '0123456789abcdef';
+var
+  I: Integer;
+  ByteValue: Byte;
+begin
+  SetLength(Result, Length(AValue) * 2);
+  for I := 1 to Length(AValue) do
+  begin
+    ByteValue := Ord(AValue[I]);
+    Result[(I * 2) - 1] := HexDigits[(ByteValue shr 4) + 1];
+    Result[I * 2] := HexDigits[(ByteValue and $0F) + 1];
+  end;
+end;
+
+function TryDecodeSRIHash(const AToken: string; out AAlgorithm,
+  ADigest: string): Boolean;
+var
+  AlgorithmValue, EncodedValue, DecodedValue: string;
+  DashAt, ExpectedBytes, ExpectedEncodedLength, I, PaddingLength: Integer;
+begin
+  Result := False;
+  AAlgorithm := '';
+  ADigest := '';
+  if (AToken = '') or (Length(AToken) > 256) then
+    Exit;
+  DashAt := Pos('-', AToken);
+  if (DashAt <= 1) or (DashAt = Length(AToken)) then
+    Exit;
+  AlgorithmValue := LowerCase(Copy(AToken, 1, DashAt - 1));
+  EncodedValue := Copy(AToken, DashAt + 1, MaxInt);
+  case AlgorithmValue of
+    'sha1':
+      begin
+        AAlgorithm := 'SHA-1';
+        ExpectedBytes := 20;
+      end;
+    'sha256':
+      begin
+        AAlgorithm := 'SHA-256';
+        ExpectedBytes := 32;
+      end;
+    'sha384':
+      begin
+        AAlgorithm := 'SHA-384';
+        ExpectedBytes := 48;
+      end;
+    'sha512':
+      begin
+        AAlgorithm := 'SHA-512';
+        ExpectedBytes := 64;
+      end;
+  else
+    Exit;
+  end;
+  ExpectedEncodedLength := ((ExpectedBytes + 2) div 3) * 4;
+  PaddingLength := (3 - (ExpectedBytes mod 3)) mod 3;
+  if Length(EncodedValue) <> ExpectedEncodedLength then
+    Exit;
+  for I := 1 to Length(EncodedValue) - PaddingLength do
+    if not (EncodedValue[I] in ['A'..'Z', 'a'..'z', '0'..'9', '+', '/']) then
+      Exit;
+  for I := Length(EncodedValue) - PaddingLength + 1 to Length(EncodedValue) do
+    if EncodedValue[I] <> '=' then
+      Exit;
+  try
+    DecodedValue := DecodeStringBase64(EncodedValue, True);
+  except
+    on EBase64DecodingException do
+      Exit;
+  end;
+  { The strict decoder checks alphabet and padding placement. A canonical
+    round-trip additionally rejects nonzero unused trailing bits. }
+  if (Length(DecodedValue) <> ExpectedBytes) or
+    (EncodeStringBase64(DecodedValue) <> EncodedValue) then
+    Exit;
+  ADigest := BytesToLowerHex(DecodedValue);
+  Result := True;
+end;
+
+procedure AddDeclaredHash(AComponent: TComponent; const AAlgorithm,
+  ADigest, ASubject, ARelativePath, AParser: string);
+var
+  HashValue: TDeclaredHash;
+begin
+  if AComponent = nil then
+    Exit;
+  HashValue := TDeclaredHash.Create;
+  HashValue.Algorithm := AAlgorithm;
+  HashValue.Digest := LowerCase(ADigest);
+  HashValue.Subject := ASubject;
+  HashValue.SourceArtifact := ARelativePath;
+  HashValue.SourceParser := AParser;
+  AComponent.DeclaredHashes.Add(HashValue);
+end;
+
+procedure AddNPMIntegrityHashes(AComponent: TComponent;
+  const AIntegrity, ASubject, ARelativePath: string);
+const
+  MaximumIntegrityLength = 16 * 1024;
+var
+  PositionValue, TokenStart, OptionAt: Integer;
+  TokenValue, AlgorithmValue, DigestValue: string;
+begin
+  if (AComponent = nil) or (ASubject = '') or (AIntegrity = '') or
+    (Length(AIntegrity) > MaximumIntegrityLength) then
+    Exit;
+  PositionValue := 1;
+  while PositionValue <= Length(AIntegrity) do
+  begin
+    while (PositionValue <= Length(AIntegrity)) and
+      (AIntegrity[PositionValue] in [' ', #9, #10, #13]) do
+      Inc(PositionValue);
+    TokenStart := PositionValue;
+    while (PositionValue <= Length(AIntegrity)) and
+      not (AIntegrity[PositionValue] in [' ', #9, #10, #13]) do
+      Inc(PositionValue);
+    if PositionValue = TokenStart then
+      Continue;
+    TokenValue := Copy(AIntegrity, TokenStart, PositionValue - TokenStart);
+    OptionAt := Pos('?', TokenValue);
+    if OptionAt > 0 then
+      TokenValue := Copy(TokenValue, 1, OptionAt - 1);
+    if TryDecodeSRIHash(TokenValue, AlgorithmValue, DigestValue) then
+      AddDeclaredHash(AComponent, AlgorithmValue, DigestValue, ASubject,
+        ARelativePath, 'package-lock-json');
+  end;
 end;
 
 function ScalarJSONValue(AData: TJSONData): string;
@@ -1713,11 +1843,30 @@ begin
   end;
 end;
 
+procedure AddPackageLockComponent(AComponents: TObjectList;
+  const AName, AVersion, ARelativePath, AScope,
+  AComponentType: string; AEntry: TJSONObject);
+var
+  PreviousCount: Integer;
+  Component: TComponent;
+begin
+  PreviousCount := AComponents.Count;
+  AddComponent(AComponents, AName, AVersion, 'npm', ARelativePath,
+    'package-lock-json', AScope, AComponentType);
+  if (AComponents.Count <= PreviousCount) or
+    not IsExactEcosystemVersion('npm', AVersion) then
+    Exit;
+  Component := TComponent(AComponents[AComponents.Count - 1]);
+  AddNPMIntegrityHashes(Component, JSONString(AEntry, 'integrity'),
+    Trim(AName) + '@' + Trim(AVersion), ARelativePath);
+end;
+
 procedure ParseLegacyPackageLockDependencies(AObject: TJSONObject;
   AComponents: TObjectList; const ARelativePath: string);
 var
   I: Integer;
   Entry, Nested: TJSONObject;
+  VersionValue: string;
 begin
   if AObject = nil then
     Exit;
@@ -1726,8 +1875,9 @@ begin
     if AObject.Items[I].JSONType <> jtObject then
       Continue;
     Entry := TJSONObject(AObject.Items[I]);
-    AddComponent(AComponents, AObject.Names[I], JSONString(Entry, 'version'),
-      'npm', ARelativePath, 'package-lock-json', 'resolved');
+    VersionValue := JSONString(Entry, 'version');
+    AddPackageLockComponent(AComponents, AObject.Names[I], VersionValue,
+      ARelativePath, 'resolved', 'library', Entry);
     Nested := JSONObject(Entry, 'dependencies');
     if Nested <> nil then
       ParseLegacyPackageLockDependencies(Nested, AComponents, ARelativePath);
@@ -1781,11 +1931,11 @@ begin
           NameValue := NPMNameFromPackagePath(Packages.Names[I]);
         VersionValue := JSONString(Entry, 'version');
         if Packages.Names[I] = '' then
-          AddComponent(AComponents, NameValue, VersionValue, 'npm',
-            ARelativePath, 'package-lock-json', 'project', 'application')
+          AddPackageLockComponent(AComponents, NameValue, VersionValue,
+            ARelativePath, 'project', 'application', Entry)
         else
-          AddComponent(AComponents, NameValue, VersionValue, 'npm',
-            ARelativePath, 'package-lock-json', 'resolved');
+          AddPackageLockComponent(AComponents, NameValue, VersionValue,
+            ARelativePath, 'resolved', 'library', Entry);
       end;
     if Packages = nil then
       ParseLegacyPackageLockDependencies(JSONObject(Root, 'dependencies'),
@@ -3207,62 +3357,49 @@ begin
   end;
 end;
 
-{**
-  Parses repeated TOML name/version package blocks from a lock stream.
+function TryCanonicalSHA256Hex(const AValue: string;
+  out ADigest: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  ADigest := '';
+  if Length(AValue) <> 64 then
+    Exit;
+  for I := 1 to Length(AValue) do
+    if not (AValue[I] in ['0'..'9', 'a'..'f', 'A'..'F']) then
+      Exit;
+  ADigest := LowerCase(AValue);
+  Result := True;
+end;
 
-  Parameters
-  ----------
-  AStream
-    Bounded Cargo or Poetry lock text stream.
-  ARelativePath
-    Root-relative evidence path.
-  AEcosystem
-    Ecosystem label assigned to each component.
-  AParser
-    Stable parser-provenance label assigned to each component.
-  AComponents
-    Owned list receiving resolved components.
-
-  Returns
-  -------
-  None
-
-  Raises
-  ------
-  Exception
-    Propagated for stream access or allocation failure.
-*}
-procedure ParseLockNameVersionBlocks(AStream: TStream; const ARelativePath,
-  AEcosystem, AParser: string; AComponents: TObjectList);
+procedure ParseCargoLock(AStream: TStream; const ARelativePath: string;
+  AComponents: TObjectList);
 var
   Lines: TStringList;
-  I, EqualsAt: Integer;
-  LineValue, NameValue, VersionValue: string;
+  I, PreviousCount: Integer;
+  LineValue, NameValue, VersionValue, ChecksumValue, DigestValue: string;
   InPackage: Boolean;
+  Component: TComponent;
 
-  {**
-    Emits the enclosing block's pending package and resets captured fields.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-
-    Raises
-    ------
-    EOutOfMemory
-      Propagated if component evidence cannot be allocated.
-  *}
   procedure Emit;
   begin
+    PreviousCount := AComponents.Count;
     if NameValue <> '' then
-      AddComponent(AComponents, NameValue, VersionValue, AEcosystem,
-        ARelativePath, AParser, 'resolved');
+      AddComponent(AComponents, NameValue, VersionValue, 'Cargo',
+        ARelativePath, 'conservative-cargo-lock', 'resolved');
+    if (AComponents.Count > PreviousCount) and
+      IsExactEcosystemVersion('Cargo', VersionValue) and
+      TryCanonicalSHA256Hex(ChecksumValue, DigestValue) then
+    begin
+      Component := TComponent(AComponents[AComponents.Count - 1]);
+      AddDeclaredHash(Component, 'SHA-256', DigestValue,
+        Trim(NameValue) + '@' + Trim(VersionValue), ARelativePath,
+        'conservative-cargo-lock');
+    end;
     NameValue := '';
     VersionValue := '';
+    ChecksumValue := '';
   end;
 
 begin
@@ -3271,11 +3408,12 @@ begin
     LoadLinesFromStream(AStream, Lines);
     NameValue := '';
     VersionValue := '';
+    ChecksumValue := '';
     InPackage := False;
     for I := 0 to Lines.Count - 1 do
     begin
-      LineValue := Trim(Lines[I]);
-      if (LineValue = '[[package]]') then
+      LineValue := StripTOMLComment(Lines[I]);
+      if LineValue = '[[package]]' then
       begin
         Emit;
         InPackage := True;
@@ -3283,16 +3421,309 @@ begin
       end;
       if not InPackage then
         Continue;
-      EqualsAt := Pos('=', LineValue);
-      if EqualsAt = 0 then
-        Continue;
-      if SameText(Trim(Copy(LineValue, 1, EqualsAt - 1)), 'name') then
-        NameValue := Unquote(Copy(LineValue, EqualsAt + 1, MaxInt))
-      else if SameText(Trim(Copy(LineValue, 1, EqualsAt - 1)), 'version') then
-        VersionValue := Unquote(Copy(LineValue, EqualsAt + 1, MaxInt));
+      if TryTOMLStringAssignment(LineValue, 'name', DigestValue) then
+        NameValue := DigestValue
+      else if TryTOMLStringAssignment(LineValue, 'version', DigestValue) then
+        VersionValue := DigestValue
+      else if TryTOMLStringAssignment(LineValue, 'checksum', DigestValue) then
+        ChecksumValue := DigestValue;
     end;
     Emit;
   finally
+    Lines.Free;
+  end;
+end;
+
+procedure SkipTOMLWhitespace(const AText: string; var APosition: Integer);
+begin
+  while (APosition <= Length(AText)) and
+    (AText[APosition] in [' ', #9, #10, #13]) do
+    Inc(APosition);
+end;
+
+function IsPoetryArchiveSubject(const AValue: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := (AValue <> '') and
+    (Length(AValue) <= MaximumDeclaredHashSubjectLength) and
+    (Pos('/', AValue) = 0) and (Pos('\', AValue) = 0) and
+    (Pos('://', AValue) = 0);
+  if not Result then
+    Exit;
+  for I := 1 to Length(AValue) do
+    if (Ord(AValue[I]) < 32) or (Ord(AValue[I]) = 127) then
+      Exit(False);
+end;
+
+function ParsePoetryFilesValue(const AValue, ARelativePath: string;
+  AHashes: TDeclaredHashList): Boolean;
+var
+  Pending: TDeclaredHashList;
+  PositionValue, KeyStart: Integer;
+  KeyValue, StringValue, FileValue, HashValue, DigestValue: string;
+  FileSeen, HashSeen: Boolean;
+  DeclaredHash: TDeclaredHash;
+begin
+  Result := False;
+  if (AHashes = nil) or (AValue = '') then
+    Exit;
+  Pending := TDeclaredHashList.Create;
+  try
+    PositionValue := 1;
+    SkipTOMLWhitespace(AValue, PositionValue);
+    if (PositionValue > Length(AValue)) or
+      (AValue[PositionValue] <> '[') then
+      Exit;
+    Inc(PositionValue);
+    while True do
+    begin
+      SkipTOMLWhitespace(AValue, PositionValue);
+      if PositionValue > Length(AValue) then
+        Exit;
+      if AValue[PositionValue] = ']' then
+      begin
+        Inc(PositionValue);
+        Break;
+      end;
+      if AValue[PositionValue] <> '{' then
+        Exit;
+      Inc(PositionValue);
+      FileSeen := False;
+      HashSeen := False;
+      FileValue := '';
+      HashValue := '';
+      while True do
+      begin
+        SkipTOMLWhitespace(AValue, PositionValue);
+        KeyStart := PositionValue;
+        while (PositionValue <= Length(AValue)) and
+          (AValue[PositionValue] in ['A'..'Z', 'a'..'z', '0'..'9',
+          '_', '-']) do
+          Inc(PositionValue);
+        if PositionValue = KeyStart then
+          Exit;
+        KeyValue := Copy(AValue, KeyStart, PositionValue - KeyStart);
+        SkipTOMLWhitespace(AValue, PositionValue);
+        if (PositionValue > Length(AValue)) or
+          (AValue[PositionValue] <> '=') then
+          Exit;
+        Inc(PositionValue);
+        SkipTOMLWhitespace(AValue, PositionValue);
+        if not TryConsumeTOMLLiteralString(AValue, PositionValue,
+          StringValue) then
+          Exit;
+        if KeyValue = 'file' then
+        begin
+          if FileSeen then
+            Exit;
+          FileSeen := True;
+          FileValue := StringValue;
+        end
+        else if KeyValue = 'hash' then
+        begin
+          if HashSeen then
+            Exit;
+          HashSeen := True;
+          HashValue := StringValue;
+        end
+        else
+          Exit;
+        SkipTOMLWhitespace(AValue, PositionValue);
+        if PositionValue > Length(AValue) then
+          Exit;
+        if AValue[PositionValue] = '}' then
+        begin
+          Inc(PositionValue);
+          Break;
+        end;
+        if AValue[PositionValue] <> ',' then
+          Exit;
+        Inc(PositionValue);
+      end;
+      if FileSeen and HashSeen and IsPoetryArchiveSubject(FileValue) and
+        (Length(HashValue) > 7) and
+        (LowerCase(Copy(HashValue, 1, 7)) = 'sha256:') and
+        TryCanonicalSHA256Hex(Copy(HashValue, 8, MaxInt), DigestValue) then
+      begin
+        DeclaredHash := TDeclaredHash.Create;
+        DeclaredHash.Algorithm := 'SHA-256';
+        DeclaredHash.Digest := DigestValue;
+        DeclaredHash.Subject := FileValue;
+        DeclaredHash.SourceArtifact := ARelativePath;
+        DeclaredHash.SourceParser := 'conservative-poetry-lock';
+        Pending.Add(DeclaredHash);
+      end;
+      SkipTOMLWhitespace(AValue, PositionValue);
+      if PositionValue > Length(AValue) then
+        Exit;
+      if AValue[PositionValue] = ']' then
+      begin
+        Inc(PositionValue);
+        Break;
+      end;
+      if AValue[PositionValue] <> ',' then
+        Exit;
+      Inc(PositionValue);
+    end;
+    SkipTOMLWhitespace(AValue, PositionValue);
+    if PositionValue <= Length(AValue) then
+      Exit;
+    AHashes.AddClones(Pending);
+    Result := True;
+  finally
+    Pending.Free;
+  end;
+end;
+
+procedure UpdateTOMLArrayDepth(const AText: string; var ADepth: Integer;
+  var AValid: Boolean);
+var
+  I: Integer;
+  QuoteValue: Char;
+  Escaped: Boolean;
+begin
+  QuoteValue := #0;
+  Escaped := False;
+  for I := 1 to Length(AText) do
+  begin
+    if QuoteValue <> #0 then
+    begin
+      if (QuoteValue = '"') and (AText[I] = '\') and not Escaped then
+      begin
+        Escaped := True;
+        Continue;
+      end;
+      if (AText[I] = QuoteValue) and not Escaped then
+        QuoteValue := #0;
+      Escaped := False;
+      Continue;
+    end;
+    if AText[I] in ['"', ''''] then
+      QuoteValue := AText[I]
+    else if AText[I] = '[' then
+      Inc(ADepth)
+    else if AText[I] = ']' then
+    begin
+      Dec(ADepth);
+      if ADepth < 0 then
+      begin
+        AValid := False;
+        Exit;
+      end;
+    end;
+  end;
+  if QuoteValue <> #0 then
+    AValid := False;
+end;
+
+function CollectPoetryFilesArray(ALines: TStrings; var ALineIndex: Integer;
+  const AFirstValue: string; out AValue: string): Boolean;
+const
+  MaximumPoetryFilesArrayLength = 1024 * 1024;
+var
+  Depth, NextIndex: Integer;
+  Valid, Retain: Boolean;
+  LineValue: string;
+begin
+  Result := False;
+  AValue := '';
+  Depth := 0;
+  Valid := True;
+  Retain := Length(AFirstValue) <= MaximumPoetryFilesArrayLength;
+  if Retain then
+    AValue := AFirstValue;
+  UpdateTOMLArrayDepth(AFirstValue, Depth, Valid);
+  while Valid and (Depth > 0) do
+  begin
+    NextIndex := ALineIndex + 1;
+    if NextIndex >= ALines.Count then
+      Exit;
+    LineValue := StripTOMLComment(ALines[NextIndex]);
+    if LineValue = '[[package]]' then
+      Exit;
+    ALineIndex := NextIndex;
+    if Retain then
+    begin
+      if Length(AValue) + Length(LineValue) + 1 >
+        MaximumPoetryFilesArrayLength then
+      begin
+        Retain := False;
+        AValue := '';
+      end
+      else
+        AValue := AValue + #10 + LineValue;
+    end;
+    UpdateTOMLArrayDepth(LineValue, Depth, Valid);
+  end;
+  Result := Valid and Retain and (Depth = 0);
+end;
+
+procedure ParsePoetryLock(AStream: TStream; const ARelativePath: string;
+  AComponents: TObjectList);
+var
+  Lines: TStringList;
+  PendingHashes: TDeclaredHashList;
+  I, PreviousCount: Integer;
+  LineValue, NameValue, VersionValue, AssignmentValue,
+    FilesValue: string;
+  InPackage: Boolean;
+  Component: TComponent;
+
+  procedure Emit;
+  begin
+    PreviousCount := AComponents.Count;
+    if NameValue <> '' then
+      AddComponent(AComponents, NameValue, VersionValue, 'PyPI',
+        ARelativePath, 'conservative-poetry-lock', 'resolved');
+    if (AComponents.Count > PreviousCount) and
+      IsExactEcosystemVersion('PyPI', VersionValue) then
+    begin
+      Component := TComponent(AComponents[AComponents.Count - 1]);
+      Component.DeclaredHashes.AddClones(PendingHashes);
+    end;
+    NameValue := '';
+    VersionValue := '';
+    PendingHashes.Clear;
+  end;
+
+begin
+  Lines := TStringList.Create;
+  PendingHashes := TDeclaredHashList.Create;
+  try
+    LoadLinesFromStream(AStream, Lines);
+    NameValue := '';
+    VersionValue := '';
+    InPackage := False;
+    I := 0;
+    while I < Lines.Count do
+    begin
+      LineValue := StripTOMLComment(Lines[I]);
+      if LineValue = '[[package]]' then
+      begin
+        Emit;
+        InPackage := True;
+        Inc(I);
+        Continue;
+      end;
+      if InPackage then
+      begin
+        if TryTOMLStringAssignment(LineValue, 'name', AssignmentValue) then
+          NameValue := AssignmentValue
+        else if TryTOMLStringAssignment(LineValue, 'version',
+          AssignmentValue) then
+          VersionValue := AssignmentValue
+        else if TryTOMLAssignmentValue(LineValue, 'files',
+          AssignmentValue) and (AssignmentValue <> '') and
+          (AssignmentValue[1] = '[') and
+          CollectPoetryFilesArray(Lines, I, AssignmentValue, FilesValue) then
+          ParsePoetryFilesValue(FilesValue, ARelativePath, PendingHashes);
+      end;
+      Inc(I);
+    end;
+    Emit;
+  finally
+    PendingHashes.Free;
     Lines.Free;
   end;
 end;
@@ -4174,10 +4605,8 @@ begin
       pkLazarusXML: ParseLazarusXML(AStream, ARelativePath, AComponents);
       pkPipfileLock: ParsePipfileLock(AStream, ARelativePath, AComponents);
       pkGoSum: ParseGoSum(AStream, ARelativePath, AComponents);
-      pkCargoLock: ParseLockNameVersionBlocks(AStream, ARelativePath,
-        'Cargo', 'conservative-cargo-lock', AComponents);
-      pkPoetryLock: ParseLockNameVersionBlocks(AStream, ARelativePath,
-        'PyPI', 'conservative-poetry-lock', AComponents);
+      pkCargoLock: ParseCargoLock(AStream, ARelativePath, AComponents);
+      pkPoetryLock: ParsePoetryLock(AStream, ARelativePath, AComponents);
       pkCargoTOML: ParseCargoTOML(AStream, ARelativePath, AComponents);
       pkYarnLock: ParseYarnLock(AStream, ARelativePath, AComponents);
       pkGradleLock: ParseGradleLock(AStream, ARelativePath, AComponents);

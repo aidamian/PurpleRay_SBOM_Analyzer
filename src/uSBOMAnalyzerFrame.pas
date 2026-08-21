@@ -111,6 +111,9 @@ type
     ClosePollTimer: TTimer;
     FCopyMenu: TPopupMenu;
     CopySelectedMenuItem: TMenuItem;
+    FExportMenu: TPopupMenu;
+    ExportSBOMMenuItem: TMenuItem;
+    ExportBSIReadinessMenuItem: TMenuItem;
     FTaskMenu: TPopupMenu;
     DeleteTaskMenuItem: TMenuItem;
 
@@ -208,6 +211,12 @@ type
         Copy errors are shown to the user and do not escape the event handler.
     }
     procedure ExportClicked(Sender: TObject);
+
+    {** Copies the selected task's immutable managed CycloneDX bytes. *}
+    procedure ExportSBOMClicked(Sender: TObject);
+
+    {** Builds a path-free BSI TR-03183-2 v2.1.0 readiness assessment. *}
+    procedure ExportBSIReadinessClicked(Sender: TObject);
 
     {**
       Exports all persisted tasks, settings, diagnostics, and SBOMs as one ZIP.
@@ -1118,7 +1127,8 @@ type
       EOutOfMemory
         May propagate if the task or worker cannot be allocated.
     }
-    procedure StartScan(const ADirectory: string; ASettings: TScanSettings);
+    procedure StartScan(const ADirectory: string; ASettings: TScanSettings;
+      ACheckKnownIssues: Boolean);
 
     {**
       Collects per-scan settings, persists safe defaults, and starts the scan.
@@ -1456,8 +1466,9 @@ type
 implementation
 
 uses
-  Clipbrd, Graphics, LCLIntf, LCLType, uVersionInfo, uTimeUtils, uPlatform,
-  uScanSettingsDialog, uExportUtils, uPresentation;
+  Clipbrd, Graphics, LCLIntf, LCLType, Types, uVersionInfo, uTimeUtils, uPlatform,
+  uAtomicFiles, uBSIReadiness, uJSONUtils, uScanSettingsDialog, uExportUtils,
+  uOSVCore, uPresentation, uSaveDialogCompat;
 
 {$R *.lfm}
 
@@ -1572,6 +1583,53 @@ begin
       Result := Result + '; ';
     Result := Result + AValues[I];
   end;
+end;
+
+{**
+  Renders one component's privacy-safe OSV lookup state.
+
+  Parameters
+  ----------
+  ATask
+    Task containing the point-in-time lookup outcome.
+  AComponent
+    Component whose exact Package URL eligibility is evaluated locally.
+  AMatchCount
+    Number of retained advisory matches for that Package URL.
+
+  Returns
+  -------
+  string
+    A warning count, ``0 observed``, ``Incomplete``, ``Not queried``, or an
+    empty string when no lookup was requested.
+
+  Raises
+  ------
+  EOutOfMemory
+    May propagate while canonicalizing a bounded Package URL.
+*}
+function KnownIssueCellText(ATask: TScanTask;
+  AComponent: uModels.TComponent; AMatchCount: Integer): string;
+var
+  CanonicalPackageURL: string;
+  RejectionReason: TOSVCandidateRejectionReason;
+begin
+  Result := '';
+  CanonicalPackageURL := '';
+  RejectionReason := Low(TOSVCandidateRejectionReason);
+  if (ATask = nil) or (AComponent = nil) or
+    not ATask.KnownIssueCheck.Requested then
+    Exit;
+  if AMatchCount > 0 then
+    Exit(#$E2#$9A#$A0 + ' ' + IntToStr(AMatchCount));
+  if not TryCanonicalOSVPackageURL(AComponent.PackageURL,
+    CanonicalPackageURL, RejectionReason) or
+    (CanonicalPackageURL = '') then
+    Exit('Not queried');
+  if ATask.KnownIssueCheck.OutcomeCode = 'ok' then
+    Result := '0 observed'
+  else
+    Result := 'Incomplete';
 end;
 
 constructor TSBOMAnalyzerFrame.Create(TheOwner: Classes.TComponent);
@@ -1977,6 +2035,25 @@ begin
     AddRow('Generated SBOM', ATask.GeneratedSBOMPath);
     AddRow('Generated SBOM SHA-256', ATask.GeneratedSBOMSHA256);
 
+    AddSection('Known issues');
+    if ATask.KnownIssueCheck.Requested then
+    begin
+      AddRow('Source', 'OSV.dev');
+      AddRow('Checked (UTC)', ATask.KnownIssueCheck.CheckedUTC);
+      AddRow('Outcome', ATask.KnownIssueCheck.OutcomeCode);
+      AddRow('Eligible Package URLs',
+        IntToStr(ATask.KnownIssueCheck.EligibleCandidateCount));
+      AddRow('Rejected Package URLs',
+        IntToStr(ATask.KnownIssueCheck.RejectedCandidateCount));
+      AddRow('Advisories', IntToStr(ATask.KnownIssueCheck.AdvisoryCount));
+      AddRow('Package/advisory matches',
+        IntToStr(ATask.KnownIssueCheck.MatchCount));
+      if ATask.KnownIssueCheck.HTTPStatus > 0 then
+        AddRow('HTTP status', IntToStr(ATask.KnownIssueCheck.HTTPStatus));
+    end
+    else
+      AddRow('Check', 'Not requested');
+
     AddSection('Settings');
     AddRow('Scan settings', ATask.Settings.AsSummary);
     if Trim(ATask.Settings.SBOMAuthorOrganization) <> '' then
@@ -1988,8 +2065,18 @@ begin
     FSummaryNotes.Lines.Add('Completeness notice');
     FSummaryNotes.Lines.Add('Results use bounded internal static inspection. ' +
       'Direct linked-library declarations may be identified, but ' +
-      'runtime-loaded or undeclared dependencies can still be missed. This is ' +
-      'not a vulnerability or license-compliance assessment.');
+      'runtime-loaded or undeclared dependencies can still be missed. The ' +
+      'inventory is not a comprehensive vulnerability or license-compliance ' +
+      'assessment.');
+    if ATask.KnownIssueCheck.Requested then
+    begin
+      FSummaryNotes.Lines.Add('');
+      FSummaryNotes.Lines.Add('Known-issue notice');
+      FSummaryNotes.Lines.Add('OSV.dev results are a point-in-time advisory ' +
+        'lookup over eligible exact package coordinates. No finding is not ' +
+        'a clean bill of health. The inventory SBOM itself remains offline ' +
+        'evidence and contains no vulnerability data.');
+    end;
     if ATask.FilesInspected = 0 then
     begin
       FSummaryNotes.Lines.Add('');
@@ -2093,14 +2180,29 @@ end;
 
 procedure TSBOMAnalyzerFrame.PopulateComponents(ATask: TScanTask);
 var
-  Sorted: TStringList;
-  I, StartAt, EndAt: Integer;
+  IssueCounts, Sorted: TStringList;
+  I, IssueIndex, StartAt, EndAt: Integer;
   Component: uModels.TComponent;
-  LicenseValue, PublisherValue, SearchValue, StatusValue, SortValue: string;
+  KnownIssueValue, LicenseValue, PublisherValue, SearchValue, StatusValue,
+    SortValue: string;
   Item: TListItem;
+
+  function KnownIssueCount(const APackageURL: string): Integer;
+  var
+    IndexValue: Integer;
+  begin
+    Result := 0;
+    if not ATask.KnownIssueCheck.Requested then
+      Exit;
+    IndexValue := IssueCounts.IndexOf(APackageURL);
+    if IndexValue >= 0 then
+      Result := PtrInt(IssueCounts.Objects[IndexValue]);
+  end;
+
 begin
   FComponentList.Items.BeginUpdate;
   Sorted := TStringList.Create;
+  IssueCounts := TStringList.Create;
   try
     FComponentList.Items.Clear;
     if ATask = nil then
@@ -2112,6 +2214,24 @@ begin
     end;
     Sorted.Sorted := True;
     Sorted.Duplicates := dupAccept;
+    Sorted.CaseSensitive := True;
+    Sorted.UseLocale := False;
+    IssueCounts.Sorted := True;
+    IssueCounts.Duplicates := dupError;
+    IssueCounts.CaseSensitive := True;
+    IssueCounts.UseLocale := False;
+    if ATask.KnownIssueCheck.Requested then
+      for I := 0 to ATask.KnownIssueCheck.MatchCount - 1 do
+      begin
+        IssueIndex := IssueCounts.IndexOf(
+          ATask.KnownIssueCheck.Matches[I].PackageURL);
+        if IssueIndex < 0 then
+          IssueCounts.AddObject(
+            ATask.KnownIssueCheck.Matches[I].PackageURL, TObject(PtrInt(1)))
+        else
+          IssueCounts.Objects[IssueIndex] := TObject(
+            PtrInt(IssueCounts.Objects[IssueIndex]) + 1);
+      end;
     SearchValue := Trim(FComponentSearch.Text);
     for I := 0 to ATask.Components.Count - 1 do
     begin
@@ -2119,6 +2239,8 @@ begin
       StatusValue := ComponentArtifactStatus(ATask, Component);
       LicenseValue := JoinedValues(Component.DeclaredLicenses);
       PublisherValue := JoinedValues(Component.DeclaredPublishers);
+      KnownIssueValue := KnownIssueCellText(ATask, Component,
+        KnownIssueCount(Component.PackageURL));
       if (FComponentEcosystem.ItemIndex > 0) and
         not SameText(FComponentEcosystem.Text, Component.Ecosystem) then
         Continue;
@@ -2127,8 +2249,9 @@ begin
         Continue;
       if not ContainsTextValue(Component.Name + ' ' + Component.Version + ' ' +
         Component.Ecosystem + ' ' + Component.ComponentType + ' ' +
-        StatusValue + ' ' + LicenseValue + ' ' + PublisherValue + ' ' +
-        Component.DependencyScope + ' ' + Component.SourceArtifact,
+        StatusValue + ' ' + KnownIssueValue + ' ' + LicenseValue + ' ' +
+        PublisherValue + ' ' + Component.DependencyScope + ' ' +
+        Component.SourceArtifact,
         SearchValue) then
         Continue;
       case FComponentSortColumn of
@@ -2136,10 +2259,12 @@ begin
         2: SortValue := Component.Ecosystem;
         3: SortValue := Component.ComponentType;
         4: SortValue := StatusValue;
-        5: SortValue := LicenseValue;
-        6: SortValue := PublisherValue;
-        7: SortValue := Component.DependencyScope;
-        8: SortValue := Component.SourceArtifact;
+        5: SortValue := Format('%.10d',
+          [KnownIssueCount(Component.PackageURL)]);
+        6: SortValue := LicenseValue;
+        7: SortValue := PublisherValue;
+        8: SortValue := Component.DependencyScope;
+        9: SortValue := Component.SourceArtifact;
       else
         SortValue := Component.Name;
       end;
@@ -2170,6 +2295,8 @@ begin
       Item.SubItems.Add(Component.ComponentType);
       Item.SubItems.Add(StatusDisplayText(ComponentArtifactStatus(ATask,
         Component)));
+      Item.SubItems.Add(KnownIssueCellText(ATask, Component,
+        KnownIssueCount(Component.PackageURL)));
       Item.SubItems.Add(JoinedValues(Component.DeclaredLicenses));
       Item.SubItems.Add(JoinedValues(Component.DeclaredPublishers));
       Item.SubItems.Add(Component.DependencyScope);
@@ -2177,6 +2304,7 @@ begin
       if FComponentSortAscending then Inc(I) else Dec(I);
     end;
   finally
+    IssueCounts.Free;
     Sorted.Free;
     FComponentList.Items.EndUpdate;
   end;
@@ -2301,6 +2429,8 @@ begin
 end;
 
 procedure TSBOMAnalyzerFrame.PopulateMessages(ATask: TScanTask);
+const
+  MaximumDisplayedKnownIssueMatches = 500;
 var
   ArtifactNoteCount, I: Integer;
   Artifact: TArtifact;
@@ -2325,6 +2455,39 @@ begin
     FMessagesMemo.Lines.Add('Bounded internal static inspection can identify ' +
       'direct declarations, but ' +
       'runtime-loaded or undeclared dependencies can still be missed.');
+    if ATask.KnownIssueCheck.Requested then
+    begin
+      AddSection('Known issues — OSV.dev (' +
+        IntToStr(ATask.KnownIssueCheck.MatchCount) + ' matches, ' +
+        IntToStr(ATask.KnownIssueCheck.AdvisoryCount) + ' advisories)');
+      FMessagesMemo.Lines.Add('Outcome: ' +
+        ATask.KnownIssueCheck.OutcomeCode);
+      FMessagesMemo.Lines.Add('Checked (UTC): ' +
+        ATask.KnownIssueCheck.CheckedUTC);
+      if ATask.KnownIssueCheck.Diagnostic <> '' then
+        FMessagesMemo.Lines.Add('Diagnostic: ' +
+          ATask.KnownIssueCheck.Diagnostic);
+      FMessagesMemo.Lines.Add('No finding is not a clean bill of health. ' +
+        'Results are point-in-time OSV.dev advisory matches for eligible ' +
+        'exact package coordinates.');
+      for I := 0 to ATask.KnownIssueCheck.MatchCount - 1 do
+      begin
+        if I >= MaximumDisplayedKnownIssueMatches then
+        begin
+          FMessagesMemo.Lines.Add('- ' + IntToStr(
+            ATask.KnownIssueCheck.MatchCount - I) +
+            ' additional matches are retained in task history but omitted ' +
+            'from this view.');
+          Break;
+        end;
+        FMessagesMemo.Lines.Add('- ' +
+          ATask.KnownIssueCheck.Matches[I].AdvisoryID + ' — ' +
+          ATask.KnownIssueCheck.Matches[I].PackageURL + ' (modified ' +
+          ATask.KnownIssueCheck.Matches[I].Modified + ') — ' +
+          'https://osv.dev/vulnerability/' +
+          ATask.KnownIssueCheck.Matches[I].AdvisoryID);
+      end;
+    end;
     if ATask.Warnings.Count > 0 then
     begin
       AddSection('Warnings (' + IntToStr(ATask.Warnings.Count) + ')');
@@ -2424,7 +2587,7 @@ begin
 end;
 
 procedure TSBOMAnalyzerFrame.StartScan(const ADirectory: string;
-  ASettings: TScanSettings);
+  ASettings: TScanSettings; ACheckKnownIssues: Boolean);
 var
   Task: TScanTask;
   Target: string;
@@ -2456,7 +2619,8 @@ begin
   SetActiveFooter;
   FProgressPath.Caption := 'Starting scan of ' + Task.TargetRootName + '...';
   FProgressStats.Caption := 'Preparing worker thread';
-  FWorker := TScanWorker.Create(Task, FHistoryService.DataDirectory);
+  FWorker := TScanWorker.Create(Task, FHistoryService.DataDirectory,
+    ACheckKnownIssues);
   FWorker.OnProgress := @WorkerProgress;
   FWorker.OnComplete := @WorkerComplete;
   FWorker.Start;
@@ -2472,6 +2636,7 @@ end;
 
 procedure TSBOMAnalyzerFrame.ConfigureAndStartScan(const ADirectory: string);
 var
+  CheckKnownIssues: Boolean;
   WorkingSettings, PersistedSettings: TScanSettings;
   Target: string;
 begin
@@ -2486,7 +2651,8 @@ begin
       WorkingSettings.IncludeAbsolutePaths := False;
       WorkingSettings.AllowOutsideRoot := False;
     end;
-    if not TScanSettingsDialog.Execute(WorkingSettings, Target) then
+    if not TScanSettingsDialog.Execute(WorkingSettings, Target,
+      CheckKnownIssues) then
       Exit;
     PersistedSettings := WorkingSettings.Clone;
     { A full-cache refresh is a deliberate one-scan override. Cache reuse may
@@ -2504,7 +2670,7 @@ begin
       on E: Exception do
         ShowError('Scan settings could not be saved: ' + E.Message);
     end;
-    StartScan(Target, WorkingSettings);
+    StartScan(Target, WorkingSettings, CheckKnownIssues);
   finally
     PersistedSettings.Free;
     WorkingSettings.Free;
@@ -2682,7 +2848,7 @@ end;
 
 procedure TSBOMAnalyzerFrame.NewScanClicked(Sender: TObject);
 var
-  Dialog: TSelectDirectoryDialog;
+  Dialog: TPurpleRaySelectDirectoryDialog;
 begin
   if FActiveTaskID <> '' then
   begin
@@ -2690,7 +2856,7 @@ begin
       'cancel it before starting another scan.', mtInformation, [mbOK], 0);
     Exit;
   end;
-  Dialog := TSelectDirectoryDialog.Create(Self);
+  Dialog := TPurpleRaySelectDirectoryDialog.Create(Self);
   try
     Dialog.Title := 'Select a folder to scan';
     if Dialog.Execute then
@@ -2739,13 +2905,23 @@ end;
 
 procedure TSBOMAnalyzerFrame.ExportClicked(Sender: TObject);
 var
+  MenuPoint: TPoint;
+begin
+  if not FExportButton.Enabled then
+    Exit;
+  MenuPoint := FExportButton.ClientToScreen(Point(0, FExportButton.Height));
+  FExportMenu.PopUp(MenuPoint.X, MenuPoint.Y);
+end;
+
+procedure TSBOMAnalyzerFrame.ExportSBOMClicked(Sender: TObject);
+var
   Task: TScanTask;
-  Dialog: TSaveDialog;
+  Dialog: TPurpleRaySaveDialog;
 begin
   Task := SelectedTask;
   if (Task = nil) or not FileExists(Task.GeneratedSBOMPath) then
     Exit;
-  Dialog := TSaveDialog.Create(Self);
+  Dialog := TPurpleRaySaveDialog.Create(Self);
   try
     Dialog.Title := 'Export CycloneDX SBOM';
     Dialog.Filter := 'CycloneDX JSON (*.cdx.json)|*.cdx.json|JSON files (*.json)|*.json|All files|*';
@@ -2769,13 +2945,70 @@ begin
   end;
 end;
 
+procedure TSBOMAnalyzerFrame.ExportBSIReadinessClicked(Sender: TObject);
+var
+  Dialog: TPurpleRaySaveDialog;
+  ManagedBytes: RawByteString;
+  Report: UTF8String;
+  SourceStream: TFileStream;
+  Summary: TBSIReadinessSummary;
+  SuggestedName: string;
+  Task: TScanTask;
+begin
+  Task := SelectedTask;
+  if (Task = nil) or (Task.Status <> tsCompleted) or
+    not FileExists(Task.GeneratedSBOMPath) then
+    Exit;
+  SourceStream := nil;
+  Dialog := TPurpleRaySaveDialog.Create(Self);
+  try
+    try
+      try
+        SourceStream := TFileStream.Create(Task.GeneratedSBOMPath,
+          fmOpenRead or fmShareDenyWrite);
+        ManagedBytes := ReadBoundedRawBytes(SourceStream,
+          DefaultMaximumJSONBytes);
+      finally
+        SourceStream.Free;
+      end;
+      Report := GenerateBSIReadinessReport(ManagedBytes,
+        Task.GeneratedSBOMSHA256, Task.ID, Summary);
+      SuggestedName := ChangeFileExt(ChangeFileExt(
+        TaskSBOMExportFileName(Task), ''), '') +
+        BSIReadinessSuggestedExtension;
+      Dialog.Title := 'Export BSI TR-03183-2 v2.1.0 readiness report';
+      Dialog.Filter := 'JSON files (*.json)|*.json|All files|*';
+      Dialog.DefaultExt := 'json';
+      Dialog.FileName := SuggestedName;
+      Dialog.Options := Dialog.Options + [ofOverwritePrompt];
+      if Dialog.Execute then
+      begin
+        if SameFileName(ExpandFileName(Dialog.FileName),
+          ExpandFileName(Task.GeneratedSBOMPath)) then
+          raise EInOutError.Create(
+            'The readiness report cannot replace the managed SBOM');
+        WriteAtomicUTF8(Dialog.FileName, Report, False);
+        ShowExportFeedback(Dialog.FileName,
+          'BSI readiness report exported (' +
+          BSIReadinessStatusToString(Summary.Status) + ')');
+      end;
+    except
+      on E: Exception do
+        ShowError('The BSI readiness report could not be exported: ' +
+          E.Message);
+    end;
+  finally
+    Dialog.Free;
+  end;
+end;
+
 procedure TSBOMAnalyzerFrame.ExportDatabaseClicked(Sender: TObject);
 var
-  Dialog: TSaveDialog;
+  Dialog: TPurpleRaySaveDialog;
 begin
   if (FActiveTaskID <> '') or (FHistoryService.TaskCount = 0) then
     Exit;
-  Dialog := TSaveDialog.Create(Self);
+  Dialog := TPurpleRaySaveDialog.Create(Self);
   try
     Dialog.Title := 'Back up all tasks and results';
     Dialog.Filter := 'ZIP archives (*.zip)|*.zip|All files|*';
@@ -2954,7 +3187,7 @@ var
   List: TListView;
   I: Integer;
   Task: TScanTask;
-  Value: string;
+  KnownIssueValue, Value: string;
 begin
   List := nil;
   if (Sender = FSummaryList) or (FCopyMenu.PopupComponent = FSummaryList) then
@@ -2984,7 +3217,13 @@ begin
     if Task <> nil then
       Value := Value + StatusDisplayText(ComponentArtifactStatus(Task,
         Component));
-    Value := Value + #9 + JoinedValues(Component.DeclaredLicenses) + #9 +
+    if Task <> nil then
+      KnownIssueValue := KnownIssueCellText(Task, Component,
+        Task.KnownIssueCheck.MatchCountForPackageURL(Component.PackageURL))
+    else
+      KnownIssueValue := '';
+    Value := Value + #9 + KnownIssueValue + #9 +
+      JoinedValues(Component.DeclaredLicenses) + #9 +
       JoinedValues(Component.DeclaredPublishers) + #9 +
       Component.DependencyScope + #9 + Component.SourceArtifact;
   end
