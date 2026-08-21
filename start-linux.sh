@@ -93,8 +93,8 @@ check_ui_prerequisites() {
 
   [[ "$(uname -s)" == 'Linux' ]] || fail 'this script must be run on Linux'
   [[ "$(uname -m)" == 'x86_64' ]] || fail 'the published release requires x86-64 Linux'
-  [[ -n "${WAYLAND_DISPLAY:-}" || -n "${DISPLAY:-}" ]] ||
-    fail 'no Linux UI is available; run this script from a UI-enabled Linux desktop session with Wayland or X11'
+  [[ -n "${DISPLAY:-}" ]] ||
+    fail 'no X11 display is available; run this script from an X11 or XWayland-enabled Linux desktop session'
 
   glibc_version="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
   [[ "$glibc_version" =~ ^glibc[[:space:]]+([0-9]+)\.([0-9]+) ]] ||
@@ -115,11 +115,12 @@ check_ui_prerequisites() {
   fi
   if [[ -n "$ldconfig_command" ]]; then
     "$ldconfig_command" -p 2>/dev/null |
-      awk '$1 == "libgtk-3.so.0" { found = 1 } END { exit !found }' ||
-      fail 'the GTK3 runtime is missing; install your distribution package that provides libgtk-3.so.0'
-  elif [[ ! -e /usr/lib/x86_64-linux-gnu/libgtk-3.so.0 &&
-          ! -e /usr/lib64/libgtk-3.so.0 && ! -e /usr/lib/libgtk-3.so.0 ]]; then
-    fail 'could not find the GTK3 runtime (libgtk-3.so.0)'
+      awk '$1 == "libgtk-x11-2.0.so.0" { found = 1 } END { exit !found }' ||
+      fail 'the GTK2 runtime is missing; install your distribution package that provides libgtk-x11-2.0.so.0'
+  elif [[ ! -e /usr/lib/x86_64-linux-gnu/libgtk-x11-2.0.so.0 &&
+          ! -e /usr/lib64/libgtk-x11-2.0.so.0 &&
+          ! -e /usr/lib/libgtk-x11-2.0.so.0 ]]; then
+    fail 'could not find the GTK2 runtime (libgtk-x11-2.0.so.0)'
   fi
 }
 

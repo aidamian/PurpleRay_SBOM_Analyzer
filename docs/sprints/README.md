@@ -24,7 +24,7 @@ is not treated as a pass.
 | 5 | Scan comparison | Accepted and released | [`v0.6.0`](https://github.com/aidamian/PurpleRay_SBOM_Analyzer/releases/tag/v0.6.0) | [Sprint 5](sprint-05-scan-comparison.md) |
 | 6 | CLI and distribution | Accepted; its proposed release failed before publication | First published together with Sprint 7 in `v0.7.1` | [Sprint 6](sprint-06-cli-distribution.md) |
 | 7 | Scanner depth | Accepted and released | [`v0.7.1`](https://github.com/aidamian/PurpleRay_SBOM_Analyzer/releases/tag/v0.7.1) | [Sprint 7](sprint-07-scanner-depth.md) |
-| 8 | Opt-in OSV analysis and evidence completion | Delivered to `main`; final acceptance evidence incomplete | `VERSION=0.8.0`, but no `v0.8.0` tag or release existed at audit time | [Sprint 8](sprint-08-advanced-analysis.md) |
+| 8 | Opt-in OSV analysis and evidence completion | Delivered to `main`; a WSL2 UI correction is locally validated but not yet committed | Unreleased `0.8.x`; current `VERSION=0.8.1` has no matching tag or release | [Sprint 8](sprint-08-advanced-analysis.md) |
 
 ## Evidence rules
 
@@ -53,7 +53,9 @@ is not treated as a pass.
 - Sprint 8's ignored handoff was stale after the implementation was pushed: it
   still described `VERSION=0.7.1` and pending delivery. The tracked record now
   reflects commit `51915ce` and `VERSION=0.8.0`, while retaining the unresolved
-  final acceptance rows.
+  final acceptance rows. A later WSL2 UI correction is recorded separately in
+  the Sprint 8 file and remains a candidate until it has an immutable commit
+  and CI result.
 
 Future work should update the applicable sprint file in the same change that
 closes an evidence gap or publishes a release. Do not replace a gap with an

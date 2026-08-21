@@ -106,3 +106,47 @@ Until those rows are closed with exact evidence, Sprint 8 must not be labelled
 fully accepted or released. Point-in-time OSV matches remain non-exploitability
 advisory evidence, BSI output remains readiness-only, and macOS/signing/WinGet
 submission remain outside this acceptance claim.
+
+## 2026-08-21 WSL2 UI correction candidate
+
+This later maintenance run invalidated the historical GTK3 UI acceptance
+claim. A real WSLg launch on the current mixed-DPI desktop reproduced the
+operator report before any fix:
+
+- Lazarus 4.8 GTK3 reported 170 runtime PPI for the 96-PPI LFM and realized the
+  1080×680 shell as 1452×921 on a 1440×900 logical monitor.
+- startup emitted the reported GLib, Gtk, and Gdk criticals in Lazarus GTK3
+  widget internals;
+- New Scan entered the expected modal loop, but its 1096×822 folder chooser
+  had no transient parent. The blocked main form could therefore appear hung
+  when WSLg placed the chooser behind it or on another monitor.
+
+The candidate correction changes the supported Linux build to Lazarus GTK2 on
+X11/XWayland, reduces the main design to 980×600 with a 720×440 minimum, and
+keeps GTK3 only as an unsupported manual build target. The measured WSLg shell
+is 32.5% narrower and 34.9% shorter than the failing realized window.
+
+Local validation on Lazarus 4.8 and FPC 3.2.2 completed the following against
+the corrected working tree:
+
+- GTK2 Release build: pass; the executable links `libgtk-x11-2.0.so.0` and not
+  `libgtk-3.so.0`.
+- WSLg at normal scale and `GDK_SCALE=2`: exact 980×600 shell; no implicit
+  scaling, clipping, or maximization.
+- real pointer New Scan flow: 780×585 transient-parented chooser, Cancel,
+  immediate reopen, folder selection, 620×500 transient settings dialog,
+  Start scan, persisted completed history/SBOM, Analyzer/Compare switching,
+  and responsive controls after completion.
+- the same production flow under `G_DEBUG=fatal-warnings`: zero stderr
+  diagnostics; no GLib, Gtk, or Gdk warning/critical was tolerated.
+- permanent Linux suite: 86 registered, 85 passed, 0 failed, 1 Windows-only
+  skip.
+- Linux packaging: pass with the declared portable dependency
+  `libgtk2.0-0`; packaging rejects an accidentally GTK3-linked binary.
+- version consistency: root, Pascal fallback, and Lazarus metadata all report
+  `0.8.1`.
+
+The privacy-safe application screenshot was refreshed to the measured compact
+shell. This section records local candidate evidence only. Delivery still
+requires a commit and push, and the native Windows/CI matrix must pass before
+the correction can close Sprint 8 acceptance or support a release.

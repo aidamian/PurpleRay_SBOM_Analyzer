@@ -1673,8 +1673,8 @@ procedure TestSprint6DistributionContracts;
 var
   Lines: TStringList;
   WorkflowText, ReadmeText, LinuxLauncherText, WSLLauncherText,
-    WindowsLauncherText, LinuxPackageText, WindowsPackageText, ScoopText,
-    WingetInstallerText, PackageValidatorText: string;
+    WindowsLauncherText, LinuxBuildText, LinuxPackageText, WindowsPackageText,
+    ScoopText, WingetInstallerText, PackageValidatorText: string;
   InstallPosition, LauncherPosition, DevelopmentPosition: SizeInt;
 begin
   Lines := TStringList.Create;
@@ -1685,6 +1685,9 @@ begin
     WorkflowText := Lines.Text;
     Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'README.md');
     ReadmeText := Lines.Text;
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'scripts' +
+      DirectorySeparator + 'build-linux.sh');
+    LinuxBuildText := Lines.Text;
     Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
       'start-linux.sh');
     LinuxLauncherText := Lines.Text;
@@ -1725,6 +1728,16 @@ begin
       (Pos('lazarus-project_4.8.0-0_amd64.deb', WorkflowText) > 0) and
       (Pos('Lazarus 4.2', WorkflowText) = 0),
       'release workflow no longer pins the supported stable toolchain');
+    AssertTrue((Pos('name: Linux x64 / GTK2', WorkflowText) > 0) and
+      (Pos('widgetset: gtk2', WorkflowText) > 0) and
+      (Pos('name: Linux x64 / GTK3', WorkflowText) = 0) and
+      (Pos('libgtk2.0-dev', WorkflowText) > 0) and
+      (Pos('libgtk-3-dev', WorkflowText) = 0) and
+      (Pos('libgtk2.0-0', WorkflowText) > 0),
+      'release workflow no longer builds and packages the GTK2 target');
+    AssertTrue((Pos('--widgetset=gtk2', LinuxBuildText) > 0) and
+      (Pos('--widgetset=gtk3', LinuxBuildText) = 0),
+      'the local Linux build script no longer selects GTK2');
     AssertTrue((Pos('LAZARUS_WINDOWS_SHA256: ' +
       '''ED25EE171D55E23CF14E0633159FDD2325EFBA56E186F8AB817AD3BF97D267D7''',
       WorkflowText) > 0) and
@@ -1773,6 +1786,10 @@ begin
     AssertTrue((Pos('readelf --version-info', LinuxPackageText) > 0) and
       (Pos('GLIBC_2.34', LinuxPackageText) > 0),
       'Linux packaging no longer verifies its published GLIBC compatibility floor');
+    AssertTrue((Pos('libgtk-x11-2.0.so.0', LinuxPackageText) > 0) and
+      (Pos('unexpectedly links to the unsupported GTK3 runtime',
+      LinuxPackageText) > 0) and (Pos('libgtk2.0-0', LinuxPackageText) > 0),
+      'Linux packaging no longer verifies the GTK2 ABI and dependency');
     AssertTrue((Pos('LICENSE', LinuxPackageText) > 0) and
       (Pos('NOTICE', LinuxPackageText) > 0),
       'Linux packaging omitted required notices');
@@ -1801,8 +1818,15 @@ begin
       (Pos('gh attestation verify', WSLLauncherText) > 0) and
       (Pos('attestation verify --help', WSLLauncherText) > 0) and
       (Pos('upgrade gh', WSLLauncherText) > 0) and
-      (Pos('WSLg is unavailable', WSLLauncherText) > 0),
+      (Pos('WSLg XWayland is unavailable', WSLLauncherText) > 0),
       'WSL2 launcher lost pinning, provenance, or UI preflight');
+    AssertTrue((Pos('libgtk-x11-2.0.so.0', LinuxLauncherText) > 0) and
+      (Pos('libgtk-x11-2.0.so.0', WSLLauncherText) > 0) and
+      (Pos('libgtk-3.so.0', LinuxLauncherText) = 0) and
+      (Pos('libgtk-3.so.0', WSLLauncherText) = 0) and
+      (Pos('[[ -n "${DISPLAY:-}" ]]', LinuxLauncherText) > 0) and
+      (Pos('[[ -n "${DISPLAY:-}" ]]', WSLLauncherText) > 0),
+      'Linux launchers no longer require the GTK2/XWayland boundary');
     AssertTrue((Pos('$ProgressPreference = ''SilentlyContinue''',
       WindowsLauncherText) > 0) and
       (Pos('PURPLERAY_VERSION', WindowsLauncherText) > 0) and
@@ -1832,6 +1856,11 @@ begin
       'README bootstrap no longer preserves reusable launchers');
     AssertTrue(Pos('### First SBOM in 60 seconds', ReadmeText) > 0,
       'README lost the three-step first-SBOM walkthrough');
+    AssertTrue((Pos('Linux x64 (GTK2)', ReadmeText) > 0) and
+      (Pos('--widgetset=gtk2', ReadmeText) > 0) and
+      (Pos('libgtk2.0-dev', ReadmeText) > 0) and
+      (Pos('XWayland compatibility layer', ReadmeText) > 0),
+      'README no longer documents the supported Linux/WSL2 UI target');
     AssertTrue(Pos('macOS has no current release, launcher, or support claim',
       ReadmeText) > 0,
       'README revived a shipped macOS support claim');
@@ -1999,6 +2028,13 @@ begin
 
     AssertTrue(Pos('object MainForm: TMainForm', ShellResource) > 0,
       'the main-form resource root differs');
+    AssertTrue((Pos(LineEnding + '  Height = 600' + LineEnding,
+      ShellResource) > 0) and
+      (Pos(LineEnding + '  Width = 980' + LineEnding,
+      ShellResource) > 0) and
+      (Pos('Constraints.MinHeight = 440', ShellResource) > 0) and
+      (Pos('Constraints.MinWidth = 720', ShellResource) > 0),
+      'the compact WSL2 main-window geometry regressed');
     AssertTrue(Pos('AllowDropFiles = True', ShellResource) > 0,
       'the shell no longer accepts folder drops');
     AssertTrue(Pos('KeyPreview = True', ShellResource) > 0,
@@ -2129,7 +2165,8 @@ begin
 end;
 
 {**
-  Verifies the settings dialog keeps its GTK3 DPI-safe top-label layout.
+  Verifies the settings dialog keeps its native-widgetset DPI-safe top-label
+  layout.
 
   Parameters
   ----------
@@ -2184,9 +2221,9 @@ begin
       if Trim(ResourceLines[LineIndex]) = 'end' then
         Break;
       AssertTrue(Pos('BorderSpacing.Top', ResourceLines[LineIndex]) = 0,
-        'top spacing on the first aligned label reintroduces the GTK3 DPI loop');
+        'top spacing on the first aligned label reintroduces the LCL DPI loop');
       AssertTrue(Pos('BorderSpacing.Around', ResourceLines[LineIndex]) = 0,
-        'around spacing on the first aligned label reintroduces the GTK3 DPI loop');
+        'around spacing on the first aligned label reintroduces the LCL DPI loop');
     end;
   finally
     ResourceLines.Free;

@@ -132,10 +132,10 @@ jobs:
             use_cache: 'true'
             laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus%20Windows%2064%20bits/Lazarus%204.8/lazarus-4.8-fpc-3.2.2-win64.exe/download
             fpc_url: ''
-          - name: Linux x64 / GTK3
+          - name: Linux x64 / GTK2
             id: linux
             os: ubuntu-24.04
-            widgetset: gtk3
+            widgetset: gtk2
             use_cache: 'true'
             laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus Linux amd64 DEB/Lazarus 4.8/lazarus-project_4.8.0-0_amd64.deb
             fpc_url: |-
@@ -196,7 +196,7 @@ jobs:
           sudo env DEBIAN_FRONTEND=noninteractive \
             timeout --signal=TERM --kill-after=10s 120s \
             apt-get install "${apt_options[@]}" \
-              --yes --no-install-recommends libgtk-3-dev libgtk2.0-dev \
+              --yes --no-install-recommends libgtk2.0-dev \
               appstream desktop-file-utils python3-jsonschema
 
       - name: Cache pinned Linux toolchain installers
@@ -771,7 +771,7 @@ jobs:
           test "$(dpkg-deb --field "$debian" Package)" = 'purpleray-sbom-analyzer'
           test "$(dpkg-deb --field "$debian" Version)" = "$version"
           test "$(dpkg-deb --field "$debian" Architecture)" = 'amd64'
-          expected_dependencies='ca-certificates, libc6 (>= 2.34), libgtk-3-0, libssl3'
+          expected_dependencies='ca-certificates, libc6 (>= 2.34), libgtk2.0-0, libssl3'
           test "$(dpkg-deb --field "$debian" Depends)" = "$expected_dependencies"
           mapfile -t debian_files < <(
             dpkg-deb --fsys-tarfile "$debian" |

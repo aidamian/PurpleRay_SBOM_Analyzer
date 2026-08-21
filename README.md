@@ -9,7 +9,7 @@ after the inventory SBOM has been written; it is unchecked again every time.
 Its native parsers read each artifact through one verified, size-bounded input;
 the application never downloads or requires a separate scanner.
 
-Published builds support Windows x64 and Linux x64 (GTK3), including Linux
+Published builds support Windows x64 and Linux x64 (GTK2), including Linux
 under WSL2 with WSLg. The Cocoa code and packaging are experimental and
 unshipped: macOS has no current release, launcher, or support claim.
 
@@ -39,8 +39,9 @@ package, then install it:
   `sha256sum`, extract it, and run the executable from the extracted directory.
 - **WSL2:** use the Linux tar package from a WSL2 distribution with WSLg.
 
-The Linux build requires x86-64, glibc 2.34 or newer, GTK3, and a working
-Wayland or X11 display. The optional online OSV.dev check additionally needs
+The Linux build requires x86-64, glibc 2.34 or newer, GTK2, and a working X11
+display. WSLg supplies that display through its XWayland compatibility layer.
+The optional online OSV.dev check additionally needs
 the OpenSSL 3 runtime and a system CA certificate store; the Debian package
 declares those dependencies. WSL2 additionally requires WSLg. macOS builds are
 not currently shipped.
@@ -342,11 +343,11 @@ clean bill of health.
 
 The reproducible CI toolchain is Free Pascal 3.2.2 and Lazarus 4.8. On a clean
 Ubuntu x64 WSL2 installation, install the same official Lazarus release and the
-GTK3 development headers with:
+GTK2 development headers with:
 
 ```bash
 sudo apt-get update
-sudo apt-get install --yes ca-certificates curl libgtk-3-dev
+sudo apt-get install --yes ca-certificates curl libgtk2.0-dev
 
 toolchain_directory=$(mktemp -d)
 cd "$toolchain_directory"
@@ -380,7 +381,7 @@ The explicit equivalent build command is:
 ```bash
 lazbuild -B \
   --build-mode=Release \
-  --widgetset=gtk3 \
+  --widgetset=gtk2 \
   src/purpleray_sbom_analyzer.lpi
 ```
 
@@ -391,8 +392,8 @@ WSLg with:
 build/release/purpleray-sbom-analyzer
 ```
 
-WSLg normally sets `WAYLAND_DISPLAY` and `DISPLAY` automatically. If neither is
-present, update WSL from Windows with `wsl --update`, restart it with
+WSLg normally sets `DISPLAY` for its XWayland bridge automatically. If it is
+absent, update WSL from Windows with `wsl --update`, restart it with
 `wsl --shutdown`, and open the WSL workspace again.
 
 To use the Lazarus IDE, open the repository through VS Code's **WSL: Open Folder
@@ -402,7 +403,9 @@ in WSL** command, then run:
 lazarus src/purpleray_sbom_analyzer.lpi
 ```
 
-Select the GTK3 widgetset for a Linux build. The lightweight application shell,
+Select the GTK2 widgetset for a Linux build. This is the supported Linux/WSL2
+target because it avoids the Lazarus GTK3 Wayland scaling and native-dialog
+failures seen under WSLg. The lightweight application shell,
 SBOM Analyzer workspace, Compare Scans workspace, and scan-settings dialog are
 stored as the human-readable `src/uMainForm.lfm`,
 `src/uSBOMAnalyzerFrame.lfm`, `src/uCompareScansFrame.lfm`, and
@@ -769,8 +772,9 @@ appropriately using the citation above.
   provenance, but they do not establish a trusted Windows publisher.
 - The Cocoa target remains experimental source scaffolding. There is no current
   macOS build, release, launcher, signing/notarization, or support commitment.
-- Lazarus's GTK3 backend can emit non-fatal layout diagnostics with some GTK
-  themes or WSLg versions; these do not indicate that scanning has failed.
+- Linux and WSL2 releases use Lazarus's GTK2 backend. GTK3 builds are not a
+  supported release target because current Lazarus GTK3/WSLg combinations can
+  mis-scale windows, hide modal file choosers, and emit backend criticals.
 - Shared-library analysis is static. Direct declarations are read from ELF,
   PE, and Mach-O binaries, but the scanner does not invoke a loader, execute
   targets, resolve libraries to host-specific absolute paths, or infer every

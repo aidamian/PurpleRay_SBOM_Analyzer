@@ -1,14 +1,14 @@
 object MainForm: TMainForm
   Left = 180
-  Height = 680
+  Height = 600
   Top = 90
-  Width = 1080
+  Width = 980
   AllowDropFiles = True
   Caption = 'PurpleRay SBOM Analyzer'
-  ClientHeight = 680
-  ClientWidth = 1080
-  Constraints.MinHeight = 520
-  Constraints.MinWidth = 820
+  ClientHeight = 600
+  ClientWidth = 980
+  Constraints.MinHeight = 440
+  Constraints.MinWidth = 720
   KeyPreview = True
   OnCloseQuery = FormCloseRequested
   OnDropFiles = FormDropFiles
@@ -18,19 +18,19 @@ object MainForm: TMainForm
   LCLVersion = '3.0.0.3'
   object ShellHeaderPanel: TPanel
     Left = 0
-    Height = 54
+    Height = 48
     Top = 0
-    Width = 1080
+    Width = 980
     Align = alTop
     BevelOuter = bvNone
-    ClientHeight = 54
-    ClientWidth = 1080
+    ClientHeight = 48
+    ClientWidth = 980
     TabOrder = 0
     object AppIconImage: TImage
       Left = 10
-      Height = 38
+      Height = 32
       Top = 8
-      Width = 38
+      Width = 32
       Align = alLeft
       BorderSpacing.Left = 10
       BorderSpacing.Top = 8
@@ -39,28 +39,28 @@ object MainForm: TMainForm
       Proportional = True
     end
     object ApplicationTitleLabel: TLabel
-      Left = 58
-      Height = 54
+      Left = 52
+      Height = 48
       Top = 0
-      Width = 818
+      Width = 740
       Align = alClient
       BorderSpacing.Left = 10
       Caption = 'PurpleRay SBOM Analyzer'
-      Font.Height = -19
+      Font.Height = -17
       Font.Style = [fsBold]
       Layout = tlCenter
       ParentFont = False
     end
     object FeatureSelector: TComboBox
-      Left = 886
-      Height = 30
-      Top = 12
-      Width = 182
+      Left = 800
+      Height = 28
+      Top = 10
+      Width = 170
       Align = alRight
-      BorderSpacing.Left = 10
-      BorderSpacing.Top = 12
-      BorderSpacing.Right = 12
-      BorderSpacing.Bottom = 12
+      BorderSpacing.Left = 8
+      BorderSpacing.Top = 10
+      BorderSpacing.Right = 10
+      BorderSpacing.Bottom = 10
       ItemHeight = 0
       ItemIndex = 0
       Items.Strings = (
@@ -76,9 +76,9 @@ object MainForm: TMainForm
   end
   object WorkspaceNotebook: TNotebook
     Left = 0
-    Height = 626
-    Top = 54
-    Width = 1080
+    Height = 552
+    Top = 48
+    Width = 980
     PageIndex = 0
     Align = alClient
     TabOrder = 1

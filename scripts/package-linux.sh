@@ -41,6 +41,20 @@ if [[ $(printf '%s\n' '2.34' "$maximum_glibc_version" |
   echo "Linux executable requires GLIBC_$maximum_glibc_version; the published floor is GLIBC_2.34." >&2
   exit 1
 fi
+mapfile -t native_dependencies < <(
+  readelf --dynamic --wide "$binary" |
+    sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p'
+)
+if ! printf '%s\n' "${native_dependencies[@]}" |
+    grep --fixed-strings --line-regexp --quiet 'libgtk-x11-2.0.so.0'; then
+  echo 'Linux executable is not linked to the supported GTK2 runtime.' >&2
+  exit 1
+fi
+if printf '%s\n' "${native_dependencies[@]}" |
+    grep --fixed-strings --line-regexp --quiet 'libgtk-3.so.0'; then
+  echo 'Linux executable unexpectedly links to the unsupported GTK3 runtime.' >&2
+  exit 1
+fi
 for required_file in LICENSE NOTICE \
   packaging/linux/io.github.aidamian.PurpleRaySBOMAnalyzer.desktop \
   packaging/linux/io.github.aidamian.PurpleRaySBOMAnalyzer.metainfo.xml.in \
@@ -163,7 +177,7 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Installed-Size: $installed_size
-Depends: ca-certificates, libc6 (>= 2.34), libgtk-3-0, libssl3
+Depends: ca-certificates, libc6 (>= 2.34), libgtk2.0-0, libssl3
 Maintainer: Andrei Ionut Damian <aidamian@users.noreply.github.com>
 Homepage: https://github.com/aidamian/PurpleRay_SBOM_Analyzer
 Description: local CycloneDX SBOM generator and comparison tool
@@ -175,7 +189,7 @@ find "$debian_stage" -exec touch --date="@$source_date_epoch" {} +
 SOURCE_DATE_EPOCH="$source_date_epoch" \
   dpkg-deb --root-owner-group --build "$debian_stage" "$debian_package"
 
-expected_dependencies='ca-certificates, libc6 (>= 2.34), libgtk-3-0, libssl3'
+expected_dependencies='ca-certificates, libc6 (>= 2.34), libgtk2.0-0, libssl3'
 if [[ $(dpkg-deb --field "$debian_package" Package) != 'purpleray-sbom-analyzer' ||
       $(dpkg-deb --field "$debian_package" Version) != "$version" ||
       $(dpkg-deb --field "$debian_package" Architecture) != 'amd64' ||
