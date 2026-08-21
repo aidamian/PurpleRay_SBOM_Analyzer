@@ -89,7 +89,7 @@ function ParseCommandLineArguments(const AArguments: array of string;
 
   Raises
   ------
-  EFOpenError, EReadError, EJSONParser
+  EFOpenError, EReadError, EStreamError, EJSONParser, EScannerError
     Raised for inaccessible, oversized, or malformed input.
   EJSON
     Raised when the root, wrapper, or known setting fields have invalid types.

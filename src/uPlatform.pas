@@ -64,7 +64,7 @@ type
       Returns a bounded native identity token without exposing the path.
 
       The token is stable for the lifetime of the pinned directory and is
-      suitable for cache-context invalidation. Unsupported paused targets
+      suitable for cache-context invalidation. Unsupported platform targets
       return an empty token so callers fail closed instead of persisting a
       pathname.
 
@@ -80,7 +80,8 @@ type
 
       Raises
       ------
-      None
+      EOutOfMemory
+        Propagated if formatting the bounded token cannot be allocated.
     *}
     function IdentityToken: string;
     function CreateFileExclusive(const AFileName: string): THandle;
@@ -217,7 +218,8 @@ function CanonicalPath(const APath: string): string;
 
   Raises
   ------
-  None
+  EOutOfMemory
+    Propagated if the native path spelling cannot be allocated.
 }
 function NativeFileSystemPath(const APath: string): string;
 
@@ -517,7 +519,25 @@ end;
 {$ENDIF}
 
 {$IFDEF Windows}
-{** Builds the wide extended-length spelling accepted by Win32 file APIs. *}
+{**
+  Builds the wide extended-length spelling accepted by Win32 file APIs.
+
+  Parameters
+  ----------
+  APath
+    UTF-8 path to expand. Existing extended paths are returned unchanged;
+    ordinary paths are made absolute before their prefix is added.
+
+  Returns
+  -------
+  UnicodeString
+    ``\\?\`` drive path or ``\\?\UNC\`` share path for native access.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if decoding or constructing the native path cannot be allocated.
+*}
 function ExtendedWindowsPath(const APath: string): UnicodeString;
 var
   Expanded: UnicodeString;

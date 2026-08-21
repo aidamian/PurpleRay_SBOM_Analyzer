@@ -125,17 +125,197 @@ type
     }
     procedure ReportProgress(AForce: Boolean = False);
     procedure AddWarning(const AMessage: string);
+
+    {**
+      Validates execution options and allocates reusable scanner state.
+
+      Parameters
+      ----------
+      ACancelCheck
+        Optional cooperative cancellation callback retained by the engine.
+      AProgressCallback
+        Optional callback receiving throttled progress snapshots.
+      AExecutionOptions
+        Worker, deterministic-delay, and optional cache-profile configuration
+        copied into engine-owned state.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      EArgumentOutOfRangeException
+        Raised when the requested worker count is outside zero through four.
+      EArgumentException
+        Raised when deterministic delay entries repeat an ordinal.
+      EOutOfMemory
+        Propagated if scanner state or copied options cannot be allocated.
+    *}
     procedure InitializeEngine(ACancelCheck: TCancelCheck;
       AProgressCallback: TScanProgressCallback;
       const AExecutionOptions: TScanExecutionOptions);
+
+    {**
+      Resolves automatic or explicit bounded analysis concurrency.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      Integer
+        Worker count clamped to the supported one-through-four range.
+
+      Raises
+      ------
+      None
+    *}
     function ResolveWorkerCount: Integer;
+
+    {**
+      Finds the deterministic test delay assigned to one DFS ordinal.
+
+      Parameters
+      ----------
+      AOrdinal
+        Analysis ordinal whose configured delay is requested.
+
+      Returns
+      -------
+      Cardinal
+        Delay in milliseconds, or zero when no entry matches.
+
+      Raises
+      ------
+      None
+    *}
     function DelayForOrdinal(AOrdinal: QWord): Cardinal;
+
+    {**
+      Waits for ordered publication until the bounded pool can accept work.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      Boolean
+        True when capacity is available; False when cancellation intervenes.
+
+      Raises
+      ------
+      EScanAnalysisCoordinatorError, Exception
+        Raised for worker failure, publication failure, or a violated pool
+        capacity invariant.
+    *}
     function EnsureAnalysisCapacity: Boolean;
+
+    {**
+      Publishes the next ordinal result, optionally waiting for its arrival.
+
+      Parameters
+      ----------
+      AWait
+        True to poll until the next result, failure, or cancellation; False to
+        perform one nonblocking availability check.
+      AConsumed
+        Receives True only when one result was removed and handled.
+
+      Returns
+      -------
+      Boolean
+        True while ordered publication may continue; False after cancellation
+        or a cancelled analysis result.
+
+      Raises
+      ------
+      EScanAnalysisCoordinatorError
+        Raised when a worker or ordered publication reports a failure.
+    *}
     function ConsumeNextAnalysisResult(AWait: Boolean;
       out AConsumed: Boolean): Boolean;
+
+    {**
+      Publishes every consecutive result that is immediately available.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      Boolean
+        True when no ready result stops publication; False after cancellation.
+
+      Raises
+      ------
+      EScanAnalysisCoordinatorError
+        Propagated from ordered result consumption.
+    *}
     function DrainAvailableAnalysisResults: Boolean;
+
+    {**
+      Waits for and publishes every ordinal submitted by traversal.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      Boolean
+        True when all submitted work is published; False after cancellation.
+
+      Raises
+      ------
+      EScanAnalysisCoordinatorError, Exception
+        Raised for worker failure, publication failure, or a missing-result
+        invariant violation.
+    *}
     function DrainAllAnalysisResults: Boolean;
+
+    {**
+      Publishes the completed stable prefix while unwinding cancellation.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      Exception
+        Propagated if stable-prefix publication or pool access fails.
+    *}
     procedure DrainCancelledPrefix;
+
+    {**
+      Commits one analysis result into task state in DFS ordinal order.
+
+      Parameters
+      ----------
+      AResult
+        Owned-by-caller result whose input is revalidated before publication.
+
+      Returns
+      -------
+      Boolean
+        True after stable publication; False for a cancelled result.
+
+      Raises
+      ------
+      EArgumentNilException
+        Raised when AResult is nil.
+      Exception
+        Propagated for input instability handling, root-pin failure, or a
+        fatal analysis diagnostic that prevents safe publication.
+    *}
     function PublishAnalysisResult(AResult: TScanAnalysisResult): Boolean;
 
     {**
@@ -357,7 +537,7 @@ type
       Parameters
       ----------
       ACancelCheck
-        Optional callback polled throughout traversal, hashing, and OS tools.
+        Optional callback polled throughout traversal and bounded analysis.
       AProgressCallback
         Optional callback receiving throttled scan snapshots.
 
@@ -373,6 +553,31 @@ type
     }
     constructor Create(ACancelCheck: TCancelCheck;
       AProgressCallback: TScanProgressCallback); overload;
+
+    {**
+      Creates a reusable scanner with explicit bounded execution options.
+
+      Parameters
+      ----------
+      ACancelCheck
+        Optional cooperative cancellation callback.
+      AProgressCallback
+        Optional callback receiving throttled scan snapshots.
+      AExecutionOptions
+        Worker count, test-only ordinal delays, and optional cache profile.
+
+      Returns
+      -------
+      TScanEngine
+        Initialized scanner owned by the caller.
+
+      Raises
+      ------
+      EArgumentException, EArgumentOutOfRangeException
+        Raised for invalid worker or ordinal-delay configuration.
+      EOutOfMemory
+        Propagated if working collections or copied options cannot be allocated.
+    *}
     constructor Create(ACancelCheck: TCancelCheck;
       AProgressCallback: TScanProgressCallback;
       const AExecutionOptions: TScanExecutionOptions); overload;

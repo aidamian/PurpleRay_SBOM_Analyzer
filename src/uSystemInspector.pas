@@ -179,9 +179,12 @@ function InspectWithSystemTools(const AFileName, AFormatName: string;
 
   Raises
   ------
-  None
-    Malformed inputs and stream errors return False so a scan can retain its
-    already established binary-header evidence.
+  EOutOfMemory
+    Propagated if the inspection container cannot be allocated.
+  Exception
+    Exceptions raised by ACancelCheck may propagate. Malformed inputs and
+    stream-parser failures return False so a scan can retain its already
+    established binary-header evidence.
 *}
 function InspectBinarySystemEvidence(AStream: TStream;
   const AFormatName: string; out AInspection: TSystemInspection;

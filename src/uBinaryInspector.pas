@@ -80,6 +80,8 @@ function InspectBinary(const AFileName: string; out AInfo: TBinaryInfo): Boolean
 
   Raises
   ------
+  EArgumentNilException
+    Raised when AStream is nil.
   EReadError, EStreamError
     Propagated when the bounded stream cannot be read or rewound.
 *}
@@ -158,7 +160,8 @@ end;
 
   Raises
   ------
-  None
+  EStreamError
+    Propagated when an in-range stream read or seek fails.
 }
 function InspectPE(AReader: TBoundedBinaryReader;
   out AInfo: TBinaryInfo): Boolean;
@@ -490,7 +493,8 @@ end;
 
   Raises
   ------
-  None
+  EStreamError
+    Propagated when an in-range stream read or seek fails.
 }
 function InspectMachO(AReader: TBoundedBinaryReader;
   out AInfo: TBinaryInfo): Boolean;

@@ -294,11 +294,14 @@ end;
 
   Raises
   ------
-  EFOpenError, EReadError
-    Propagated when the manifest cannot be opened or read.
-  Exception
+  EArgumentNilException, EReadError, EStreamError
+    Raised for nil input or propagated when the stream cannot be read or
+    rewound.
+  EXMLReadError, Exception
     Raised for malformed XML or any document-type declaration, including
     declarations encoded as UTF-16.
+  EOutOfMemory
+    Propagated if parser or DOM storage cannot be allocated.
 }
 procedure ReadSafeXMLStream(AStream: TStream;
   out ADocument: TXMLDocument);
@@ -1077,7 +1080,8 @@ end;
   Raises
   ------
   Exception
-    Propagated for invalid JSON, an invalid root type, or file I/O failure.
+    Propagated for invalid JSON, an invalid root type, stream access, or
+    allocation failure.
 }
 procedure ParsePackageJSON(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
@@ -1142,6 +1146,24 @@ var
   PackageName, ScopeName: string;
   SlashAt: SizeInt;
 
+  {**
+    Validates one unscoped npm name or scope segment.
+
+    Parameters
+    ----------
+    AValue
+      Nonempty candidate segment without a slash or leading at-sign.
+
+    Returns
+    -------
+    Boolean
+      True when endpoints are alphanumeric and all bytes use the accepted
+      conservative ASCII package-name alphabet.
+
+    Raises
+    ------
+    None
+  *}
   function IsValidNameSegment(const AValue: string): Boolean;
   var
     CharacterIndex: Integer;
@@ -1198,6 +1220,24 @@ var
   BuildValue, CoreValue, PreReleaseValue, VersionValue: string;
   DashAt, PlusAt: SizeInt;
 
+  {**
+    Validates the three numeric segments of an installed npm SemVer core.
+
+    Parameters
+    ----------
+    AValue
+      Candidate major, minor, and patch text without suffixes.
+
+    Returns
+    -------
+    Boolean
+      True for exactly three dot-separated numeric segments with no forbidden
+      leading zero.
+
+    Raises
+    ------
+    None
+  *}
   function ValidateCore(const AValue: string): Boolean;
   var
     CharacterIndex, SegmentCount, SegmentStart: Integer;
@@ -1226,6 +1266,25 @@ var
     Result := SegmentCount = 3;
   end;
 
+  {**
+    Validates a dot-separated SemVer prerelease or build identifier list.
+
+    Parameters
+    ----------
+    AValue
+      Candidate identifier list.
+    ARejectNumericLeadingZero
+      True to reject leading zeroes in all-numeric identifiers.
+
+    Returns
+    -------
+    Boolean
+      True for a nonempty list using only ASCII alphanumerics and hyphens.
+
+    Raises
+    ------
+    None
+  *}
   function ValidateIdentifiers(const AValue: string;
     ARejectNumericLeadingZero: Boolean): Boolean;
   var
@@ -1375,6 +1434,23 @@ var
   PreReleaseSeen: Boolean;
   VersionValue: string;
 
+  {**
+    Consumes one or more decimal digits from the enclosing version string.
+
+    Parameters
+    ----------
+    AIndex
+      One-based cursor advanced past the consumed digits.
+
+    Returns
+    -------
+    Boolean
+      True when at least one digit was consumed.
+
+    Raises
+    ------
+    None
+  *}
   function ConsumeDigits(var AIndex: Integer): Boolean;
   var
     StartIndex: Integer;
@@ -1386,6 +1462,25 @@ var
     Result := AIndex > StartIndex;
   end;
 
+  {**
+    Consumes one exact literal from the enclosing normalized version string.
+
+    Parameters
+    ----------
+    AIndex
+      One-based cursor advanced only on a match.
+    AValue
+      Literal bytes required at the current cursor.
+
+    Returns
+    -------
+    Boolean
+      True when AValue matches and was consumed.
+
+    Raises
+    ------
+    None
+  *}
   function ConsumeLiteral(var AIndex: Integer;
     const AValue: string): Boolean;
   begin
@@ -1658,7 +1753,8 @@ end;
   Raises
   ------
   Exception
-    Propagated for invalid JSON, an invalid root type, or file I/O failure.
+    Propagated for invalid JSON, an invalid root type, stream access, or
+    allocation failure.
 }
 procedure ParsePackageLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
@@ -2143,7 +2239,8 @@ end;
   Raises
   ------
   Exception
-    Propagated for unsafe or malformed XML and file I/O failures.
+    Propagated for unsafe or malformed XML, stream access, or allocation
+    failure.
 }
 procedure ParseMavenPOM(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
@@ -2250,7 +2347,8 @@ end;
   Raises
   ------
   Exception
-    Propagated for unsafe or malformed XML and file I/O failures.
+    Propagated for unsafe or malformed XML, stream access, or allocation
+    failure.
 }
 procedure ParseMSBuild(AStream: TStream; const ARelativePath, AParser: string;
   AComponents: TObjectList; ACentral: Boolean);
@@ -2288,6 +2386,28 @@ begin
   end;
 end;
 
+{**
+  Parses resolved package entries from every NuGet target framework.
+
+  Parameters
+  ----------
+  AStream
+    Bounded ``packages.lock.json`` stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving resolved NuGet components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for malformed JSON, an invalid root type, stream failure, or
+    allocation failure.
+*}
 procedure ParseNuGetLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -2330,7 +2450,7 @@ end;
   Raises
   ------
   Exception
-    Propagated for malformed JSON and file I/O failures.
+    Propagated for malformed JSON, stream access, or allocation failure.
 }
 procedure ParseComposerJSON(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
@@ -2417,6 +2537,28 @@ begin
     end;
 end;
 
+{**
+  Parses runtime and development packages from a Composer lock document.
+
+  Parameters
+  ----------
+  AStream
+    Bounded ``composer.lock`` JSON stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving resolved Composer components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for malformed JSON, an invalid root type, stream failure, or
+    allocation failure.
+*}
 procedure ParseComposerLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -2499,6 +2641,28 @@ begin
   end;
 end;
 
+{**
+  Parses required-package names from a Lazarus project XML document.
+
+  Parameters
+  ----------
+  AStream
+    Bounded Lazarus project stream parsed with document types disabled.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving declared Free Pascal package components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for unsafe or malformed XML, stream failure, or allocation
+    failure.
+*}
 procedure ParseLazarusXML(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -2536,6 +2700,28 @@ begin
   end;
 end;
 
+{**
+  Parses resolved default and development sections from ``Pipfile.lock``.
+
+  Parameters
+  ----------
+  AStream
+    Bounded lock-document JSON stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving resolved PyPI components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for malformed JSON, an invalid root type, stream failure, or
+    allocation failure.
+*}
 procedure ParsePipfileLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -2556,6 +2742,27 @@ begin
   end;
 end;
 
+{**
+  Conservatively parses module and version pairs from a Go checksum file.
+
+  Parameters
+  ----------
+  AStream
+    Bounded ``go.sum`` text stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving resolved Go module components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for stream access or allocation failure.
+*}
 procedure ParseGoSum(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -3000,6 +3207,31 @@ begin
   end;
 end;
 
+{**
+  Parses repeated TOML name/version package blocks from a lock stream.
+
+  Parameters
+  ----------
+  AStream
+    Bounded Cargo or Poetry lock text stream.
+  ARelativePath
+    Root-relative evidence path.
+  AEcosystem
+    Ecosystem label assigned to each component.
+  AParser
+    Stable parser-provenance label assigned to each component.
+  AComponents
+    Owned list receiving resolved components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for stream access or allocation failure.
+*}
 procedure ParseLockNameVersionBlocks(AStream: TStream; const ARelativePath,
   AEcosystem, AParser: string; AComponents: TObjectList);
 var
@@ -3008,6 +3240,22 @@ var
   LineValue, NameValue, VersionValue: string;
   InPackage: Boolean;
 
+  {**
+    Emits the enclosing block's pending package and resets captured fields.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    EOutOfMemory
+      Propagated if component evidence cannot be allocated.
+  *}
   procedure Emit;
   begin
     if NameValue <> '' then
@@ -3068,7 +3316,7 @@ end;
   Raises
   ------
   Exception
-    Propagated when file reading or component allocation fails.
+    Propagated when stream access or component allocation fails.
 }
 procedure ParseCargoTOML(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
@@ -3186,7 +3434,7 @@ end;
   Raises
   ------
   Exception
-    Propagated when file reading or component allocation fails.
+    Propagated when stream access or component allocation fails.
 
   Notes
   -----
@@ -3270,6 +3518,27 @@ begin
   end;
 end;
 
+{**
+  Conservatively parses package keys and resolved versions from ``yarn.lock``.
+
+  Parameters
+  ----------
+  AStream
+    Bounded Yarn lock text stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving resolved npm components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for stream access or allocation failure.
+*}
 procedure ParseYarnLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -3277,6 +3546,22 @@ var
   I, AtPos, CommaAt: Integer;
   LineValue, NameValue, VersionValue: string;
 
+  {**
+    Emits the enclosing Yarn entry and resets its captured identity fields.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    EOutOfMemory
+      Propagated if component evidence cannot be allocated.
+  *}
   procedure Emit;
   begin
     if NameValue <> '' then
@@ -3322,6 +3607,27 @@ begin
   end;
 end;
 
+{**
+  Conservatively parses Maven coordinates from a Gradle lock stream.
+
+  Parameters
+  ----------
+  AStream
+    Bounded Gradle lock text stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving resolved Gradle components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for stream access or allocation failure.
+*}
 procedure ParseGradleLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -3358,6 +3664,27 @@ begin
   end;
 end;
 
+{**
+  Conservatively parses resolved gem entries from ``Gemfile.lock``.
+
+  Parameters
+  ----------
+  AStream
+    Bounded RubyGems lock text stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving resolved RubyGems components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for stream access or allocation failure.
+*}
 procedure ParseGemLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -3399,6 +3726,27 @@ begin
   end;
 end;
 
+{**
+  Conservatively parses top-level conda dependencies from environment YAML.
+
+  Parameters
+  ----------
+  AStream
+    Bounded ``environment.yml`` or ``environment.yaml`` text stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving declared conda components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for stream access or allocation failure.
+*}
 procedure ParseEnvironmentYAML(AStream: TStream;
   const ARelativePath: string;
   AComponents: TObjectList);
@@ -3477,6 +3825,28 @@ begin
     end;
 end;
 
+{**
+  Parses either supported Swift ``Package.resolved`` JSON layout.
+
+  Parameters
+  ----------
+  AStream
+    Bounded Swift resolved-package JSON stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving resolved Swift package components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for malformed JSON, an invalid root type, stream failure, or
+    allocation failure.
+*}
 procedure ParsePackageResolved(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -3501,6 +3871,27 @@ begin
   end;
 end;
 
+{**
+  Conservatively parses resolved pod entries from ``Podfile.lock``.
+
+  Parameters
+  ----------
+  AStream
+    Bounded CocoaPods lock text stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving resolved CocoaPods components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for stream access or allocation failure.
+*}
 procedure ParsePodfileLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -3543,6 +3934,28 @@ begin
   end;
 end;
 
+{**
+  Parses dependency names and minimum versions from ``vcpkg.json``.
+
+  Parameters
+  ----------
+  AStream
+    Bounded vcpkg manifest JSON stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving declared vcpkg components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for malformed JSON, an invalid root type, stream failure, or
+    allocation failure.
+*}
 procedure ParseVcpkgJSON(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -3580,6 +3993,27 @@ begin
   end;
 end;
 
+{**
+  Conservatively parses direct requirements from ``conanfile.txt``.
+
+  Parameters
+  ----------
+  AStream
+    Bounded Conan manifest text stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving declared Conan components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for stream access or allocation failure.
+*}
 procedure ParseConanText(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
@@ -3618,6 +4052,27 @@ begin
   end;
 end;
 
+{**
+  Conservatively parses resolved package keys from ``pnpm-lock.yaml``.
+
+  Parameters
+  ----------
+  AStream
+    Bounded pnpm lock text stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving resolved npm components.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Propagated for stream access or allocation failure.
+*}
 procedure ParsePNPMLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var

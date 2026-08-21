@@ -40,7 +40,8 @@ uses
   Returns
   -------
   string
-    Case-normalized Package URL key, or an ecosystem/name/version/type key.
+    Exact canonical Package URL key, or an ecosystem/name/version/type key
+    that folds only the fields defined as case-insensitive.
 
   Raises
   ------

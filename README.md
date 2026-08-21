@@ -106,9 +106,11 @@ Release verification has three distinct layers:
 
 - The published SHA-256 checksum detects a damaged or substituted download.
 - A GitHub artifact attestation binds that exact package digest to this
-  repository and its GitHub Actions workflow. If `gh` is installed, each
-  launcher verifies the attestation and treats a failure as fatal; otherwise
-  it prints the exact optional verification command.
+  repository and its GitHub Actions workflow. If the installed `gh` supports
+  `gh attestation verify`, each launcher verifies the attestation and treats a
+  verification failure as fatal. If `gh` is absent or too old to support that
+  command, the launcher reports that only the checksum was verified and prints
+  the exact optional verification command plus an install or upgrade hint.
 - An Authenticode signature identifies a trusted Windows publisher and can
   satisfy Windows application-control policy. Checksums and attestations do
   not replace it, which is why an unsigned package can still be blocked.

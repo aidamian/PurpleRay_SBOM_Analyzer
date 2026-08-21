@@ -190,10 +190,16 @@ verify_or_download_package() {
 verify_attestation_if_available() {
   local package_path="$1"
 
-  if command -v gh >/dev/null 2>&1; then
+  if command -v gh >/dev/null 2>&1 &&
+    gh attestation verify --help >/dev/null 2>&1; then
     printf 'Verifying GitHub build-provenance attestation for %s\n' "${package_path##*/}"
     gh attestation verify "$package_path" --repo "$PROJECT_REPOSITORY" ||
       fail 'GitHub build-provenance attestation verification failed'
+  elif command -v gh >/dev/null 2>&1; then
+    printf '%s\n' \
+      'The installed GitHub CLI does not support artifact attestation verification.' \
+      'Checksum verification succeeded, but provenance was not checked.' \
+      "Optional: upgrade gh, then run: gh attestation verify '$package_path' --repo '$PROJECT_REPOSITORY'"
   else
     printf '%s\n' \
       'GitHub CLI was not found; checksum verification succeeded, but provenance was not checked.' \

@@ -60,7 +60,8 @@ type
       Parameters
       ----------
       ASettings
-        Settings instance to serialize.
+        Settings instance to serialize. The one-scan refresh override is forced
+        off in the persisted clone.
 
       Returns
       -------
@@ -70,6 +71,8 @@ type
       ------
       EArgumentNilException
         Raised when ASettings is nil.
+      EJSON, EOutOfMemory
+        Propagated if deterministic UTF-8 serialization cannot complete.
       EFCreateError, EWriteError, EInOutError
         Propagated by atomic persistence.
     }

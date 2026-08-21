@@ -78,11 +78,110 @@ type
     FInspectionTools: TStringList;
     FWarnings: TStringList;
   public
+    (**
+      Clones one path-independent evidence bundle into cache-owned storage.
+
+      Parameters
+      ----------
+      AArtifact
+        Optional borrowed artifact; its clone has no AbsolutePath.
+      AComponents
+        Required borrowed list of TComponent instances to clone.
+      AInspectionTools
+        Optional borrowed inspection-tool strings to copy.
+      AWarnings
+        Optional borrowed warning strings to copy.
+
+      Returns
+      -------
+      TScanCacheEvidence
+        Caller-owned independent evidence bundle.
+
+      Raises
+      ------
+      EArgumentNilException
+        Raised when AComponents is nil.
+      EArgumentException
+        Raised when AComponents contains a non-component object.
+      EOutOfMemory
+        Propagated if evidence cannot be cloned.
+    *)
     constructor Create(AArtifact: TArtifact; AComponents: TObjectList;
       AInspectionTools: TStrings = nil; AWarnings: TStrings = nil);
+
+    (**
+      Frees all artifact, component, tool, and warning evidence still owned.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    *)
     destructor Destroy; override;
+
+    (**
+      Creates an independent deep copy of this evidence bundle.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      TScanCacheEvidence
+        Caller-owned cloned evidence.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if cloning fails.
+    *)
     function Clone: TScanCacheEvidence;
+
+    (**
+      Transfers the artifact out of this evidence bundle.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      TArtifact
+        Caller-owned artifact, or nil when absent or already released.
+
+      Raises
+      ------
+      None
+    *)
     function ReleaseArtifact: TArtifact;
+
+    (**
+      Transfers all components into a caller-owned object list.
+
+      Parameters
+      ----------
+      ADestination
+        Required destination that assumes ownership of each component.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      EArgumentNilException
+        Raised when ADestination is nil.
+      EOutOfMemory
+        Propagated if the destination cannot grow; the failed component is freed.
+    *)
     procedure MoveComponentsTo(ADestination: TObjectList);
     property Artifact: TArtifact read FArtifact;
     property Components: TObjectList read FComponents;
@@ -111,43 +210,286 @@ type
     FStagedEntries: TObjectList;
     FStagingValid: Boolean;
     FStagedComponentCount: Integer;
+    (**
+      Pins the profile directory and verifies its context binding.
+
+      Parameters
+      ----------
+      ACreateDirectory
+        Creates a missing profile directory when True.
+      ADiagnostic
+        Receives a bounded reason when pinning fails.
+
+      Returns
+      -------
+      Boolean
+        True when a stable matching profile pin is available.
+
+      Raises
+      ------
+      EOutOfMemory
+        May propagate while path or diagnostic strings are prepared. Filesystem
+        and pinning errors are otherwise converted into ADiagnostic.
+    *)
     function EnsureProfilePin(ACreateDirectory: Boolean;
       out ADiagnostic: string): Boolean;
+
+    (**
+      Finds one exact relative path in an entry list.
+
+      Parameters
+      ----------
+      AEntries
+        Borrowed list of TScanCacheEntry objects, or nil.
+      ARelativePath
+        Exact case-sensitive path key.
+
+      Returns
+      -------
+      TObject
+        Borrowed matching entry, or nil.
+
+      Raises
+      ------
+      None
+    *)
     function FindEntry(AEntries: TObjectList; const ARelativePath: string):
       TObject;
+
+    (**
+      Serializes and bounds the complete staged snapshot.
+
+      Parameters
+      ----------
+      AContent
+        Receives strict UTF-8 JSON bytes on success.
+      ADiagnostic
+        Receives a bounded reason when serialization or validation fails.
+
+      Returns
+      -------
+      Boolean
+        True only for a valid snapshot within all cache bounds.
+
+      Raises
+      ------
+      EOutOfMemory
+        May propagate if the root JSON object cannot be created. Later
+        serialization errors are converted into ADiagnostic.
+    *)
     function BuildDocument(out AContent: UTF8String;
       out ADiagnostic: string): Boolean;
   public
+    (**
+      Creates one cache session bound to an explicit profile and scan context.
+
+      Parameters
+      ----------
+      AMode
+        Disabled, consuming, or refresh behavior for this session.
+      AProfileDirectory
+        Profile-local directory; required unless AMode is disabled.
+      AContext
+        Complete validated context that must match the profile path hash.
+      ACacheFileName
+        Safe single-leaf snapshot filename.
+
+      Returns
+      -------
+      TScanCache
+        Caller-owned cache session with empty loaded and staged state.
+
+      Raises
+      ------
+      EArgumentException
+        Raised for an invalid context, profile binding, or cache filename.
+      EOutOfMemory
+        Propagated if cache state cannot be allocated.
+    *)
     constructor Create(AMode: TScanCacheMode;
       const AProfileDirectory: string; const AContext: TScanCacheContext;
       const ACacheFileName: string = DefaultScanCacheFileName);
+
+    (**
+      Frees loaded and staged evidence without writing a snapshot.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    *)
     destructor Destroy; override;
 
-    { Loads one valid matching snapshot. Refresh and disabled modes bypass it. }
+    (**
+      Loads one valid matching snapshot for exact subsequent lookups.
+
+      Refresh and disabled modes bypass loading. Missing or context-mismatched
+      snapshots are ordinary misses; malformed, unstable, or unsafe snapshots
+      are ignored with a diagnostic.
+
+      Parameters
+      ----------
+      ADiagnostic
+        Receives a privacy-safe reason for rejected cache data.
+
+      Returns
+      -------
+      Boolean
+        True only when a matching valid snapshot was loaded.
+
+      Raises
+      ------
+      EOutOfMemory
+        May propagate while initial path or entry-list state is allocated. Cache
+        read and parse failures are otherwise converted into ADiagnostic.
+    *)
     function Load(out ADiagnostic: string): Boolean;
 
-    { Returns a caller-owned clone only when every key field matches exactly. }
+    (**
+      Looks up an entry by exact path, native identity, and fresh digest.
+
+      Parameters
+      ----------
+      ARelativePath
+        Safe root-relative path key.
+      AIdentity
+        Fresh verified native file identity.
+      AContentSHA256
+        Fresh lowercase content digest from the same verified handle.
+      AEvidence
+        Receives a caller-owned deep clone on a hit, otherwise nil.
+
+      Returns
+      -------
+      Boolean
+        True only when every key field matches an entry in use mode.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if hit evidence cannot be cloned.
+    *)
     function TryLookup(const ARelativePath: string;
       const AIdentity: TVerifiedFileIdentity; const AContentSHA256: string;
       out AEvidence: TScanCacheEvidence): Boolean;
 
-    { Clones one successful per-file result into the pending snapshot. }
+    (**
+      Clones one per-file result into the pending snapshot.
+
+      Parameters
+      ----------
+      ARelativePath
+        Safe root-relative key shared by all supplied evidence.
+      AIdentity
+        Verified native identity for the analyzed bytes.
+      AContentSHA256
+        Fresh lowercase digest used as the private cache key.
+      AArtifact
+        Optional borrowed artifact; nil represents a negative entry.
+      AComponents
+        Required borrowed component list.
+      ADiagnostic
+        Receives a bounded reason when staging is rejected.
+
+      Returns
+      -------
+      Boolean
+        True when disabled or when a valid independent entry is staged.
+
+      Raises
+      ------
+      EOutOfMemory
+        May propagate while key or diagnostic strings are prepared. Evidence
+        cloning failures invalidate staging and are converted into ADiagnostic.
+    *)
     function Stage(const ARelativePath: string;
       const AIdentity: TVerifiedFileIdentity; const AContentSHA256: string;
       AArtifact: TArtifact; AComponents: TObjectList;
       out ADiagnostic: string): Boolean; overload;
 
-    { Also preserves deterministic per-file tools and warning diagnostics. }
+    (**
+      Clones one per-file result plus tools and warnings into pending storage.
+
+      Parameters
+      ----------
+      ARelativePath
+        Safe root-relative key shared by all supplied evidence.
+      AIdentity
+        Verified native identity for the analyzed bytes.
+      AContentSHA256
+        Fresh lowercase digest used as the private cache key.
+      AArtifact
+        Optional borrowed artifact; nil represents a negative entry.
+      AComponents
+        Required borrowed component list.
+      AInspectionTools
+        Optional borrowed deterministic tool-name list.
+      AWarnings
+        Optional borrowed deterministic warning list.
+      ADiagnostic
+        Receives a bounded reason when staging is rejected.
+
+      Returns
+      -------
+      Boolean
+        True when disabled or when a valid independent entry is staged.
+
+      Raises
+      ------
+      EOutOfMemory
+        May propagate while key or diagnostic strings are prepared. Evidence
+        cloning failures invalidate staging and are converted into ADiagnostic.
+    *)
     function Stage(const ARelativePath: string;
       const AIdentity: TVerifiedFileIdentity; const AContentSHA256: string;
       AArtifact: TArtifact; AComponents: TObjectList;
       AInspectionTools, AWarnings: TStrings;
       out ADiagnostic: string): Boolean; overload;
 
-    { Drops pending evidence without touching the last successful snapshot. }
+    (**
+      Drops pending evidence without touching the last successful snapshot.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    *)
     procedure ResetStaging;
 
-    { Atomically activates the complete pending snapshot. }
+    (**
+      Atomically activates the complete pending snapshot.
+
+      Parameters
+      ----------
+      ADiagnostic
+        Receives a bounded reason when validation or activation fails.
+
+      Returns
+      -------
+      Boolean
+        True when disabled or durably committed; False without replacing the
+        prior snapshot.
+
+      Raises
+      ------
+      EOutOfMemory
+        May propagate if initial document or diagnostic storage cannot be
+        allocated. Filesystem activation failures are otherwise contained.
+    *)
     function Commit(out ADiagnostic: string): Boolean;
 
     property Mode: TScanCacheMode read FMode;
@@ -162,16 +504,76 @@ type
   An empty string is returned for an invalid identity or negative size. The
   first word is the Valid flag, followed by storage ID, file ID, size,
   modification seconds/nanoseconds, change seconds/nanoseconds, and link count.
+
+  Parameters
+  ----------
+  AIdentity
+    Native identity captured from a verified regular file.
+
+  Returns
+  -------
+  string
+    Fixed-width lowercase encoding, or an empty string for invalid input.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the encoded result cannot be allocated.
 *)
 function EncodeVerifiedFileIdentity(
   const AIdentity: TVerifiedFileIdentity): string;
 
-(** Initializes an explicit cache context without retaining caller storage. *)
+(**
+  Initializes an explicit cache context without retaining caller storage.
+
+  Parameters
+  ----------
+  AContext
+    Receives independent copies of all supplied fields.
+  AAnalysisContract
+    Evidence-semantics contract token.
+  APlatform
+    Stable operating-system and CPU token.
+  AProfilePathSHA256
+    Lowercase digest binding the selected profile path.
+  ARootPathSHA256
+    Lowercase digest binding the canonical scan root path.
+  ARootIdentityToken
+    Native directory identity without a raw path.
+  ASettingsSHA256
+    Digest of evidence-affecting scan settings.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if field copies cannot be allocated.
+*)
 procedure InitializeScanCacheContext(out AContext: TScanCacheContext;
   const AAnalysisContract, APlatform, AProfilePathSHA256, ARootPathSHA256,
   ARootIdentityToken, ASettingsSHA256: string);
 
-(** Hashes the canonical profile path without persisting its raw spelling. *)
+(**
+  Hashes the canonical profile path without persisting its raw spelling.
+
+  Parameters
+  ----------
+  AProfileDirectory
+    Profile directory to expand and canonicalize.
+
+  Returns
+  -------
+  string
+    Lowercase SHA-256 binding, or an empty string for blank input.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if canonicalization or hash input allocation fails.
+*)
 function ScanCacheProfilePathSHA256(const AProfileDirectory: string): string;
 
 implementation
@@ -194,12 +596,90 @@ type
     FContentSHA256: string;
     FEvidence: TScanCacheEvidence;
   public
+    (**
+      Creates one cache entry and takes ownership of its evidence.
+
+      Parameters
+      ----------
+      ARelativePath
+        Exact root-relative lookup key.
+      AIdentityHex
+        Encoded verified native identity.
+      AContentSHA256
+        Fresh lowercase content digest.
+      AEvidence
+        Evidence transferred to the entry.
+
+      Returns
+      -------
+      TScanCacheEntry
+        Caller-owned cache entry.
+
+      Raises
+      ------
+      EArgumentNilException
+        Raised when AEvidence is nil.
+      EOutOfMemory
+        Propagated if entry fields cannot be allocated.
+    *)
     constructor Create(const ARelativePath, AIdentityHex,
       AContentSHA256: string; AEvidence: TScanCacheEvidence);
+
+    (**
+      Frees the evidence still owned by this cache entry.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    *)
     destructor Destroy; override;
+
+    (**
+      Creates an independent deep copy of this cache entry.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      TScanCacheEntry
+        Caller-owned cloned entry.
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if entry or evidence cloning fails.
+    *)
     function Clone: TScanCacheEntry;
   end;
 
+{**
+  Formats one unsigned word as exactly 16 lowercase hexadecimal digits.
+
+  Parameters
+  ----------
+  AValue
+    Word to encode.
+
+  Returns
+  -------
+  string
+    Fixed-width lowercase hexadecimal text.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the result cannot be allocated.
+*}
 function LowerHexWord(AValue: QWord): string;
 begin
   Result := LowerCase(IntToHex(AValue, 16));
@@ -243,6 +723,23 @@ begin
     CanonicalProfile));
 end;
 
+{**
+  Detects ASCII control bytes forbidden in bounded cache tokens.
+
+  Parameters
+  ----------
+  AValue
+    Byte string to inspect.
+
+  Returns
+  -------
+  Boolean
+    True when a C0 control or DEL byte is present.
+
+  Raises
+  ------
+  None
+*}
 function HasForbiddenControl(const AValue: string): Boolean;
 var
   I: Integer;
@@ -253,11 +750,45 @@ begin
   Result := False;
 end;
 
+{**
+  Validates raw bytes against the RFC 3629 UTF-8 scalar-value ranges.
+
+  Parameters
+  ----------
+  AValue
+    Raw byte sequence to validate without code-page conversion.
+
+  Returns
+  -------
+  Boolean
+    True for complete canonical UTF-8 without surrogate or out-of-range values.
+
+  Raises
+  ------
+  None
+*}
 function IsValidUTF8Bytes(const AValue: RawByteString): Boolean;
 var
   I, Count: SizeInt;
   First, Second, Third, Fourth: Byte;
 
+  {**
+    Tests whether one byte is an UTF-8 continuation byte.
+
+    Parameters
+    ----------
+    AByte
+      Byte to classify.
+
+    Returns
+    -------
+    Boolean
+      True for values from 0x80 through 0xBF.
+
+    Raises
+    ------
+    None
+  *}
   function Continuation(AByte: Byte): Boolean; inline;
   begin
     Result := (AByte >= $80) and (AByte <= $BF);
@@ -331,6 +862,23 @@ begin
   Result := True;
 end;
 
+{**
+  Retags already verified string bytes as UTF-8 without transcoding.
+
+  Parameters
+  ----------
+  AValue
+    String whose current bytes are valid UTF-8.
+
+  Returns
+  -------
+  UTF8String
+    Same bytes carrying the CP_UTF8 tag.
+
+  Raises
+  ------
+  None
+*}
 function CacheUTF8(const AValue: string): UTF8String;
 var
   RawValue: RawByteString;
@@ -340,6 +888,26 @@ begin
   Result := UTF8String(RawValue);
 end;
 
+{**
+  Extracts one JSON string while retaining its verified UTF-8 bytes and tag.
+
+  Parameters
+  ----------
+  AValue
+    Borrowed JSON string node.
+
+  Returns
+  -------
+  string
+    Extracted bytes tagged CP_UTF8.
+
+  Raises
+  ------
+  EJSON
+    Propagated when the node cannot be represented as a string.
+  EOutOfMemory
+    Propagated if extraction cannot allocate storage.
+*}
 function CacheString(AValue: TJSONData): string;
 var
   RawValue: RawByteString;
@@ -349,16 +917,77 @@ begin
   Result := string(RawValue);
 end;
 
+{**
+  Adds one explicitly UTF-8 string member to a JSON object.
+
+  Parameters
+  ----------
+  AObject
+    Borrowed destination object.
+  AName
+    Member name whose bytes are valid UTF-8.
+  AValue
+    Member value whose bytes are valid UTF-8.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the node or object storage cannot be allocated.
+*}
 procedure AddCacheString(AObject: TJSONObject; const AName, AValue: string);
 begin
   AObject.Add(UTF8String(AName), TJSONString.Create(CacheUTF8(AValue)));
 end;
 
+{**
+  Appends one explicitly UTF-8 string value to a JSON array.
+
+  Parameters
+  ----------
+  AArray
+    Borrowed destination array.
+  AValue
+    Value whose bytes are valid UTF-8.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the node or array storage cannot be allocated.
+*}
 procedure AddCacheString(AArray: TJSONArray; const AValue: string);
 begin
   AArray.Add(TJSONString.Create(CacheUTF8(AValue)));
 end;
 
+{**
+  Validates one UTF-8 cache token against length, emptiness, and control rules.
+
+  Parameters
+  ----------
+  AValue
+    Candidate byte string.
+  AMaximumLength
+    Maximum accepted byte count.
+  AAllowEmpty
+    Permits the empty value when True.
+
+  Returns
+  -------
+  Boolean
+    True only when every token constraint is satisfied.
+
+  Raises
+  ------
+  None
+*}
 function IsBoundedToken(const AValue: string; AMaximumLength: Integer;
   AAllowEmpty: Boolean = False): Boolean;
 begin
@@ -368,6 +997,25 @@ begin
     not HasForbiddenControl(AValue);
 end;
 
+{**
+  Tests for exact-length lowercase hexadecimal text.
+
+  Parameters
+  ----------
+  AValue
+    Candidate text.
+  ALength
+    Required character count.
+
+  Returns
+  -------
+  Boolean
+    True only for the requested number of lowercase hexadecimal digits.
+
+  Raises
+  ------
+  None
+*}
 function IsLowerHex(const AValue: string; ALength: Integer): Boolean;
 var
   I: Integer;
@@ -380,11 +1028,46 @@ begin
   Result := True;
 end;
 
+{**
+  Tests the canonical textual shape of a SHA-256 digest.
+
+  Parameters
+  ----------
+  AValue
+    Candidate digest.
+
+  Returns
+  -------
+  Boolean
+    True for exactly 64 lowercase hexadecimal characters.
+
+  Raises
+  ------
+  None
+*}
 function IsSHA256(const AValue: string): Boolean;
 begin
   Result := IsLowerHex(AValue, 64);
 end;
 
+{**
+  Validates a complete encoded verified-file identity.
+
+  Parameters
+  ----------
+  AValue
+    Candidate fixed-width identity encoding.
+
+  Returns
+  -------
+  Boolean
+    True for a valid flag, nonnegative size, and lowercase hexadecimal fields.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the validity-flag slice cannot be allocated.
+*}
 function IsIdentityHex(const AValue: string): Boolean;
 begin
   Result := IsLowerHex(AValue, VerifiedFileIdentityHexLength) and
@@ -392,6 +1075,25 @@ begin
     not (AValue[49] in ['8'..'9', 'a'..'f']);
 end;
 
+{**
+  Parses one exact 16-digit lowercase hexadecimal word.
+
+  Parameters
+  ----------
+  AValue
+    Candidate fixed-width word.
+  AResult
+    Receives the decoded value, or zero on failure.
+
+  Returns
+  -------
+  Boolean
+    True when all 16 digits are canonical and decoded.
+
+  Raises
+  ------
+  None
+*}
 function TryHexWord(const AValue: string; out AResult: QWord): Boolean;
 var
   I: Integer;
@@ -413,6 +1115,26 @@ begin
   Result := True;
 end;
 
+{**
+  Extracts the nonnegative file size from an encoded verified identity.
+
+  Parameters
+  ----------
+  AIdentityHex
+    Complete encoded identity.
+  ASize
+    Receives the decoded size, or zero on failure.
+
+  Returns
+  -------
+  Boolean
+    True when the identity and signed size field are valid.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the encoded size field cannot be sliced.
+*}
 function IdentitySize(const AIdentityHex: string; out ASize: Int64): Boolean;
 var
   Value: QWord;
@@ -426,6 +1148,24 @@ begin
     ASize := 0;
 end;
 
+{**
+  Validates a bounded relative cache key without traversal or drive syntax.
+
+  Parameters
+  ----------
+  AValue
+    Candidate root-relative path.
+
+  Returns
+  -------
+  Boolean
+    True for valid UTF-8 segments containing no empty, dot, or dot-dot element.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if a path segment cannot be allocated for validation.
+*}
 function IsSafeRelativePath(const AValue: string): Boolean;
 var
   I, SegmentStart: Integer;
@@ -452,6 +1192,23 @@ begin
   Result := True;
 end;
 
+{**
+  Enforces all format, digest, and privacy constraints on a cache context.
+
+  Parameters
+  ----------
+  AContext
+    Context to validate before cache construction or serialization.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EArgumentException
+    Raised when any token, digest, or root identity is invalid.
+*}
 procedure RequireValidContext(const AContext: TScanCacheContext);
 begin
   if not IsBoundedToken(AContext.AnalysisContract,
@@ -472,6 +1229,25 @@ begin
     raise EArgumentException.Create('Invalid scan-cache settings SHA-256');
 end;
 
+{**
+  Compares every cache-context field exactly and case-sensitively.
+
+  Parameters
+  ----------
+  ALeft
+    First context.
+  ARight
+    Second context.
+
+  Returns
+  -------
+  Boolean
+    True only when all six fields are byte-identical.
+
+  Raises
+  ------
+  None
+*}
 function ContextsEqual(const ALeft, ARight: TScanCacheContext): Boolean;
 begin
   Result := (ALeft.AnalysisContract = ARight.AnalysisContract) and
@@ -482,6 +1258,23 @@ begin
     (ALeft.SettingsSHA256 = ARight.SettingsSHA256);
 end;
 
+{**
+  Validates one bounded cache filename with no directory or stream syntax.
+
+  Parameters
+  ----------
+  AValue
+    Candidate filename.
+
+  Returns
+  -------
+  Boolean
+    True for one non-dot leaf name.
+
+  Raises
+  ------
+  None
+*}
 function IsSingleLeafName(const AValue: string): Boolean;
 begin
   Result := IsBoundedToken(AValue, 200) and (AValue <> '.') and
@@ -489,6 +1282,26 @@ begin
     (Pos('\', AValue) = 0) and (Pos(':', AValue) = 0);
 end;
 
+{**
+  Creates a collision-resistant temporary leaf for one cache snapshot.
+
+  Parameters
+  ----------
+  ACacheFileName
+    Valid final cache leaf used as the prefix.
+
+  Returns
+  -------
+  string
+    Final leaf followed by a lowercase GUID suffix.
+
+  Raises
+  ------
+  Exception
+    Raised when the platform cannot create a GUID.
+  EOutOfMemory
+    Propagated if the leaf cannot be allocated.
+*}
 function NewCacheTemporaryLeaf(const ACacheFileName: string): string;
 var
   Identifier: TGUID;
@@ -502,6 +1315,31 @@ begin
   Result := ACacheFileName + '.tmp-' + Suffix;
 end;
 
+{**
+  Writes, flushes, and atomically activates one cache snapshot under a pin.
+
+  Parameters
+  ----------
+  APinnedDirectory
+    Required stable profile-directory pin.
+  ACacheFileName
+    Safe final cache leaf.
+  AContent
+    Complete validated UTF-8 snapshot bytes.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EArgumentNilException
+    Raised when APinnedDirectory is nil.
+  EInOutError
+    Raised when creation, flushing, pin verification, or activation fails.
+  EOutOfMemory
+    Propagated if temporary state cannot be allocated.
+*}
 procedure WriteAtomicCache(APinnedDirectory: TPinnedDirectory;
   const ACacheFileName: string; const AContent: UTF8String);
 var
@@ -545,6 +1383,28 @@ begin
   end;
 end;
 
+{**
+  Deep-clones a borrowed list containing only components.
+
+  Parameters
+  ----------
+  AComponents
+    Required borrowed TObjectList of TComponent instances.
+
+  Returns
+  -------
+  TObjectList
+    Caller-owned list that owns all cloned components.
+
+  Raises
+  ------
+  EArgumentNilException
+    Raised when AComponents is nil.
+  EArgumentException
+    Raised when an element is not a TComponent.
+  EOutOfMemory
+    Propagated if the list or a clone cannot be allocated.
+*}
 function CloneComponentList(AComponents: TObjectList): TObjectList;
 var
   I: Integer;
@@ -657,6 +1517,25 @@ begin
     FContentSHA256, FEvidence.Clone);
 end;
 
+{**
+  Rejects duplicate or unknown members in one JSON object.
+
+  Parameters
+  ----------
+  AObject
+    Borrowed object to inspect.
+  AAllowed
+    Exact case-sensitive member-name allowlist.
+
+  Returns
+  -------
+  Boolean
+    True when every member occurs once and appears in AAllowed.
+
+  Raises
+  ------
+  None
+*}
 function ObjectHasOnlyMembers(AObject: TJSONObject;
   const AAllowed: array of string): Boolean;
 var
@@ -683,6 +1562,30 @@ begin
   Result := True;
 end;
 
+{**
+  Reads one optional or required string member with its UTF-8 tag preserved.
+
+  Parameters
+  ----------
+  AObject
+    Borrowed source object.
+  AName
+    Exact member name.
+  ARequired
+    Rejects an absent member when True.
+  AValue
+    Receives the string, or an empty value when absent.
+
+  Returns
+  -------
+  Boolean
+    True when presence and type satisfy the request.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if string extraction cannot allocate storage.
+*}
 function ReadJSONString(AObject: TJSONObject; const AName: string;
   ARequired: Boolean; out AValue: string): Boolean;
 var
@@ -699,6 +1602,28 @@ begin
     AValue := CacheString(Data);
 end;
 
+{**
+  Reads one required canonical decimal Int64 JSON member.
+
+  Parameters
+  ----------
+  AObject
+    Borrowed source object.
+  AName
+    Exact member name.
+  AValue
+    Receives the decoded integer, or zero on failure.
+
+  Returns
+  -------
+  Boolean
+    True only when the JSON spelling exactly matches the decoded integer.
+
+  Raises
+  ------
+  None
+    Numeric conversion errors are reported as False.
+*}
 function ReadJSONInteger(AObject: TJSONObject; const AName: string;
   out AValue: Int64): Boolean;
 var
@@ -718,6 +1643,27 @@ begin
   end;
 end;
 
+{**
+  Borrows one required object-valued JSON member.
+
+  Parameters
+  ----------
+  AObject
+    Borrowed source object.
+  AName
+    Exact member name.
+  AValue
+    Receives the borrowed child object, or nil on failure.
+
+  Returns
+  -------
+  Boolean
+    True when the named member exists and is an object.
+
+  Raises
+  ------
+  None
+*}
 function ReadJSONObject(AObject: TJSONObject; const AName: string;
   out AValue: TJSONObject): Boolean;
 var
@@ -732,6 +1678,27 @@ begin
     AValue := TJSONObject(Data);
 end;
 
+{**
+  Borrows one required array-valued JSON member.
+
+  Parameters
+  ----------
+  AObject
+    Borrowed source object.
+  AName
+    Exact member name.
+  AValue
+    Receives the borrowed child array, or nil on failure.
+
+  Returns
+  -------
+  Boolean
+    True when the named member exists and is an array.
+
+  Raises
+  ------
+  None
+*}
 function ReadJSONArray(AObject: TJSONObject; const AName: string;
   out AValue: TJSONArray): Boolean;
 var
@@ -746,6 +1713,28 @@ begin
     AValue := TJSONArray(Data);
 end;
 
+{**
+  Recursively enforces cache JSON depth, node, name, string, and UTF-8 bounds.
+
+  Parameters
+  ----------
+  AData
+    Borrowed node to validate.
+  ADepth
+    Current zero-based container depth.
+  ANodeCount
+    Running node count updated for every accepted node.
+
+  Returns
+  -------
+  Boolean
+    True when this subtree remains within every configured bound.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the JSON library must materialize a string value.
+*}
 function ValidateJSONBounds(AData: TJSONData; ADepth: Integer;
   var ANodeCount: Integer): Boolean;
 var
@@ -790,6 +1779,23 @@ begin
   end;
 end;
 
+{**
+  Preflights raw JSON structure before allocating a parser tree.
+
+  Parameters
+  ----------
+  AContent
+    Complete verified UTF-8 cache bytes.
+
+  Returns
+  -------
+  Boolean
+    True when delimiters, strings, depth, and token count satisfy cache rules.
+
+  Raises
+  ------
+  None
+*}
 function PreflightRawJSON(const AContent: RawByteString): Boolean;
 var
   Stack: array[1..MaximumJSONDepth] of AnsiChar;
@@ -888,6 +1894,28 @@ begin
   Result := (Depth = 0) and not InString and not Escaped;
 end;
 
+{**
+  Reads one verified cache input exactly under the file-size bound.
+
+  Parameters
+  ----------
+  AInput
+    Borrowed verified input.
+  AContent
+    Receives exact raw bytes, or an empty value on rejection.
+
+  Returns
+  -------
+  Boolean
+    True only when the complete bounded input is read.
+
+  Raises
+  ------
+  EStreamError
+    Propagated when an in-range verified read fails.
+  EOutOfMemory
+    Propagated when the bounded destination cannot be allocated.
+*}
 function ReadVerifiedJSONBytes(AInput: TVerifiedInput;
   out AContent: RawByteString): Boolean;
 var
@@ -909,6 +1937,26 @@ begin
   end;
 end;
 
+{**
+  Parses prevalidated UTF-8 bytes with FPC strict JSON syntax enabled.
+
+  Parameters
+  ----------
+  AContent
+    Complete raw JSON document already checked for UTF-8 and resource bounds.
+
+  Returns
+  -------
+  TJSONData
+    Caller-owned parsed tree.
+
+  Raises
+  ------
+  EJSONParser
+    Propagated for invalid strict JSON syntax.
+  EOutOfMemory
+    Propagated if parser state or the tree cannot be allocated.
+*}
 function ParseStrictUTF8JSON(const AContent: RawByteString): TJSONData;
 var
   Memory: TMemoryStream;
@@ -934,6 +1982,24 @@ begin
   end;
 end;
 
+{**
+  Validates a bounded JSON array containing only cache-safe strings.
+
+  Parameters
+  ----------
+  AArray
+    Borrowed array to inspect.
+
+  Returns
+  -------
+  Boolean
+    True when the count and every string satisfy cache bounds.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if string extraction cannot allocate storage.
+*}
 function ValidateStringListJSON(AArray: TJSONArray): Boolean;
 var
   I: Integer;
@@ -952,6 +2018,25 @@ begin
   Result := True;
 end;
 
+{**
+  Validates an optional in-memory string list before cache staging.
+
+  Parameters
+  ----------
+  AStrings
+    Borrowed list, or nil.
+  AMaximumCount
+    Maximum accepted number of values.
+
+  Returns
+  -------
+  Boolean
+    True when absent or when all list values satisfy cache bounds.
+
+  Raises
+  ------
+  None
+*}
 function ValidateCachedStrings(AStrings: TStrings;
   AMaximumCount: Integer): Boolean;
 var
@@ -965,6 +2050,25 @@ begin
       Exit(False);
 end;
 
+{**
+  Replaces one string list with UTF-8 values from a validated JSON array.
+
+  Parameters
+  ----------
+  AArray
+    Borrowed validated string array.
+  AStrings
+    Borrowed destination list to clear and refill.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if extraction or destination growth fails.
+*}
 procedure JSONStringsToList(AArray: TJSONArray; AStrings: TStrings);
 var
   I: Integer;
@@ -974,6 +2078,25 @@ begin
     AStrings.Add(CacheString(AArray.Items[I]));
 end;
 
+{**
+  Appends an optional string list to a JSON array as explicit UTF-8 values.
+
+  Parameters
+  ----------
+  AStrings
+    Borrowed source list, or nil.
+  AArray
+    Borrowed destination array.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if JSON values cannot be allocated.
+*}
 procedure StringsToJSONArray(AStrings: TStrings; AArray: TJSONArray);
 var
   I: Integer;
@@ -984,6 +2107,24 @@ begin
     AddCacheString(AArray, AStrings[I]);
 end;
 
+{**
+  Serializes one validated artifact without its transient absolute path.
+
+  Parameters
+  ----------
+  AArtifact
+    Borrowed artifact already validated for cache staging.
+
+  Returns
+  -------
+  TJSONObject
+    Caller-owned JSON object containing path-independent artifact evidence.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the object cannot be allocated.
+*}
 function ArtifactToCacheJSON(AArtifact: TArtifact): TJSONObject;
 begin
   Result := TJSONObject.Create;
@@ -1005,6 +2146,24 @@ begin
   end;
 end;
 
+{**
+  Serializes one validated component and its bounded evidence lists.
+
+  Parameters
+  ----------
+  AComponent
+    Borrowed component already validated for cache staging.
+
+  Returns
+  -------
+  TJSONObject
+    Caller-owned JSON object containing the component model.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the object or child arrays cannot be allocated.
+*}
 function ComponentToCacheJSON(AComponent: TComponent): TJSONObject;
 var
   Values: TJSONArray;
@@ -1057,11 +2216,51 @@ begin
   end;
 end;
 
+{**
+  Validates one live component against cache bounds and file binding.
+
+  Parameters
+  ----------
+  AComponent
+    Borrowed component to validate.
+  ARelativePath
+    Exact entry path required for source and evidence paths.
+  AContentSHA256
+    Entry digest permitted in component hash evidence.
+
+  Returns
+  -------
+  Boolean
+    True when all fields, lists, paths, and hashes are cache-safe.
+
+  Raises
+  ------
+  None
+*}
 function ValidateComponentModel(AComponent: TComponent;
   const ARelativePath, AContentSHA256: string): Boolean;
 var
   I: Integer;
 
+  {**
+    Applies the standard cache string bound to one component field.
+
+    Parameters
+    ----------
+    AValue
+      Candidate field value.
+    AAllowEmpty
+      Permits an empty field when True.
+
+    Returns
+    -------
+    Boolean
+      True when the field is a bounded valid UTF-8 token.
+
+    Raises
+    ------
+    None
+  *}
   function ValidField(const AValue: string; AAllowEmpty: Boolean = True):
     Boolean;
   begin
@@ -1102,6 +2301,31 @@ begin
       Exit(False);
 end;
 
+{**
+  Validates one live artifact against its entry path, size, hash, and count.
+
+  Parameters
+  ----------
+  AArtifact
+    Borrowed artifact to validate.
+  ARelativePath
+    Exact entry path required by the artifact.
+  AContentSHA256
+    Entry digest permitted in artifact hash evidence.
+  AExpectedSize
+    Size decoded from the verified native identity.
+  AComponentCount
+    Number of components associated with the artifact.
+
+  Returns
+  -------
+  Boolean
+    True when the artifact is internally consistent and cache-safe.
+
+  Raises
+  ------
+  None
+*}
 function ValidateArtifactModel(AArtifact: TArtifact;
   const ARelativePath, AContentSHA256: string; AExpectedSize: Int64;
   AComponentCount: Integer): Boolean;
@@ -1118,6 +2342,30 @@ begin
     ((AArtifact.SHA256 = '') or (AArtifact.SHA256 = AContentSHA256));
 end;
 
+{**
+  Parses and validates one cached component object.
+
+  Parameters
+  ----------
+  AObject
+    Borrowed JSON object to decode.
+  ARelativePath
+    Entry path required for all component provenance.
+  AContentSHA256
+    Entry digest permitted in component hash evidence.
+  AComponent
+    Receives a caller-owned component on success, otherwise nil.
+
+  Returns
+  -------
+  Boolean
+    True only when schema, types, bounds, and model invariants are valid.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the component or its lists cannot be allocated.
+*}
 function ValidateComponentJSON(AObject: TJSONObject;
   const ARelativePath, AContentSHA256: string;
   out AComponent: TComponent): Boolean;
@@ -1199,6 +2447,34 @@ begin
   end;
 end;
 
+{**
+  Parses and validates one cached artifact object.
+
+  Parameters
+  ----------
+  AObject
+    Borrowed JSON object to decode.
+  ARelativePath
+    Entry path required by the artifact.
+  AContentSHA256
+    Entry digest permitted in artifact hash evidence.
+  AExpectedSize
+    Size decoded from the verified identity.
+  AComponentCount
+    Parsed component count required by artifact metadata.
+  AArtifact
+    Receives a caller-owned artifact on success, otherwise nil.
+
+  Returns
+  -------
+  Boolean
+    True only when schema, types, bounds, and model invariants are valid.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the artifact cannot be allocated.
+*}
 function ValidateArtifactJSON(AObject: TJSONObject;
   const ARelativePath, AContentSHA256: string; AExpectedSize: Int64;
   AComponentCount: Integer; out AArtifact: TArtifact): Boolean;
@@ -1257,6 +2533,26 @@ begin
   end;
 end;
 
+{**
+  Parses and validates the complete persisted cache context.
+
+  Parameters
+  ----------
+  AObject
+    Borrowed JSON context object.
+  AContext
+    Receives decoded context fields on success.
+
+  Returns
+  -------
+  Boolean
+    True only for the exact schema and valid bounded field values.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if decoded fields cannot be allocated.
+*}
 function ValidateContextJSON(AObject: TJSONObject;
   out AContext: TScanCacheContext): Boolean;
 const
@@ -1290,6 +2586,28 @@ begin
     end;
 end;
 
+{**
+  Parses one complete positive or negative cache entry transactionally.
+
+  Parameters
+  ----------
+  AObject
+    Borrowed JSON entry object.
+  AEntry
+    Receives a caller-owned entry on success, otherwise nil.
+  AComponentCount
+    Receives the number of validated components, otherwise zero.
+
+  Returns
+  -------
+  Boolean
+    True only when schema, identity, evidence, and all limits are valid.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if model or entry allocation fails.
+*}
 function ParseEntry(AObject: TJSONObject; out AEntry: TScanCacheEntry;
   out AComponentCount: Integer): Boolean;
 const

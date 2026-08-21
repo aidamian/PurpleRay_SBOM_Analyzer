@@ -193,6 +193,8 @@ function IsValidUTF8Bytes(const AContent: RawByteString): Boolean;
     Raised for nil input or a nonpositive bound.
   EReadError, EStreamError
     Raised for oversized input or an underlying stream failure.
+  EOutOfMemory
+    Propagated if the bounded result buffer cannot be allocated.
 }
 function ReadBoundedRawBytes(AStream: TStream;
   AMaximumBytes: Int64): RawByteString;
@@ -215,6 +217,8 @@ function ReadBoundedRawBytes(AStream: TStream;
   EJSONParser, EScannerError, EJSON
     Raised for invalid UTF-8, malformed escapes or surrogate pairs, duplicate
     object members, trailing non-whitespace data, or other invalid JSON.
+  EOutOfMemory
+    Propagated if normalization or parsed-tree storage cannot be allocated.
 
   Notes
   -----
@@ -243,7 +247,7 @@ function ParseStrictUTF8JSON(const AContent: RawByteString): TJSONData;
   Raises
   ------
   EArgumentNilException, EArgumentOutOfRangeException, EReadError,
-  EStreamError, EJSONParser, EScannerError, EJSON
+  EStreamError, EJSONParser, EScannerError, EJSON, EOutOfMemory
     Propagated from bounded reading and strict parsing.
 }
 function ReadJSONStream(AStream: TStream;
@@ -256,6 +260,8 @@ function ReadJSONStream(AStream: TStream;
   ----------
   AFileName
     JSON file to open.
+  AMaximumBytes
+    Maximum accepted raw byte count.
 
   Returns
   -------
@@ -264,8 +270,10 @@ function ReadJSONStream(AStream: TStream;
 
   Raises
   ------
-  EFOpenError, EReadError, EJSONParser
-    Propagated for file access or malformed JSON.
+  EFOpenError, EReadError, EStreamError, EArgumentOutOfRangeException,
+  EJSONParser, EScannerError, EJSON, EOutOfMemory
+    Propagated for file access, bounded reading, strict parsing, or allocation
+    failure.
 }
 function ReadJSONFile(const AFileName: string;
   AMaximumBytes: Int64 = DefaultMaximumJSONBytes): TJSONData;
@@ -294,6 +302,8 @@ function ReadJSONFile(const AFileName: string;
   ------
   EArgumentNilException, EArgumentOutOfRangeException, EJSON
     Raised for nil input, a negative indent, or invalid serialized UTF-8.
+  EOutOfMemory
+    Propagated if serialization or normalization storage cannot be allocated.
 }
 function SerializeJSONUTF8(AData: TJSONData;
   const AOptions: TFormatOptions; AIndentSize: Integer;
@@ -352,6 +362,23 @@ const
     The parsed tree is decoded immediately, so callers never observe markers. }
   ControlMarkerUTF8: RawByteString = #$EF#$B7#$90; { U+FDD0 }
 
+{**
+  Tests whether one byte has the RFC 3629 continuation-byte prefix.
+
+  Parameters
+  ----------
+  AValue
+    Byte to classify.
+
+  Returns
+  -------
+  Boolean
+    True when the two high bits are ``10``.
+
+  Raises
+  ------
+  None
+*}
 function IsContinuationByte(AValue: Byte): Boolean; inline;
 begin
   Result := (AValue and $C0) = $80;
@@ -497,6 +524,23 @@ begin
   SetLength(Result, SizeInt(TotalBytes));
 end;
 
+{**
+  Converts one ASCII hexadecimal digit to its numeric value.
+
+  Parameters
+  ----------
+  AValue
+    Candidate ASCII digit.
+
+  Returns
+  -------
+  Integer
+    Value from zero through fifteen, or minus one for a nondigit.
+
+  Raises
+  ------
+  None
+*}
 function HexDigitValue(AValue: AnsiChar): Integer; inline;
 begin
   case AValue of
@@ -508,6 +552,28 @@ begin
   end;
 end;
 
+{**
+  Decodes one complete JSON ``\\uXXXX`` escape without advancing input.
+
+  Parameters
+  ----------
+  AContent
+    Complete raw JSON bytes containing the candidate escape.
+  ASlashIndex
+    One-based index of the candidate backslash.
+  AValue
+    Receives the decoded 16-bit code unit on success; its value is unspecified
+    after a malformed partial escape.
+
+  Returns
+  -------
+  Boolean
+    True only when all six bytes form a valid Unicode escape.
+
+  Raises
+  ------
+  None
+*}
 function TryReadUnicodeEscape(const AContent: RawByteString;
   ASlashIndex: SizeInt; out AValue: Cardinal): Boolean;
 var
@@ -529,6 +595,27 @@ begin
   end;
 end;
 
+{**
+  Appends exact bytes to a preallocated normalization buffer.
+
+  Parameters
+  ----------
+  ABuffer
+    Destination buffer whose allocated length covers the append.
+  ALength
+    Used-byte count, advanced by the appended length.
+  AValue
+    Exact bytes to append.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+    Buffer capacity is guaranteed by the owning normalizer.
+*}
 procedure AppendRawBytes(var ABuffer: RawByteString; var ALength: SizeInt;
   const AValue: RawByteString); inline;
 begin
@@ -538,6 +625,27 @@ begin
   Inc(ALength, Length(AValue));
 end;
 
+{**
+  Appends one byte to a preallocated normalization buffer.
+
+  Parameters
+  ----------
+  ABuffer
+    Destination buffer whose allocated length covers the append.
+  ALength
+    Used-byte count, advanced by one.
+  AValue
+    Byte to append.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+    Buffer capacity is guaranteed by the owning normalizer.
+*}
 procedure AppendRawByte(var ABuffer: RawByteString; var ALength: SizeInt;
   AValue: Byte); inline;
 begin
@@ -545,6 +653,27 @@ begin
   ABuffer[ALength] := AnsiChar(AValue);
 end;
 
+{**
+  Encodes one verified Unicode scalar into a preallocated UTF-8 buffer.
+
+  Parameters
+  ----------
+  ABuffer
+    Destination normalization buffer.
+  ALength
+    Used-byte count advanced by the encoded length.
+  AValue
+    Unicode scalar no greater than U+10FFFF and outside the surrogate range.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+    Scalar validity and buffer capacity are guaranteed by the caller.
+*}
 procedure AppendUTF8Scalar(var ABuffer: RawByteString; var ALength: SizeInt;
   AValue: Cardinal);
 begin
@@ -570,6 +699,29 @@ begin
   end;
 end;
 
+{**
+  Emits an escaped scalar using UTF-8 or the private control transport.
+
+  Parameters
+  ----------
+  ABuffer
+    Destination normalization buffer.
+  ALength
+    Used-byte count advanced by the emitted bytes.
+  AValue
+    Verified Unicode scalar decoded from JSON escape syntax.
+  AUsedControlProtocol
+    Set True when control or marker transport bytes are emitted.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+    Scalar validity and buffer capacity are guaranteed by the caller.
+*}
 procedure AppendNormalizedEscapedScalar(var ABuffer: RawByteString;
   var ALength: SizeInt; AValue: Cardinal; var AUsedControlProtocol: Boolean);
 begin
@@ -598,6 +750,31 @@ begin
   end;
 end;
 
+{**
+  Validates UTF-8 and normalizes JSON Unicode escapes for FPC strict parsing.
+
+  Parameters
+  ----------
+  AContent
+    Complete raw JSON bytes.
+  AUsedControlProtocol
+    Receives True when an escaped control or literal marker required private
+    reversible transport through the FPC parser.
+
+  Returns
+  -------
+  RawByteString
+    Validated JSON bytes with Unicode escapes converted to safe UTF-8 or
+    private transport sequences.
+
+  Raises
+  ------
+  EJSONParser
+    Raised for invalid UTF-8, raw controls, malformed escapes, isolated
+    surrogates, or input too large for bounded normalization.
+  EOutOfMemory
+    Propagated if the bounded output buffer cannot be allocated.
+*}
 function NormalizeUnicodeEscapes(const AContent: RawByteString;
   out AUsedControlProtocol: Boolean): RawByteString;
 var
@@ -690,6 +867,24 @@ begin
   SetLength(Result, OutputLength);
 end;
 
+{**
+  Applies conservative token, potential-node, and nesting caps before parsing.
+
+  Parameters
+  ----------
+  AContent
+    Normalized JSON bytes whose string boundaries and structural tokens are
+    counted without constructing a tree.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EJSONParser
+    Raised when token, potential-node, or container-depth limits are exceeded.
+*}
 procedure PreflightJSONResources(const AContent: RawByteString);
 var
   Depth, PotentialNodes, Tokens: Integer;
@@ -697,6 +892,23 @@ var
   I: SizeInt;
   Value: Byte;
 
+  {**
+    Accounts for one preflight token and optionally one potential JSON node.
+
+    Parameters
+    ----------
+    ACanBeNode
+      True when this token can create a scalar or container tree node.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    EJSONParser
+      Raised when either enclosing resource counter exceeds its hard limit.
+  *}
   procedure CountToken(ACanBeNode: Boolean);
   begin
     Inc(Tokens);
@@ -773,6 +985,26 @@ begin
   end;
 end;
 
+{**
+  Reverses the private transport used for escaped JSON control characters.
+
+  Parameters
+  ----------
+  AValue
+    Parsed UTF-8 string containing doubled markers or marker/control pairs.
+
+  Returns
+  -------
+  UTF8String
+    Original UTF-8 bytes with transported controls restored.
+
+  Raises
+  ------
+  EJSONParser
+    Raised when a private marker is not followed by a valid transport payload.
+  EOutOfMemory
+    Propagated if the decoded output buffer cannot be allocated.
+*}
 function DecodeControlProtocolString(const AValue: UTF8String): UTF8String;
 var
   Input: RawByteString;
@@ -814,6 +1046,28 @@ begin
   SetLength(Result, OutputLength);
 end;
 
+{**
+  Clones a parsed JSON tree while reversing private control transport strings.
+
+  Parameters
+  ----------
+  AData
+    Non-nil parsed JSON node whose ownership remains with the caller.
+
+  Returns
+  -------
+  TJSONData
+    Newly allocated decoded tree owned by the caller.
+
+  Raises
+  ------
+  EAccessViolation
+    Raised when AData is nil.
+  EJSONParser
+    Propagated for malformed private marker sequences.
+  EOutOfMemory
+    Propagated if the cloned tree cannot be allocated.
+*}
 function DecodeControlProtocolTree(AData: TJSONData): TJSONData;
 var
   ArrayValue: TJSONArray;
@@ -855,6 +1109,28 @@ begin
   end;
 end;
 
+{**
+  Recursively verifies post-parse node, depth, and UTF-8 invariants.
+
+  Parameters
+  ----------
+  AData
+    Node to validate; nil returns False.
+  AContainerDepth
+    Number of containers surrounding AData.
+  ANodeCount
+    Shared node counter incremented for every visited node.
+
+  Returns
+  -------
+  Boolean
+    True when the subtree remains within all hard bounds and every key and
+    string value contains valid UTF-8.
+
+  Raises
+  ------
+  None
+*}
 function ValidateJSONTreeBounds(AData: TJSONData; AContainerDepth: Integer;
   var ANodeCount: Integer): Boolean;
 var
@@ -1013,6 +1289,24 @@ begin
   end;
 end;
 
+{**
+  Normalizes CRLF and bare CR bytes without a text-code-page conversion.
+
+  Parameters
+  ----------
+  AValue
+    Raw serialized UTF-8 bytes.
+
+  Returns
+  -------
+  RawByteString
+    Exact input bytes except that every line separator is one LF.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if the output buffer cannot be allocated.
+*}
 function NormalizeUTF8LineEndings(
   const AValue: RawByteString): RawByteString;
 var

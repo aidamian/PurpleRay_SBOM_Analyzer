@@ -172,8 +172,10 @@ type
       ------
       EAccessViolation
         Raised when ATasks is nil or contains incompatible objects.
+      EJSON, EOutOfMemory
+        Propagated if deterministic UTF-8 serialization cannot complete.
       EFCreateError, EWriteError, EInOutError
-        Propagated by JSON serialization and atomic persistence.
+        Propagated by atomic persistence.
     }
     procedure Save(ATasks: TObjectList);
 

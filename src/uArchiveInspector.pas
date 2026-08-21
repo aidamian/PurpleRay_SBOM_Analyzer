@@ -922,6 +922,22 @@ var
   Entry: TMetadataEntry;
   Limit: Int64;
 
+  {**
+    Installs a zero-capacity memory sink before reporting callback failure.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    EOutOfMemory
+      Propagated if the defensive sink cannot be allocated.
+  *}
   procedure InstallFailureSink;
   var
     DummyEntry: TMetadataEntry;
@@ -1127,12 +1143,46 @@ var
     StartDisk: Word;
   CRCValue, CompressedSize, UncompressedSize, LocalHeaderOffset: LongWord;
 
+  {**
+    Decodes one little-endian word from the fixed central-header buffer.
+
+    Parameters
+    ----------
+    AOffset
+      Valid offset of a two-byte field.
+
+    Returns
+    -------
+    Word
+      Decoded unsigned value.
+
+    Raises
+    ------
+    None
+  *}
   function HeaderWord(AOffset: Integer): Word;
   begin
     Result := Word(Header[AOffset]) or
       (Word(Header[AOffset + 1]) shl 8);
   end;
 
+  {**
+    Decodes one little-endian double word from the central-header buffer.
+
+    Parameters
+    ----------
+    AOffset
+      Valid offset of a four-byte field.
+
+    Returns
+    -------
+    LongWord
+      Decoded unsigned value.
+
+    Raises
+    ------
+    None
+  *}
   function HeaderDWord(AOffset: Integer): LongWord;
   begin
     Result := LongWord(Header[AOffset]) or
@@ -1315,12 +1365,46 @@ var
   BitFlags, CompressionMethod, NameLength, ExtraLength: Word;
   CRCValue, CompressedSize, UncompressedSize: LongWord;
 
+  {**
+    Decodes one little-endian word from the fixed local-header buffer.
+
+    Parameters
+    ----------
+    AOffset
+      Valid offset of a two-byte field.
+
+    Returns
+    -------
+    Word
+      Decoded unsigned value.
+
+    Raises
+    ------
+    None
+  *}
   function HeaderWord(AOffset: Integer): Word;
   begin
     Result := Word(Header[AOffset]) or
       (Word(Header[AOffset + 1]) shl 8);
   end;
 
+  {**
+    Decodes one little-endian double word from the local-header buffer.
+
+    Parameters
+    ----------
+    AOffset
+      Valid offset of a four-byte field.
+
+    Returns
+    -------
+    LongWord
+      Decoded unsigned value.
+
+    Raises
+    ------
+    None
+  *}
   function HeaderDWord(AOffset: Integer): LongWord;
   begin
     Result := LongWord(Header[AOffset]) or
@@ -1955,6 +2039,23 @@ var
   KeyValue, Value: string;
   SeparatorAt: Integer;
 
+  {**
+    Assigns one captured manifest value or marks a conflicting duplicate.
+
+    Parameters
+    ----------
+    ADestination
+      Identity field to populate from the captured Value variable.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    EOutOfMemory
+      Propagated if the value copy cannot be allocated.
+  *}
   procedure AssignIdentityValue(var ADestination: string);
   begin
     if ADestination = '' then
@@ -2018,6 +2119,22 @@ var
   Position, ColonAt: Integer;
   CurrentKey, CurrentValue, LineValue: string;
 
+  {**
+    Applies and clears the currently unfolded manifest attribute.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    EOutOfMemory
+      Propagated if identity assignment or string clearing cannot allocate.
+  *}
   procedure FlushAttribute;
   begin
     if CurrentKey <> '' then

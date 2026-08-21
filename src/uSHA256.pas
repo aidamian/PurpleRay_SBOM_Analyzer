@@ -73,8 +73,11 @@ function SHA256String(const AValue: RawByteString): string;
 
   Raises
   ------
+  EArgumentNilException
+    Raised when AStream is nil.
   EReadError, EStreamError
-    Raised for premature EOF or an underlying stream read/seek failure.
+    Raised for a negative size, premature EOF, or an underlying stream
+    read/seek failure.
 *}
 function SHA256Stream(AStream: TStream; out ADigest: string;
   ACancelCheck: TCancelCheck = nil; AProgress: THashProgress = nil): Boolean;

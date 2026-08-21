@@ -32,7 +32,9 @@ uses
   uTaskHistory, uJSONUtils, uComponentNormalizer, uCycloneDX, uIgnoreMatcher,
   uScanEngine, uPlatform, uSystemInspector, uNativeDependencyInspector,
   uExportUtils, uVersionInfo, uScanWorker, uPresentation, uSPDXExpressions,
-  uComponentComparison, uCommandLine, uScanService, uAtomicFiles;
+  uComponentComparison, uCommandLine, uScanService, uAtomicFiles,
+  uVerifiedInput, uArchiveInspector, uBinaryIdentifiers, uBoundedBinaryReader,
+  uPEVersionInfo, uScanAnalysis, uScanPool, uScanCache, uSettingsStore;
 
 type
   TTestMethod = procedure;
@@ -1766,18 +1768,24 @@ begin
     AssertTrue((Pos('--release-version', LinuxLauncherText) > 0) and
       (Pos('PURPLERAY_VERSION', LinuxLauncherText) > 0) and
       (Pos('gh attestation verify', LinuxLauncherText) > 0) and
+      (Pos('attestation verify --help', LinuxLauncherText) > 0) and
+      (Pos('upgrade gh', LinuxLauncherText) > 0) and
       (Pos('glibc 2.34', LinuxLauncherText) > 0) and
       (Pos('install_desktop_files', LinuxLauncherText) > 0),
       'native Linux launcher lost pinning, provenance, preflight, or desktop integration');
     AssertTrue((Pos('--release-version', WSLLauncherText) > 0) and
       (Pos('PURPLERAY_VERSION', WSLLauncherText) > 0) and
       (Pos('gh attestation verify', WSLLauncherText) > 0) and
+      (Pos('attestation verify --help', WSLLauncherText) > 0) and
+      (Pos('upgrade gh', WSLLauncherText) > 0) and
       (Pos('WSLg is unavailable', WSLLauncherText) > 0),
       'WSL2 launcher lost pinning, provenance, or UI preflight');
     AssertTrue((Pos('$ProgressPreference = ''SilentlyContinue''',
       WindowsLauncherText) > 0) and
       (Pos('PURPLERAY_VERSION', WindowsLauncherText) > 0) and
       (Pos('gh attestation verify', WindowsLauncherText) > 0) and
+      (Pos('attestation verify --help', WindowsLauncherText) > 0) and
+      (Pos('upgrade gh', WindowsLauncherText) > 0) and
       (Pos('/releases/latest', WindowsLauncherText) > 0) and
       (Pos('api.github.com', WindowsLauncherText) = 0) and
       (Pos('Smart App Control', WindowsLauncherText) > 0),
@@ -4745,7 +4753,7 @@ end;
 procedure TestNativeVersionScanAndSBOM;
 var
   DirectoryName, FileName: string;
-  Buffer: array[0..63] of Byte;
+  Buffer: array[0..127] of Byte;
   Task: TScanTask;
   Engine: TScanEngine;
   Component: uModels.TComponent;
@@ -4755,9 +4763,19 @@ begin
   FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'libdemo.so.4.2';
   FillChar(Buffer, SizeOf(Buffer), 0);
   Buffer[0] := $7F; Buffer[1] := Ord('E'); Buffer[2] := Ord('L');
-  Buffer[3] := Ord('F'); Buffer[4] := 2; Buffer[5] := 1;
+  Buffer[3] := Ord('F'); Buffer[4] := 2; Buffer[5] := 1; Buffer[6] := 1;
   SetUInt16LE(Buffer, 16, 3);
   SetUInt16LE(Buffer, 18, 62);
+  SetUInt32LE(Buffer, 20, 1);
+  SetUInt64LE(Buffer, 32, 64);
+  SetUInt16LE(Buffer, 52, 64);
+  SetUInt16LE(Buffer, 54, 56);
+  SetUInt16LE(Buffer, 56, 1);
+  SetUInt32LE(Buffer, 64, 1);
+  SetUInt32LE(Buffer, 68, 4);
+  SetUInt64LE(Buffer, 96, SizeOf(Buffer));
+  SetUInt64LE(Buffer, 104, SizeOf(Buffer));
+  SetUInt64LE(Buffer, 112, $1000);
   WriteBytes(FileName, Buffer);
   FileName := IncludeTrailingPathDelimiter(DirectoryName) + 'libc.so.6';
   WriteBytes(FileName, Buffer);
@@ -6588,6 +6606,8 @@ begin
   end;
 end;
 
+{$I sprint7_regressions.inc}
+
 begin
   ProjectRoot := ExpandFileName(ExtractFilePath(ParamStr(0)) + '..' +
     DirectorySeparator + '..');
@@ -6656,6 +6676,7 @@ begin
     @TestLicenseEvidenceDoesNotInferLicense);
   RunTest('empty-directory warning', @TestEmptyDirectoryWarning);
   RunTest('scan cancellation', @TestScanCancellation);
+  RunSprint7RegressionTests;
   WriteLn(Format('%d tests: %d passed, %d failed, %d skipped',
     [TestCount, PassCount, FailureCount, SkipCount]));
   RemoveTemporaryTree(TemporaryRoot);

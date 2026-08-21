@@ -80,8 +80,12 @@ function InspectNativeDependencies(const AFileName, AFormatName: string;
 
   Raises
   ------
+  EArgumentNilException
+    Raised when AStream is nil and a destination list was supplied.
   EReadError, EStreamError
     Propagated when the bounded stream cannot satisfy a requested read.
+  EOutOfMemory
+    Propagated if bounded reader state cannot be allocated.
 *}
 function InspectNativeDependencies(AStream: TStream;
   const AFormatName: string; ADependencies: TStrings): Boolean; overload;
@@ -110,6 +114,9 @@ function InspectNativeDependencies(AStream: TStream;
   ------
   EArgumentNilException, EStreamError
     Propagated for nil input or an in-range stream read failure.
+  EOutOfMemory
+    Propagated if reader, temporary-list, or bounded evidence storage cannot be
+    allocated.
 *}
 function InspectNativeEvidence(AStream: TStream; const AFormatName: string;
   ADependencies: TStrings; out AMetadata: TNativeBinaryMetadata): Boolean;
