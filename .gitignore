@@ -87,6 +87,9 @@ _TODO_private.md
 
 purpleray-sbom-analyzer-internal/
 
+# Sprint plans, work logs, and acceptance evidence are private working records.
+docs/sprints/
+
 # Lazarus/FPC local build output
 build/
 dist/

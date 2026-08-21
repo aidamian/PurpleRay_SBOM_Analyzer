@@ -591,16 +591,11 @@ packaging/linux/           desktop, icon, AppStream, and Debian inputs
 packaging/scoop/           generated Scoop-manifest template
 packaging/winget/          generated WinGet multi-file templates
 packaging/macos/           experimental, unshipped bundle metadata template
-docs/sprints/              planned, delivered, validated, and released sprint evidence
 scripts/                   local build, test, version, and packaging helpers
 src/                       Lazarus project, UI, scanner, parsers, and persistence
 tests/                     deterministic non-UI test runner and fixtures
 .github/workflows/         native Windows/Linux CI and release automation
 ```
-
-The [sprint evidence index](docs/sprints/README.md) separates planned work from
-what was delivered, validated, and released, and keeps known evidence gaps
-explicit.
 
 The tracked root `VERSION` file is the sole operator-managed version authority.
 It contains exactly one canonical `MAJOR.MINOR.PATCH` value: no prefix, suffix,

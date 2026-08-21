@@ -1866,13 +1866,10 @@ begin
       'README revived a shipped macOS support claim');
     AssertTrue(Pos('### Headless command line', ReadmeText) > 0,
       'README does not document the headless CLI');
-    AssertTrue((Pos('docs/sprints/README.md', ReadmeText) > 0) and
-      FileExists(IncludeTrailingPathDelimiter(ProjectRoot) + 'docs' +
-      DirectorySeparator + 'sprints' + DirectorySeparator + 'README.md') and
-      FileExists(IncludeTrailingPathDelimiter(ProjectRoot) + 'docs' +
-      DirectorySeparator + 'sprints' + DirectorySeparator +
-      'sprint-08-advanced-analysis.md'),
-      'tracked sprint delivery evidence is missing or undiscoverable');
+    AssertTrue((Pos('docs/sprints', ReadmeText) = 0) and
+      (not DirectoryExists(IncludeTrailingPathDelimiter(ProjectRoot) + 'docs' +
+      DirectorySeparator + 'sprints')),
+      'internal sprint records leaked into the public documentation tree');
     AssertTrue(Pos('scoop install .\purpleray-sbom-analyzer.json',
       ReadmeText) > 0,
       'README does not explain how to consume the shipped Scoop manifest');
