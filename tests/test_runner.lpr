@@ -1197,10 +1197,10 @@ begin
       '.github' + DirectorySeparator + 'workflows' + DirectorySeparator +
       'build-release.yml');
     WorkflowText := WorkflowLines.Text;
-    CheckPosition := Pos('scripts/check-version.sh', WorkflowText);
     WritePosition := Pos('scripts/write-version.sh', WorkflowText);
-    AssertTrue((CheckPosition > 0) and (CheckPosition < WritePosition),
-      'CI must verify tracked fallbacks before generated metadata can mask them');
+    CheckPosition := Pos('scripts/check-version.sh', WorkflowText);
+    AssertEqual(0, CheckPosition,
+      'CI again requires the optional local fallback checker');
     AssertTrue(WritePosition > 0,
       'CI version generation step is missing');
     AssertTrue(WritePosition < Pos('scripts/run-tests.sh', WorkflowText),

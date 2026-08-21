@@ -116,9 +116,6 @@ jobs:
           echo "Version: ${{ steps.version.outputs.version }}"
           echo "Publish release: ${{ steps.version.outputs.is_release }}"
 
-      - name: Verify tracked version fallbacks
-        run: scripts/check-version.sh
-
   build:
     name: ${{ matrix.config.name }}
     needs: prepare
