@@ -1238,8 +1238,8 @@ var
   CommandSource, ProgramText, WorkerText: string;
   Data: TJSONData;
   Digest, ErrorText, ManagedOutputDirectory, ManagedOutputFileName,
-    OutputDirectory, OutputFileName, SettingsFileName, TargetDirectory,
-    WrappedSettingsFileName: string;
+    OutputDirectory, OutputFileName, ResolvedOutputFileName, SettingsFileName,
+    TargetDirectory, WrappedSettingsFileName: string;
   InvalidRaised: Boolean;
   Options: TCommandLineOptions;
   OutputStream: TFileStream;
@@ -1360,9 +1360,14 @@ begin
   WriteText(IncludeTrailingPathDelimiter(TargetDirectory) + 'package.json',
     '{"name":"headless-fixture","version":"1.2.3",' +
     '"dependencies":{"left-pad":"1.3.0"}}');
-  AssertEqual(ExpandFileName(OutputFileName),
-    ResolveScanOutputFileName(TargetDirectory, OutputFileName),
-    'safe headless output resolution differs');
+  ResolvedOutputFileName := ResolveScanOutputFileName(TargetDirectory,
+    OutputFileName);
+  AssertTrue(SameFileName(CanonicalPath(OutputDirectory),
+    ExtractFileDir(ResolvedOutputFileName)),
+    'safe headless output parent identity differs');
+  AssertEqual(ExtractFileName(OutputFileName),
+    ExtractFileName(ResolvedOutputFileName),
+    'safe headless output leaf differs');
 
   InvalidRaised := False;
   try
@@ -1397,7 +1402,7 @@ begin
       'shared headless scan/export service failed');
     AssertTrue(Task.Status = tsCompleted,
       'shared headless scan did not complete');
-    AssertEqual(ExpandFileName(OutputFileName), Task.GeneratedSBOMPath,
+    AssertEqual(ResolvedOutputFileName, Task.GeneratedSBOMPath,
       'shared headless output path differs');
     AssertTrue(FileExists(OutputFileName),
       'shared headless output was not created');

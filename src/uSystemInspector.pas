@@ -6,8 +6,10 @@
 
   Description
   -----------
-  Enriches binary evidence through an explicit allowlist of already available
-  OS tools or APIs under strict process, output, and cancellation bounds.
+  Reconciles native binary enrichment behind one compatibility boundary. Scan
+  analysis uses only stream-native internal ELF and PE parsers; the legacy
+  pathname entry point is retained temporarily but deliberately performs no
+  inspection and launches no external program.
 
   Citation request
   ----------------
@@ -36,8 +38,15 @@ type
   public
     ToolName: string;
     ComponentVersion: string;
+    FileVersion: string;
+    ProductVersion: string;
+    CompanyName: string;
+    ProductName: string;
+    SONAME: string;
+    BuildID: string;
     Dependencies: TStringList;
     Details: TStringList;
+
     {**
       Creates sorted, duplicate-free dependency and detail collections.
 
@@ -54,12 +63,28 @@ type
       ------
       EOutOfMemory
         Propagated if the collections cannot be allocated.
-    }
+    *}
     constructor Create;
+
+    {**
+      Releases the owned dependency and detail collections.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    *}
     destructor Destroy; override;
 
     {**
-      Formats the tool name, linked libraries, and details for artifact messages.
+      Formats parser provenance and native evidence for artifact messages.
 
       Parameters
       ----------
@@ -68,24 +93,25 @@ type
       Returns
       -------
       string
-        Compact single-line inspection summary.
+        Compact deterministic single-line inspection summary.
 
       Raises
       ------
-      None
-    }
+      EOutOfMemory
+        Propagated if summary construction cannot be allocated.
+    *}
     function Summary: string;
   end;
 
 {**
-  Parses stable readelf dynamic-section and GNU build-ID output.
+  Parses historical readelf text for backward-compatible persisted tests.
 
   Parameters
   ----------
   AOutput
-    Combined stdout/stderr captured under the C locale.
+    Previously captured readelf dynamic-section and GNU build-ID output.
   AInspection
-    Evidence container that receives dependencies and build identifiers.
+    Evidence container receiving recognized fields.
 
   Returns
   -------
@@ -94,48 +120,77 @@ type
 
   Raises
   ------
-  None
-}
+  EOutOfMemory
+    Propagated if bounded line parsing storage cannot be allocated.
+
+  Notes
+  -----
+  Runtime scanning no longer invokes readelf. This parser remains solely for
+  compatibility with historical data and unit-level regression coverage.
+*}
 function ParseReadElfOutput(const AOutput: string;
   AInspection: TSystemInspection): Boolean;
 
 {**
-  Applies the approved OS-specific inspection facility for a binary.
+  Retains the legacy pathname inspection signature without reopening a file.
 
   Parameters
   ----------
   AFileName
-    Static target file supplied only as tool or API input.
+    Ignored legacy pathname.
+  AFormatName
+    Ignored legacy format name.
+  AInspection
+    Always receives nil.
+  ACancelCheck
+    Ignored legacy cancellation callback.
+
+  Returns
+  -------
+  Boolean
+    Always False; callers must migrate to InspectBinarySystemEvidence.
+
+  Raises
+  ------
+  None
+*}
+function InspectWithSystemTools(const AFileName, AFormatName: string;
+  out AInspection: TSystemInspection;
+  ACancelCheck: TSystemInspectionCancelCheck = nil): Boolean;
+
+{**
+  Applies internal bounded native enrichment to a verified binary stream.
+
+  Parameters
+  ----------
+  AStream
+    Caller-owned verified and bounded binary stream.
   AFormatName
     Previously detected PE, ELF, or Mach-O format name.
   AInspection
     Receives a newly allocated evidence object on success, otherwise nil.
   ACancelCheck
-    Optional callback polled while an approved child process is active.
+    Optional callback checked before and after bounded parsing.
 
   Returns
   -------
   Boolean
-    True when an applicable facility completed and returned usable status.
+    True when dependencies, versions, PE names, SONAME, or build ID are found.
 
   Raises
   ------
   None
-    Tool discovery, launch, timeout, output-limit, and API failures return False.
-}
-function InspectWithSystemTools(const AFileName, AFormatName: string;
-  out AInspection: TSystemInspection;
+    Malformed inputs and stream errors return False so a scan can retain its
+    already established binary-header evidence.
+*}
+function InspectBinarySystemEvidence(AStream: TStream;
+  const AFormatName: string; out AInspection: TSystemInspection;
   ACancelCheck: TSystemInspectionCancelCheck = nil): Boolean;
 
 implementation
 
 uses
-  Process, uNativeDependencyInspector
-  {$IFDEF Windows}, Windows{$ENDIF};
-
-const
-  ToolTimeoutMS = 3000;
-  MaximumToolOutput = 512 * 1024;
+  uNativeDependencyInspector, uPEVersionInfo;
 
 constructor TSystemInspection.Create;
 begin
@@ -159,9 +214,17 @@ function TSystemInspection.Summary: string;
 begin
   Result := '';
   if ToolName <> '' then
-    Result := 'OS inspection: ' + ToolName;
+    Result := 'native inspection: ' + ToolName;
   if ComponentVersion <> '' then
     Result := Result + '; component version: ' + ComponentVersion;
+  if CompanyName <> '' then
+    Result := Result + '; company: ' + CompanyName;
+  if ProductName <> '' then
+    Result := Result + '; product: ' + ProductName;
+  if SONAME <> '' then
+    Result := Result + '; SONAME: ' + SONAME;
+  if BuildID <> '' then
+    Result := Result + '; build ID: ' + BuildID;
   if Dependencies.Count > 0 then
     Result := Result + '; linked libraries: ' +
       StringReplace(Dependencies.CommaText, ',', ', ', [rfReplaceAll]);
@@ -171,125 +234,6 @@ begin
   while (Length(Result) >= 2) and
     (Copy(Result, Length(Result) - 1, 2) = '; ') do
     Delete(Result, Length(Result) - 1, 2);
-end;
-
-function FindTool(const APreferredPath, AName: string): string;
-begin
-  if (APreferredPath <> '') and FileExists(APreferredPath) then
-    Exit(APreferredPath);
-  Result := FileSearch(AName, SysUtils.GetEnvironmentVariable('PATH'));
-end;
-
-procedure PrepareToolEnvironment(AProcess: TProcess);
-{$IFDEF UNIX}
-var
-  I: Integer;
-{$ENDIF}
-begin
-  {$IFDEF UNIX}
-  for I := 1 to SysUtils.GetEnvironmentVariableCount do
-    AProcess.Environment.Add(GetEnvironmentString(I));
-  AProcess.Environment.Values['LC_ALL'] := 'C';
-  AProcess.Environment.Values['LANG'] := 'C';
-  AProcess.Environment.Values['DEBUGINFOD_URLS'] := '';
-  {$ENDIF}
-end;
-
-{**
-  Runs one allowlisted executable directly and captures bounded combined output.
-
-  Parameters
-  ----------
-  AExecutable
-    Resolved executable path; an empty value returns False.
-  AParameters
-    Argument vector passed without a command shell.
-  AOutput
-    Receives at most MaximumToolOutput bytes plus a limit diagnostic.
-  AExitStatus
-    Receives the process exit code, or -1 when launch did not occur.
-  ACancelCheck
-    Optional callback that terminates the helper cooperatively.
-
-  Returns
-  -------
-  Boolean
-    True when the process ran without scan cancellation; callers still inspect
-    AExitStatus where the tool requires a zero exit code.
-
-  Raises
-  ------
-  None
-    Launch errors, timeouts, and cancellation are represented in outputs.
-}
-function RunBoundedTool(const AExecutable: string; const AParameters: array of string;
-  out AOutput: string; out AExitStatus: Integer;
-  ACancelCheck: TSystemInspectionCancelCheck): Boolean;
-var
-  Tool: TProcess;
-  Buffer: array[0..8191] of Byte;
-  Count, I: Integer;
-  Started: QWord;
-  Chunk: RawByteString;
-  Cancelled: Boolean;
-begin
-  Result := False;
-  AOutput := '';
-  AExitStatus := -1;
-  Cancelled := False;
-  if AExecutable = '' then
-    Exit;
-  Tool := TProcess.Create(nil);
-  try
-    Tool.Executable := AExecutable;
-    PrepareToolEnvironment(Tool);
-    for I := Low(AParameters) to High(AParameters) do
-      Tool.Parameters.Add(AParameters[I]);
-    Tool.Options := [poUsePipes, poStderrToOutPut];
-    try
-      Tool.Execute;
-    except
-      Exit;
-    end;
-    Started := GetTickCount64;
-    while Tool.Running or (Tool.Output.NumBytesAvailable > 0) do
-    begin
-      while Tool.Output.NumBytesAvailable > 0 do
-      begin
-        Count := Tool.Output.Read(Buffer, SizeOf(Buffer));
-        if Count <= 0 then
-          Break;
-        SetLength(Chunk, Count);
-        Move(Buffer[0], Chunk[1], Count);
-        if Length(AOutput) + Count <= MaximumToolOutput then
-          AOutput := AOutput + string(Chunk)
-        else
-        begin
-          Tool.Terminate(1);
-          AOutput := AOutput + LineEnding +
-            '[inspection output exceeded safety limit]';
-          Break;
-        end;
-      end;
-      if Tool.Running and (GetTickCount64 - Started >= ToolTimeoutMS) then
-      begin
-        Tool.Terminate(1);
-        AOutput := AOutput + LineEnding + '[inspection timed out]';
-      end;
-      if Tool.Running and Assigned(ACancelCheck) and ACancelCheck() then
-      begin
-        Cancelled := True;
-        Tool.Terminate(1);
-      end;
-      if Tool.Running then
-        Sleep(10);
-    end;
-    Tool.WaitOnExit;
-    AExitStatus := Tool.ExitStatus;
-    Result := not Cancelled;
-  finally
-    Tool.Free;
-  end;
 end;
 
 function ParseReadElfOutput(const AOutput: string;
@@ -328,9 +272,9 @@ begin
         if (OpenAt > 0) and (CloseAt > OpenAt + 1) then
         begin
           Value := Copy(LineValue, OpenAt + 1, CloseAt - OpenAt - 1);
+          AInspection.SONAME := Value;
           AInspection.ComponentVersion := NativeDependencyVersion(Value);
-          if AInspection.ComponentVersion <> '' then
-            Result := True;
+          Result := True;
         end;
       end;
       MarkerAt := Pos('Build ID:', LineValue);
@@ -339,6 +283,7 @@ begin
         Value := Trim(Copy(LineValue, MarkerAt + Length('Build ID:'), MaxInt));
         if Value <> '' then
         begin
+          AInspection.BuildID := Value;
           AInspection.Details.Add('build ID: ' + Value);
           Result := True;
         end;
@@ -349,174 +294,112 @@ begin
   end;
 end;
 
-{**
-  Extracts stable identity and signature fields from macOS codesign output.
-
-  Parameters
-  ----------
-  AOutput
-    Combined text emitted by codesign inspection.
-  AInspection
-    Result object receiving recognized detail lines.
-
-  Returns
-  -------
-  Boolean
-    True when at least one supported signature field is found.
-
-  Raises
-  ------
-  EOutOfMemory
-    Propagated if parsing storage cannot be allocated.
-}
-function ParseCodeSignOutput(const AOutput: string;
-  AInspection: TSystemInspection): Boolean;
-const
-  Keys: array[0..5] of string = ('Identifier=', 'TeamIdentifier=',
-    'Authority=', 'CDHash=', 'Signature=', 'Runtime Version=');
-var
-  Lines: TStringList;
-  I, J: Integer;
-  LineValue: string;
-begin
-  Result := False;
-  Lines := TStringList.Create;
-  try
-    Lines.Text := AOutput;
-    for I := 0 to Lines.Count - 1 do
-    begin
-      LineValue := Trim(Lines[I]);
-      for J := Low(Keys) to High(Keys) do
-        if Pos(Keys[J], LineValue) = 1 then
-        begin
-          AInspection.Details.Add(LineValue);
-          Result := True;
-          Break;
-        end;
-    end;
-  finally
-    Lines.Free;
-  end;
-end;
-
-{$IFDEF Windows}
-{**
-  Reads all four fixed-file-version fields through the native Windows API.
-
-  Parameters
-  ----------
-  AFileName
-    PE file whose embedded version resource should be queried.
-  AVersion
-    Receives major.minor.revision.build on success.
-
-  Returns
-  -------
-  Boolean
-    True only when a structurally valid fixed version resource is available.
-
-  Raises
-  ------
-  EOutOfMemory
-    Propagated when the bounded version-information buffer cannot be allocated.
-    Windows API and malformed-resource failures return False.
-}
-function TryGetWindowsFileVersion(const AFileName: UnicodeString;
-  out AVersion: string): Boolean;
-var
-  IgnoredHandle, InfoSize: DWORD;
-  ValueSize: UINT;
-  Buffer, FixedBuffer: Pointer;
-  FixedInfo: PVSFixedFileInfo;
-  RootBlock: UnicodeString;
-begin
-  Result := False;
-  AVersion := '';
-  IgnoredHandle := 0;
-  InfoSize := GetFileVersionInfoSizeW(PWideChar(AFileName), @IgnoredHandle);
-  if InfoSize = 0 then
-    Exit;
-  GetMem(Buffer, InfoSize);
-  try
-    if not GetFileVersionInfoW(PWideChar(AFileName), 0, InfoSize, Buffer) then
-      Exit;
-    RootBlock := '\';
-    FixedBuffer := nil;
-    ValueSize := 0;
-    if not VerQueryValueW(Buffer, PWideChar(RootBlock), FixedBuffer,
-      ValueSize) or (FixedBuffer = nil) or
-      (ValueSize < SizeOf(TVSFixedFileInfo)) then
-      Exit;
-    FixedInfo := PVSFixedFileInfo(FixedBuffer);
-    if FixedInfo^.dwSignature <> $FEEF04BD then
-      Exit;
-    AVersion := Format('%d.%d.%d.%d',
-      [FixedInfo^.dwFileVersionMS shr 16,
-       FixedInfo^.dwFileVersionMS and $FFFF,
-       FixedInfo^.dwFileVersionLS shr 16,
-       FixedInfo^.dwFileVersionLS and $FFFF]);
-    Result := True;
-  finally
-    FreeMem(Buffer);
-  end;
-end;
-{$ENDIF}
-
 function InspectWithSystemTools(const AFileName, AFormatName: string;
   out AInspection: TSystemInspection;
   ACancelCheck: TSystemInspectionCancelCheck): Boolean;
+begin
+  AInspection := nil;
+  Result := False;
+end;
+
+{**
+  Copies parsed PE resource fields into the common inspection container.
+
+  Parameters
+  ----------
+  AEvidence
+    Stream-native PE VERSIONINFO values.
+  AInspection
+    Destination inspection object.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated if detail strings cannot be allocated.
+*}
+procedure ApplyPEEvidence(const AEvidence: TPEVersionInfoEvidence;
+  AInspection: TSystemInspection);
+begin
+  AInspection.FileVersion := AEvidence.FixedFileVersion;
+  AInspection.ProductVersion := AEvidence.FixedProductVersion;
+  AInspection.CompanyName := AEvidence.CompanyName;
+  AInspection.ProductName := AEvidence.ProductName;
+  if AInspection.ProductVersion <> '' then
+    AInspection.ComponentVersion := AInspection.ProductVersion
+  else
+    AInspection.ComponentVersion := AInspection.FileVersion;
+  if AInspection.FileVersion <> '' then
+    AInspection.Details.Add('fixed file version: ' +
+      AInspection.FileVersion);
+  if AInspection.ProductVersion <> '' then
+    AInspection.Details.Add('fixed product version: ' +
+      AInspection.ProductVersion);
+end;
+
+function InspectBinarySystemEvidence(AStream: TStream;
+  const AFormatName: string; out AInspection: TSystemInspection;
+  ACancelCheck: TSystemInspectionCancelCheck): Boolean;
 var
-  ExecutableName, OutputText: string;
-  ExitStatus: Integer;
-  {$IFDEF Windows}
-  VersionText: string;
-  {$ENDIF}
+  NativeMetadata: TNativeBinaryMetadata;
+  PEEvidence: TPEVersionInfoEvidence;
+  HasNativeEvidence, HasPEEvidence: Boolean;
 begin
   Result := False;
+  AInspection := nil;
+  if (AStream = nil) or
+    (Assigned(ACancelCheck) and ACancelCheck()) then
+    Exit;
   AInspection := TSystemInspection.Create;
-  {$IFDEF Linux}
-  if SameText(AFormatName, 'ELF') then
-  begin
-    ExecutableName := FindTool('/usr/bin/readelf', 'readelf');
-    if RunBoundedTool(ExecutableName,
-      ['--wide', '--dynamic', '--notes', '--', AFileName], OutputText,
-      ExitStatus, ACancelCheck) and (ExitStatus = 0) then
-    begin
-      AInspection.ToolName := 'readelf';
-      ParseReadElfOutput(OutputText, AInspection);
-      Result := True;
+  try
+    { PE imports are case-insensitive; ELF and Mach-O dependency identities are
+      byte/case-sensitive and must not collapse distinct library names. }
+    AInspection.Dependencies.CaseSensitive := not SameText(AFormatName, 'PE');
+    HasNativeEvidence := False;
+    HasPEEvidence := False;
+    try
+      HasNativeEvidence := InspectNativeEvidence(AStream, AFormatName,
+        AInspection.Dependencies, NativeMetadata);
+      AInspection.SONAME := NativeMetadata.SONAME;
+      AInspection.BuildID := NativeMetadata.BuildID;
+      if SameText(AFormatName, 'ELF') then
+      begin
+        AInspection.ToolName := 'internal ELF parser';
+        if AInspection.SONAME <> '' then
+          AInspection.ComponentVersion := NativeDependencyVersion(
+            AInspection.SONAME);
+      end
+      else if SameText(AFormatName, 'PE') then
+      begin
+        HasPEEvidence := InspectPEVersionInfo(AStream, PEEvidence);
+        if HasPEEvidence then
+          ApplyPEEvidence(PEEvidence, AInspection);
+        AInspection.ToolName := 'internal PE parser';
+      end
+      else if Pos('Mach-O', AFormatName) = 1 then
+        AInspection.ToolName := 'internal Mach-O parser';
+    except
+      on E: Exception do
+      begin
+        FreeAndNil(AInspection);
+        Exit(False);
+      end;
     end;
-  end;
-  {$ENDIF}
-  {$IFDEF Darwin}
-  if Pos('Mach-O', AFormatName) = 1 then
-  begin
-    ExecutableName := FindTool('/usr/bin/codesign', 'codesign');
-    if RunBoundedTool(ExecutableName,
-      ['--display', '--verbose=4', AFileName], OutputText, ExitStatus,
-      ACancelCheck) then
+    if Assigned(ACancelCheck) and ACancelCheck() then
     begin
-      AInspection.ToolName := 'codesign';
-      ParseCodeSignOutput(OutputText, AInspection);
-      Result := True;
+      FreeAndNil(AInspection);
+      Exit(False);
     end;
-  end;
-  {$ENDIF}
-  {$IFDEF Windows}
-  if SameText(AFormatName, 'PE') then
-  begin
-    if TryGetWindowsFileVersion(UTF8Decode(AFileName), VersionText) then
-    begin
-      AInspection.ToolName := 'Windows version-resource API';
-      AInspection.ComponentVersion := VersionText;
-      AInspection.Details.Add('file version: ' +
-        AInspection.ComponentVersion);
-      Result := True;
-    end;
-  end;
-  {$ENDIF}
-  if not Result then
+    Result := HasNativeEvidence or HasPEEvidence;
+    if not Result then
+      FreeAndNil(AInspection);
+  except
     FreeAndNil(AInspection);
+    raise;
+  end;
 end;
 
 end.

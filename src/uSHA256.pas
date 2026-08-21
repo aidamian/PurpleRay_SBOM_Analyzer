@@ -53,6 +53,33 @@ type
 function SHA256String(const AValue: RawByteString): string;
 
 {**
+  Calculates SHA-256 over one stream's exact size snapshot.
+
+  Parameters
+  ----------
+  AStream
+    Caller-owned seekable stream. Hashing starts at offset zero.
+  ADigest
+    Receives the lowercase digest on success, or an empty string on cancel.
+  ACancelCheck
+    Optional callback polled between input chunks.
+  AProgress
+    Optional callback receiving cumulative bytes read.
+
+  Returns
+  -------
+  Boolean
+    True when exactly the initial stream size was hashed; False on cancellation.
+
+  Raises
+  ------
+  EReadError, EStreamError
+    Raised for premature EOF or an underlying stream read/seek failure.
+*}
+function SHA256Stream(AStream: TStream; out ADigest: string;
+  ACancelCheck: TCancelCheck = nil; AProgress: THashProgress = nil): Boolean;
+
+{**
   Calculates SHA-256 for a file with cancellation and progress callbacks.
 
   Parameters
@@ -268,37 +295,56 @@ begin
   Result := FinalizeDigest(Context);
 end;
 
-function SHA256File(const AFileName: string; out ADigest: string;
+function SHA256Stream(AStream: TStream; out ADigest: string;
   ACancelCheck: TCancelCheck; AProgress: THashProgress): Boolean;
 const
   BufferSize = 64 * 1024;
 var
   Context: TSHA256Context;
-  Stream: TFileStream;
   Buffer: array[0..BufferSize - 1] of Byte;
-  Count: LongInt;
-  Total: Int64;
+  Count, Requested: LongInt;
+  Total, ExpectedSize, Remaining: Int64;
 begin
   Result := False;
   ADigest := '';
+  if AStream = nil then
+    raise EArgumentNilException.Create('SHA-256 input stream is nil');
   Initialize(Context);
+  ExpectedSize := AStream.Size;
+  if ExpectedSize < 0 then
+    raise EReadError.Create('SHA-256 input has an invalid negative size');
+  AStream.Position := 0;
+  Total := 0;
+  while Total < ExpectedSize do
+  begin
+    if Assigned(ACancelCheck) and ACancelCheck() then
+      Exit;
+    Remaining := ExpectedSize - Total;
+    Requested := SizeOf(Buffer);
+    if Remaining < Requested then
+      Requested := LongInt(Remaining);
+    Count := AStream.Read(Buffer, Requested);
+    if Count <= 0 then
+      raise EReadError.CreateFmt(
+        'SHA-256 input ended early after %d of %d bytes',
+        [Total, ExpectedSize]);
+    Update(Context, Buffer[0], Count);
+    Inc(Total, Count);
+    if Assigned(AProgress) then
+      AProgress(Total);
+  end;
+  ADigest := FinalizeDigest(Context);
+  Result := True;
+end;
+
+function SHA256File(const AFileName: string; out ADigest: string;
+  ACancelCheck: TCancelCheck; AProgress: THashProgress): Boolean;
+var
+  Stream: TFileStream;
+begin
   Stream := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyNone);
   try
-    Total := 0;
-    repeat
-      if Assigned(ACancelCheck) and ACancelCheck() then
-        Exit;
-      Count := Stream.Read(Buffer, SizeOf(Buffer));
-      if Count > 0 then
-      begin
-        Update(Context, Buffer[0], Count);
-        Inc(Total, Count);
-        if Assigned(AProgress) then
-          AProgress(Total);
-      end;
-    until Count = 0;
-    ADigest := FinalizeDigest(Context);
-    Result := True;
+    Result := SHA256Stream(Stream, ADigest, ACancelCheck, AProgress);
   finally
     Stream.Free;
   end;

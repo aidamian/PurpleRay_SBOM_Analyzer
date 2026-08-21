@@ -30,6 +30,26 @@ uses
   Contnrs, uModels;
 
 {**
+  Builds the deterministic identity key used by component normalization.
+
+  Parameters
+  ----------
+  AComponent
+    Component whose Package URL or fallback identity fields are inspected.
+
+  Returns
+  -------
+  string
+    Case-normalized Package URL key, or an ecosystem/name/version/type key.
+
+  Raises
+  ------
+  EAccessViolation
+    Raised when AComponent is nil.
+*}
+function ComponentNormalizationKey(AComponent: uModels.TComponent): string;
+
+{**
   Deduplicates components and merges their evidence into owned output clones.
 
   Parameters
@@ -73,10 +93,13 @@ implementation
 uses
   Classes, SysUtils;
 
-function NormalizedKey(AComponent: uModels.TComponent): string;
+function ComponentNormalizationKey(AComponent: uModels.TComponent): string;
 begin
   if Trim(AComponent.PackageURL) <> '' then
-    Result := 'purl:' + LowerCase(Trim(AComponent.PackageURL))
+    { Package URLs produced by the parsers are already canonical. Preserve
+      their exact bytes here because version and some type-specific namespace
+      or name segments are case-sensitive evidence. }
+    Result := 'purl:' + Trim(AComponent.PackageURL)
   else
     Result := 'fields:' + LowerCase(Trim(AComponent.Ecosystem)) + #1 +
       LowerCase(Trim(AComponent.Name)) + #1 + Trim(AComponent.Version) + #1 +
@@ -173,6 +196,31 @@ begin
 end;
 
 {**
+  Selects one deterministic nonempty scalar evidence value.
+
+  Parameters
+  ----------
+  ATarget
+    Existing normalized value, updated in place.
+  ASource
+    Additional value from an equal component.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+*}
+procedure MergeStableValue(var ATarget: string; const ASource: string);
+begin
+  if (ATarget = '') or ((ASource <> '') and
+    (CompareStr(ASource, ATarget) < 0)) then
+    ATarget := ASource;
+end;
+
+{**
   Merges declaration and provenance evidence from one equal component.
 
   Parameters
@@ -211,9 +259,13 @@ begin
     ATarget.SourceParser := ASource.SourceParser;
   ATarget.DependencyScope := MergeTokens(ATarget.DependencyScope,
     ASource.DependencyScope);
-  if (ATarget.SHA256 = '') or ((ASource.SHA256 <> '') and
-    (CompareStr(ASource.SHA256, ATarget.SHA256) < 0)) then
-    ATarget.SHA256 := ASource.SHA256;
+  MergeStableValue(ATarget.SHA256, ASource.SHA256);
+  MergeStableValue(ATarget.CPE, ASource.CPE);
+  MergeStableValue(ATarget.CPEEvidence, ASource.CPEEvidence);
+  MergeStableValue(ATarget.CompanyName, ASource.CompanyName);
+  MergeStableValue(ATarget.ProductName, ASource.ProductName);
+  MergeStableValue(ATarget.NativeSONAME, ASource.NativeSONAME);
+  MergeStableValue(ATarget.NativeBuildID, ASource.NativeBuildID);
 end;
 
 function CompareComponents(Item1, Item2: Pointer): Integer;
@@ -252,11 +304,16 @@ begin
   Keys := TStringList.Create;
   try
     Keys.Sorted := True;
+    { ComponentNormalizationKey already case-folds case-insensitive fields but
+      deliberately preserves exact versions. Match the live-key counter and
+      keep case-variant version evidence distinct on every platform. }
+    Keys.CaseSensitive := True;
     Keys.Duplicates := dupError;
+    Keys.UseLocale := False;
     for I := 0 to AInput.Count - 1 do
     begin
       Source := uModels.TComponent(AInput[I]);
-      KeyValue := NormalizedKey(Source);
+      KeyValue := ComponentNormalizationKey(Source);
       if Keys.Find(KeyValue, Index) then
         MergeComponent(uModels.TComponent(Keys.Objects[Index]), Source)
       else

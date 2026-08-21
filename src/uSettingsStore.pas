@@ -68,7 +68,7 @@ type
 
       Raises
       ------
-      EAccessViolation
+      EArgumentNilException
         Raised when ASettings is nil.
       EFCreateError, EWriteError, EInOutError
         Propagated by atomic persistence.
@@ -120,25 +120,36 @@ procedure TSettingsStore.Save(ASettings: TScanSettings);
 var
   Root: TJSONObject;
   Content: UTF8String;
+  PersistedSettings: TScanSettings;
 begin
-  Root := TJSONObject.Create;
+  if ASettings = nil then
+    raise EArgumentNilException.Create('Settings must not be nil');
+  PersistedSettings := ASettings.Clone;
+  Root := nil;
   try
+    Root := TJSONObject.Create;
+    { A cache refresh is task provenance, never a future default. Enforce that
+      invariant at the persistence boundary as well as in the current UI. }
+    PersistedSettings.RefreshRescanCache := False;
     Root.Add('format_version', 1);
-    Root.Add('scan_settings', ASettings.ToJSON);
-    Content := UTF8Encode(NormalizeJSONLineEndings(Root.FormatJSON([], 2)) + #10);
+    Root.Add('scan_settings', PersistedSettings.ToJSON);
+    Content := SerializeJSONUTF8(Root, [], 2, True);
     WriteAtomicUTF8(FileName, Content, True);
   finally
     Root.Free;
+    PersistedSettings.Free;
   end;
 end;
 
 function TSettingsStore.Load(out AWarning: string): TScanSettings;
 var
   Data: TJSONData;
+  LoadedSettings: TScanSettings;
   Root: TJSONObject;
 begin
   AWarning := '';
   Result := TScanSettings.Create;
+  LoadedSettings := nil;
   if not FileExists(FileName) then
     Exit;
   try
@@ -151,8 +162,12 @@ begin
         raise Exception.Create('settings format version is unsupported');
       if JSONObject(Root, 'scan_settings') = nil then
         raise Exception.Create('scan settings are missing');
-      Result.Free;
-      Result := TScanSettings.FromJSON(JSONObject(Root, 'scan_settings'));
+      LoadedSettings := TScanSettings.FromJSON(
+        JSONObject(Root, 'scan_settings'));
+      LoadedSettings.RefreshRescanCache := False;
+      FreeAndNil(Result);
+      Result := LoadedSettings;
+      LoadedSettings := nil;
     finally
       Data.Free;
     end;
@@ -165,6 +180,7 @@ begin
       Result := TScanSettings.Create;
     end;
   end;
+  LoadedSettings.Free;
 end;
 
 end.

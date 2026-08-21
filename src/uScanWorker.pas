@@ -314,7 +314,7 @@ begin
   FileName := IncludeTrailingPathDelimiter(DirectoryName) + FTask.ID +
     '.cdx.json';
   ExecuteScanToFile(FTask, FileName, @CancellationRequested, @EngineProgress,
-    sopManagedApplicationData);
+    sopManagedApplicationData, FDataDirectory);
 end;
 
 procedure TScanWorker.Execute;

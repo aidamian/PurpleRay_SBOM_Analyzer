@@ -76,7 +76,37 @@ function ManifestSizeLimit(AParserKind: TParserKind): Int64;
     diagnostic message.
 }
 procedure ParseArtifact(const AFileName, ARelativePath: string;
-  AParserKind: TParserKind; AArtifact: TArtifact; AComponents: TObjectList);
+  AParserKind: TParserKind; AArtifact: TArtifact;
+  AComponents: TObjectList); overload;
+
+{**
+  Dispatches one verified manifest stream to its conservative format parser.
+
+  Parameters
+  ----------
+  AStream
+    Caller-owned bounded stream; parsing starts at offset zero.
+  ARelativePath
+    Root-relative evidence path recorded on produced components.
+  AParserKind
+    Parser selected by the artifact-identification unit.
+  AArtifact
+    Artifact record updated with parser status and component count.
+  AComponents
+    Owned list receiving newly allocated TComponent instances.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+    Format and stream exceptions become failed artifact diagnostics.
+*}
+procedure ParseArtifact(AStream: TStream; const ARelativePath: string;
+  AParserKind: TParserKind; AArtifact: TArtifact;
+  AComponents: TObjectList); overload;
 
 {**
   Builds a Package URL only when ecosystem, name, and exact version are valid.
@@ -190,15 +220,71 @@ function IsEcosystemVersionRange(const AEcosystem,
 implementation
 
 uses
-  fpjson, DOM, XMLRead, uJSONUtils;
+  fpjson, DOM, XMLRead, streamex, uJSONUtils;
+
+const
+  MaximumManifestJSONBytes = Int64(32) * 1024 * 1024;
+
+{**
+  Rewinds and parses one JSON value from a caller-owned bounded stream.
+
+  Parameters
+  ----------
+  AStream
+    Seekable input stream.
+
+  Returns
+  -------
+  TJSONData
+    Newly allocated JSON value owned by the caller.
+
+  Raises
+  ------
+  EArgumentNilException, EStreamError, EJSONParser
+    Raised for nil input, stream failure, or malformed JSON.
+*}
+function ReadJSONStream(AStream: TStream): TJSONData;
+begin
+  if AStream = nil then
+    raise EArgumentNilException.Create('Manifest input stream is nil');
+  AStream.Position := 0;
+  Result := uJSONUtils.ReadJSONStream(AStream, MaximumManifestJSONBytes);
+end;
+
+{**
+  Rewinds and loads text lines from a caller-owned bounded stream.
+
+  Parameters
+  ----------
+  AStream
+    Seekable input stream.
+  ALines
+    Caller-owned destination string list.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EArgumentNilException, EStreamError
+    Raised for nil inputs or stream read/seek failure.
+*}
+procedure LoadLinesFromStream(AStream: TStream; ALines: TStrings);
+begin
+  if (AStream = nil) or (ALines = nil) then
+    raise EArgumentNilException.Create('Manifest stream or line list is nil');
+  AStream.Position := 0;
+  ALines.LoadFromStream(AStream);
+end;
 
 {**
   Parses one XML manifest with document types and entity expansion disabled.
 
   Parameters
   ----------
-  AFileName
-    XML manifest opened once and retained through the complete parse.
+  AStream
+    XML manifest stream retained through the complete parse.
   ADocument
     Receives the newly allocated DOM document owned by the caller.
 
@@ -214,51 +300,48 @@ uses
     Raised for malformed XML or any document-type declaration, including
     declarations encoded as UTF-16.
 }
-procedure ReadSafeXMLFile(const AFileName: string;
+procedure ReadSafeXMLStream(AStream: TStream;
   out ADocument: TXMLDocument);
 const
   MaximumDecodedCharacters = 16 * 1024 * 1024;
 var
   InputSource: TXMLInputSource;
   Parser: TDOMParser;
-  Stream: TFileStream;
 begin
   ADocument := nil;
-  Stream := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyWrite);
+  if AStream = nil then
+    raise EArgumentNilException.Create('XML manifest stream is nil');
+  AStream.Position := 0;
+  InputSource := TXMLInputSource.Create(AStream);
   try
-    InputSource := TXMLInputSource.Create(Stream);
+    InputSource.BaseURI := 'stream:';
+    Parser := TDOMParser.Create;
     try
-      InputSource.BaseURI := 'stream:';
-      Parser := TDOMParser.Create;
+      Parser.Options.DisallowDoctype := True;
+      Parser.Options.ExpandEntities := False;
+      Parser.Options.MaxChars := MaximumDecodedCharacters;
       try
-        Parser.Options.DisallowDoctype := True;
-        Parser.Options.ExpandEntities := False;
-        Parser.Options.MaxChars := MaximumDecodedCharacters;
-        try
-          Parser.Parse(InputSource, ADocument);
-        except
-          on E: EXMLReadError do
-          begin
-            FreeAndNil(ADocument);
-            if Pos('document type', LowerCase(E.Message)) > 0 then
-              raise Exception.Create(
-                'XML document type declarations are not allowed');
-            raise;
-          end;
-          else
-          begin
-            FreeAndNil(ADocument);
-            raise;
-          end;
+        Parser.Parse(InputSource, ADocument);
+      except
+        on E: EXMLReadError do
+        begin
+          FreeAndNil(ADocument);
+          if Pos('document type', LowerCase(E.Message)) > 0 then
+            raise Exception.Create(
+              'XML document type declarations are not allowed');
+          raise;
         end;
-      finally
-        Parser.Free;
+        else
+        begin
+          FreeAndNil(ADocument);
+          raise;
+        end;
       end;
     finally
-      InputSource.Free;
+      Parser.Free;
     end;
   finally
-    Stream.Free;
+    InputSource.Free;
   end;
 end;
 
@@ -980,8 +1063,8 @@ end;
 
   Parameters
   ----------
-  AFileName
-    JSON manifest to read.
+  AStream
+    Bounded JSON manifest stream to read.
   ARelativePath
     Root-relative evidence path.
   AComponents
@@ -996,7 +1079,7 @@ end;
   Exception
     Propagated for invalid JSON, an invalid root type, or file I/O failure.
 }
-procedure ParsePackageJSON(const AFileName, ARelativePath: string;
+procedure ParsePackageJSON(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Data: TJSONData;
@@ -1004,7 +1087,7 @@ var
   NameValue, VersionValue: string;
   Licenses, Publishers: TStringList;
 begin
-  Data := ReadJSONFile(AFileName);
+  Data := ReadJSONStream(AStream);
   Licenses := CreateDeclarationList;
   Publishers := CreateDeclarationList;
   try
@@ -1031,6 +1114,495 @@ begin
     Licenses.Free;
     Data.Free;
   end;
+end;
+
+{**
+  Validates the conservative installed npm package-name subset.
+
+  Parameters
+  ----------
+  AName
+    Declared package name exactly as stored in package.json.
+
+  Returns
+  -------
+  Boolean
+    True for an unscoped name or ``@scope/name`` whose nonempty segments have
+    alphanumeric endpoints and contain only ASCII alphanumerics, dot,
+    underscore, tilde, or hyphen.
+
+  Raises
+  ------
+  None
+*}
+function IsValidInstalledNPMName(const AName: string): Boolean;
+const
+  MaximumInstalledIdentityBytes = 512;
+var
+  PackageName, ScopeName: string;
+  SlashAt: SizeInt;
+
+  function IsValidNameSegment(const AValue: string): Boolean;
+  var
+    CharacterIndex: Integer;
+  begin
+    Result := (AValue <> '') and IsASCIIAlphaNumeric(AValue[1]) and
+      IsASCIIAlphaNumeric(AValue[Length(AValue)]);
+    if not Result then
+      Exit;
+    for CharacterIndex := 1 to Length(AValue) do
+      if not IsASCIIAlphaNumeric(AValue[CharacterIndex]) and
+        not (AValue[CharacterIndex] in ['.', '_', '~', '-']) then
+        Exit(False);
+  end;
+
+begin
+  Result := (AName <> '') and (Length(AName) <= MaximumInstalledIdentityBytes)
+    and (AName = Trim(AName));
+  if not Result then
+    Exit;
+  if AName[1] <> '@' then
+    Exit((Pos('/', AName) = 0) and IsValidNameSegment(AName));
+  SlashAt := Pos('/', AName);
+  if (SlashAt <= 2) or (SlashAt = Length(AName)) or
+    (Pos('/', Copy(AName, SlashAt + 1, MaxInt)) > 0) then
+    Exit(False);
+  ScopeName := Copy(AName, 2, SlashAt - 2);
+  PackageName := Copy(AName, SlashAt + 1, MaxInt);
+  Result := IsValidNameSegment(ScopeName) and
+    IsValidNameSegment(PackageName);
+end;
+
+{**
+  Validates one exact installed npm semantic version.
+
+  Parameters
+  ----------
+  AVersion
+    Declared installed package version without normalization.
+
+  Returns
+  -------
+  Boolean
+    True for a three-part SemVer core with optional valid prerelease and build
+    identifier lists.
+
+  Raises
+  ------
+  None
+*}
+function IsValidInstalledNPMVersion(const AVersion: string): Boolean;
+const
+  MaximumInstalledIdentityBytes = 512;
+var
+  BuildValue, CoreValue, PreReleaseValue, VersionValue: string;
+  DashAt, PlusAt: SizeInt;
+
+  function ValidateCore(const AValue: string): Boolean;
+  var
+    CharacterIndex, SegmentCount, SegmentStart: Integer;
+  begin
+    Result := False;
+    SegmentCount := 0;
+    SegmentStart := 1;
+    for CharacterIndex := 1 to Length(AValue) + 1 do
+      if (CharacterIndex > Length(AValue)) or
+        (AValue[CharacterIndex] = '.') then
+      begin
+        if CharacterIndex = SegmentStart then
+          Exit;
+        if (CharacterIndex - SegmentStart > 1) and
+          (AValue[SegmentStart] = '0') then
+          Exit;
+        while SegmentStart < CharacterIndex do
+        begin
+          if not (AValue[SegmentStart] in ['0'..'9']) then
+            Exit;
+          Inc(SegmentStart);
+        end;
+        Inc(SegmentCount);
+        SegmentStart := CharacterIndex + 1;
+      end;
+    Result := SegmentCount = 3;
+  end;
+
+  function ValidateIdentifiers(const AValue: string;
+    ARejectNumericLeadingZero: Boolean): Boolean;
+  var
+    AllNumeric: Boolean;
+    CharacterIndex, IdentifierStart, SegmentStart: Integer;
+  begin
+    Result := False;
+    SegmentStart := 1;
+    for CharacterIndex := 1 to Length(AValue) + 1 do
+      if (CharacterIndex > Length(AValue)) or
+        (AValue[CharacterIndex] = '.') then
+      begin
+        if CharacterIndex = SegmentStart then
+          Exit;
+        IdentifierStart := SegmentStart;
+        AllNumeric := True;
+        while SegmentStart < CharacterIndex do
+        begin
+          if not (AValue[SegmentStart] in ['A'..'Z', 'a'..'z', '0'..'9',
+            '-']) then
+            Exit;
+          if not (AValue[SegmentStart] in ['0'..'9']) then
+            AllNumeric := False;
+          Inc(SegmentStart);
+        end;
+        if ARejectNumericLeadingZero and AllNumeric and
+          (CharacterIndex - IdentifierStart > 1) and
+          (AValue[IdentifierStart] = '0') then
+          Exit;
+        SegmentStart := CharacterIndex + 1;
+      end;
+    Result := AValue <> '';
+  end;
+
+begin
+  VersionValue := AVersion;
+  Result := (VersionValue <> '') and
+    (Length(VersionValue) <= MaximumInstalledIdentityBytes) and
+    (VersionValue = Trim(VersionValue));
+  if not Result then
+    Exit;
+  PlusAt := Pos('+', VersionValue);
+  if PlusAt > 0 then
+  begin
+    BuildValue := Copy(VersionValue, PlusAt + 1, MaxInt);
+    if (BuildValue = '') or (Pos('+', BuildValue) > 0) or
+      not ValidateIdentifiers(BuildValue, False) then
+      Exit(False);
+    Delete(VersionValue, PlusAt, MaxInt);
+  end;
+  DashAt := Pos('-', VersionValue);
+  if DashAt > 0 then
+  begin
+    PreReleaseValue := Copy(VersionValue, DashAt + 1, MaxInt);
+    if not ValidateIdentifiers(PreReleaseValue, True) then
+      Exit(False);
+    Delete(VersionValue, DashAt, MaxInt);
+  end;
+  CoreValue := VersionValue;
+  Result := ValidateCore(CoreValue);
+end;
+
+{**
+  Parses only an installed npm package's own exact identity and declarations.
+
+  Parameters
+  ----------
+  AStream
+    Bounded ``node_modules`` package.json stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving exactly one installed package component on success.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised for malformed JSON or missing, inexact, or invalid package identity.
+
+  Notes
+  -----
+  Dependency sections are deliberately ignored because their values are
+  declarations and ranges, not evidence of what is installed.
+*}
+procedure ParseInstalledPackageJSON(AStream: TStream;
+  const ARelativePath: string; AComponents: TObjectList);
+var
+  Data: TJSONData;
+  Root: TJSONObject;
+  NameValue, VersionValue, PackageURL: string;
+  Licenses, Publishers: TStringList;
+begin
+  Data := ReadJSONStream(AStream);
+  Licenses := CreateDeclarationList;
+  Publishers := CreateDeclarationList;
+  try
+    if Data.JSONType <> jtObject then
+      raise Exception.Create(
+        'The installed package manifest root must be a JSON object');
+    Root := TJSONObject(Data);
+    NameValue := JSONString(Root, 'name');
+    VersionValue := JSONString(Root, 'version');
+    PackageURL := BuildPackageURL('npm', NameValue, VersionValue);
+    if not IsValidInstalledNPMName(NameValue) or
+      not IsValidInstalledNPMVersion(VersionValue) or (PackageURL = '') then
+      raise Exception.Create('Installed package.json requires a valid name ' +
+        'and exact npm version');
+    CollectJSONDeclarations(Root.Find('license'), Licenses);
+    CollectJSONPublishers(Root.Find('author'), Publishers);
+    AddComponent(AComponents, NameValue, VersionValue, 'npm', ARelativePath,
+      'installed-package-json', 'resolved', 'library', PackageURL, Licenses,
+      Publishers);
+  finally
+    Publishers.Free;
+    Licenses.Free;
+    Data.Free;
+  end;
+end;
+
+{**
+  Conservatively validates an exact installed Python version token.
+
+  Parameters
+  ----------
+  AVersion
+    Value from the installed distribution's Version header.
+
+  Returns
+  -------
+  Boolean
+    True for an optional ``v``, optional numeric epoch, dot-separated numeric
+    release, optional ``a``/``b``/``rc`` number, optional ``.post`` number,
+    optional ``.dev`` number, and optional dot-separated ASCII-alphanumeric
+    local identifiers. Other PEP-440-compatible spellings fail conservatively.
+
+  Raises
+  ------
+  None
+*}
+function IsExactInstalledPythonVersion(const AVersion: string): Boolean;
+var
+  CharacterIndex: Integer;
+  PreReleaseSeen: Boolean;
+  VersionValue: string;
+
+  function ConsumeDigits(var AIndex: Integer): Boolean;
+  var
+    StartIndex: Integer;
+  begin
+    StartIndex := AIndex;
+    while (AIndex <= Length(VersionValue)) and
+      (VersionValue[AIndex] in ['0'..'9']) do
+      Inc(AIndex);
+    Result := AIndex > StartIndex;
+  end;
+
+  function ConsumeLiteral(var AIndex: Integer;
+    const AValue: string): Boolean;
+  begin
+    Result := Copy(VersionValue, AIndex, Length(AValue)) = AValue;
+    if Result then
+      Inc(AIndex, Length(AValue));
+  end;
+
+begin
+  VersionValue := LowerCase(AVersion);
+  Result := (VersionValue <> '') and (Length(VersionValue) <= 512) and
+    (VersionValue = Trim(VersionValue)) and IsExactVersion(VersionValue);
+  if not Result then
+    Exit;
+  CharacterIndex := 1;
+  if VersionValue[CharacterIndex] = 'v' then
+    Inc(CharacterIndex);
+  if not ConsumeDigits(CharacterIndex) then
+    Exit(False);
+  if (CharacterIndex <= Length(VersionValue)) and
+    (VersionValue[CharacterIndex] = '!') then
+  begin
+    Inc(CharacterIndex);
+    if not ConsumeDigits(CharacterIndex) then
+      Exit(False);
+  end;
+  while (CharacterIndex <= Length(VersionValue)) and
+    (VersionValue[CharacterIndex] = '.') and
+    (CharacterIndex < Length(VersionValue)) and
+    (VersionValue[CharacterIndex + 1] in ['0'..'9']) do
+  begin
+    Inc(CharacterIndex);
+    if not ConsumeDigits(CharacterIndex) then
+      Exit(False);
+  end;
+  if CharacterIndex <= Length(VersionValue) then
+  begin
+    PreReleaseSeen := False;
+    if VersionValue[CharacterIndex] in ['a', 'b'] then
+    begin
+      Inc(CharacterIndex);
+      PreReleaseSeen := True;
+    end
+    else if ConsumeLiteral(CharacterIndex, 'rc') then
+      PreReleaseSeen := True;
+    if PreReleaseSeen and not ConsumeDigits(CharacterIndex) then
+      Exit(False);
+  end;
+  if ConsumeLiteral(CharacterIndex, '.post') and
+    not ConsumeDigits(CharacterIndex) then
+    Exit(False);
+  if ConsumeLiteral(CharacterIndex, '.dev') and
+    not ConsumeDigits(CharacterIndex) then
+    Exit(False);
+  if (CharacterIndex <= Length(VersionValue)) and
+    (VersionValue[CharacterIndex] = '+') then
+  begin
+    Inc(CharacterIndex);
+    repeat
+      if (CharacterIndex > Length(VersionValue)) or
+        not IsASCIIAlphaNumeric(VersionValue[CharacterIndex]) then
+        Exit(False);
+      while (CharacterIndex <= Length(VersionValue)) and
+        IsASCIIAlphaNumeric(VersionValue[CharacterIndex]) do
+        Inc(CharacterIndex);
+      if CharacterIndex > Length(VersionValue) then
+        Break;
+      if VersionValue[CharacterIndex] <> '.' then
+        Exit(False);
+      Inc(CharacterIndex);
+    until False;
+  end;
+  Result := CharacterIndex > Length(VersionValue);
+end;
+
+{**
+  Validates one bounded installed Python distribution name without trimming it.
+
+  Parameters
+  ----------
+  AName
+    Value from the installed distribution's Name header.
+
+  Returns
+  -------
+  Boolean
+    True for at most 512 ASCII bytes satisfying Python distribution-name
+    syntax with no leading or trailing whitespace.
+
+  Raises
+  ------
+  None
+*}
+function IsValidInstalledPythonName(const AName: string): Boolean;
+begin
+  Result := (AName <> '') and (Length(AName) <= 512) and
+    (AName = Trim(AName)) and IsValidPyPIName(AName);
+end;
+
+{**
+  Parses the RFC-822 identity header of Python ``dist-info/METADATA``.
+
+  Parameters
+  ----------
+  AStream
+    Bounded installed-distribution metadata stream.
+  ARelativePath
+    Root-relative evidence path.
+  AComponents
+    Owned list receiving exactly one installed Python component on success.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised for oversized or malformed headers, duplicate identity fields, or
+    missing, inexact, or invalid Name/Version evidence.
+
+  Notes
+  -----
+  Parsing stops at the first blank line. ``Requires-Dist`` and all other
+  dependency declarations are intentionally ignored.
+*}
+procedure ParsePythonDistInfoMetadata(AStream: TStream;
+  const ARelativePath: string; AComponents: TObjectList);
+const
+  MaximumIdentityHeaderBytes = 256 * 1024;
+  MaximumIdentityLineBytes = 8 * 1024;
+var
+  Reader: TStreamReader;
+  LineValue, HeaderName, HeaderValue, NameValue, VersionValue,
+    PackageURL: string;
+  HeaderBytes: Int64;
+  ColonAt, CharacterIndex, ActiveIdentityHeader: Integer;
+  NameSeen, VersionSeen: Boolean;
+begin
+  if AStream = nil then
+    raise EArgumentNilException.Create(
+      'Python installed metadata stream is nil');
+  AStream.Position := 0;
+  Reader := TStreamReader.Create(AStream);
+  try
+    HeaderBytes := 0;
+    ActiveIdentityHeader := 0;
+    NameSeen := False;
+    VersionSeen := False;
+    NameValue := '';
+    VersionValue := '';
+    while not Reader.Eof do
+    begin
+      Reader.ReadLine(LineValue);
+      Inc(HeaderBytes, Length(LineValue) + 1);
+      if HeaderBytes > MaximumIdentityHeaderBytes then
+        raise Exception.Create(
+          'Python installed metadata header exceeds the safe limit');
+      if Length(LineValue) > MaximumIdentityLineBytes then
+        raise Exception.Create(
+          'Python installed metadata contains an oversized header line');
+      if LineValue = '' then
+        Break;
+      for CharacterIndex := 1 to Length(LineValue) do
+        if (((Ord(LineValue[CharacterIndex]) < 32) and
+          (LineValue[CharacterIndex] <> #9)) or
+          (Ord(LineValue[CharacterIndex]) = 127)) then
+          raise Exception.Create(
+            'Python installed metadata contains a control character');
+      if LineValue[1] in [' ', #9] then
+      begin
+        HeaderValue := Trim(LineValue);
+        if HeaderValue = '' then
+          Continue;
+        case ActiveIdentityHeader of
+          1: NameValue := NameValue + ' ' + HeaderValue;
+          2: VersionValue := VersionValue + ' ' + HeaderValue;
+        end;
+        Continue;
+      end;
+      ColonAt := Pos(':', LineValue);
+      if ColonAt <= 1 then
+        raise Exception.Create(
+          'Python installed metadata contains a malformed header');
+      HeaderName := LowerCase(Trim(Copy(LineValue, 1, ColonAt - 1)));
+      HeaderValue := Trim(Copy(LineValue, ColonAt + 1, MaxInt));
+      ActiveIdentityHeader := 0;
+      if HeaderName = 'name' then
+      begin
+        if NameSeen then
+          raise Exception.Create(
+            'Python installed metadata contains duplicate Name headers');
+        NameSeen := True;
+        NameValue := HeaderValue;
+        ActiveIdentityHeader := 1;
+      end
+      else if HeaderName = 'version' then
+      begin
+        if VersionSeen then
+          raise Exception.Create(
+            'Python installed metadata contains duplicate Version headers');
+        VersionSeen := True;
+        VersionValue := HeaderValue;
+        ActiveIdentityHeader := 2;
+      end;
+    end;
+  finally
+    Reader.Free;
+  end;
+  PackageURL := BuildPackageURL('PyPI', NameValue, VersionValue);
+  if (not NameSeen) or (not VersionSeen) or
+    not IsValidInstalledPythonName(NameValue) or
+    not IsExactInstalledPythonVersion(VersionValue) or (PackageURL = '') then
+    raise Exception.Create('Python installed metadata requires valid Name ' +
+      'and exact Version headers');
+  AddComponent(AComponents, NameValue, VersionValue, 'PyPI', ARelativePath,
+    'python-dist-info-metadata', 'resolved', 'library', PackageURL);
 end;
 
 function NPMNameFromPackagePath(const APath: string): string;
@@ -1072,8 +1644,8 @@ end;
 
   Parameters
   ----------
-  AFileName
-    Lock file to read.
+  AStream
+    Bounded lock-file stream to read.
   ARelativePath
     Root-relative evidence path.
   AComponents
@@ -1088,7 +1660,7 @@ end;
   Exception
     Propagated for invalid JSON, an invalid root type, or file I/O failure.
 }
-procedure ParsePackageLock(const AFileName, ARelativePath: string;
+procedure ParsePackageLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Data: TJSONData;
@@ -1096,7 +1668,7 @@ var
   I: Integer;
   NameValue, VersionValue: string;
 begin
-  Data := ReadJSONFile(AFileName);
+  Data := ReadJSONStream(AStream);
   try
     if Data.JSONType <> jtObject then
       raise Exception.Create('The package lock root must be a JSON object');
@@ -1208,8 +1780,8 @@ end;
 
   Parameters
   ----------
-  AFileName
-    Requirements file to read.
+  AStream
+    Bounded requirements stream to read.
   ARelativePath
     Root-relative evidence path.
   AComponents
@@ -1224,7 +1796,7 @@ end;
   Exception
     Propagated when the file cannot be read or a component cannot be allocated.
 }
-procedure ParseRequirements(const AFileName, ARelativePath: string;
+procedure ParseRequirements(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Lines: TStringList;
@@ -1232,7 +1804,7 @@ var
 begin
   Lines := TStringList.Create;
   try
-    Lines.LoadFromFile(AFileName);
+    LoadLinesFromStream(AStream, Lines);
     for I := 0 to Lines.Count - 1 do
       ParseRequirementLine(Lines[I], ARelativePath, AComponents);
   finally
@@ -1245,8 +1817,8 @@ end;
 
   Parameters
   ----------
-  AFileName
-    go.mod file to read.
+  AStream
+    Bounded go.mod stream to read.
   ARelativePath
     Root-relative evidence path.
   AComponents
@@ -1261,7 +1833,7 @@ end;
   Exception
     Propagated when the file cannot be read or results cannot be allocated.
 }
-procedure ParseGoMod(const AFileName, ARelativePath: string;
+procedure ParseGoMod(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Lines, Parts: TStringList;
@@ -1274,7 +1846,7 @@ begin
   try
     Parts.Delimiter := ' ';
     Parts.StrictDelimiter := True;
-    Lines.LoadFromFile(AFileName);
+    LoadLinesFromStream(AStream, Lines);
     InRequire := False;
     for I := 0 to Lines.Count - 1 do
     begin
@@ -1557,8 +2129,8 @@ end;
 
   Parameters
   ----------
-  AFileName
-    Maven XML manifest to read.
+  AStream
+    Bounded Maven XML stream to read.
   ARelativePath
     Root-relative evidence path.
   AComponents
@@ -1573,7 +2145,7 @@ end;
   Exception
     Propagated for unsafe or malformed XML and file I/O failures.
 }
-procedure ParseMavenPOM(const AFileName, ARelativePath: string;
+procedure ParseMavenPOM(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Document: TXMLDocument;
@@ -1581,7 +2153,7 @@ var
   GroupID, ArtifactID, VersionValue, PURL: string;
   Licenses, Publishers: TStringList;
 begin
-  ReadSafeXMLFile(AFileName, Document);
+  ReadSafeXMLStream(AStream, Document);
   Licenses := CreateDeclarationList;
   Publishers := CreateDeclarationList;
   try
@@ -1660,8 +2232,8 @@ end;
 
   Parameters
   ----------
-  AFileName
-    XML project or package-properties file to read.
+  AStream
+    Bounded XML project or package-properties stream to read.
   ARelativePath
     Root-relative evidence path.
   AParser
@@ -1680,12 +2252,12 @@ end;
   Exception
     Propagated for unsafe or malformed XML and file I/O failures.
 }
-procedure ParseMSBuild(const AFileName, ARelativePath, AParser: string;
+procedure ParseMSBuild(AStream: TStream; const ARelativePath, AParser: string;
   AComponents: TObjectList; ACentral: Boolean);
 var
   Document: TXMLDocument;
 begin
-  ReadSafeXMLFile(AFileName, Document);
+  ReadSafeXMLStream(AStream, Document);
   try
     WalkMSBuildReferences(Document.DocumentElement, AComponents, ARelativePath,
       AParser, ACentral);
@@ -1716,14 +2288,14 @@ begin
   end;
 end;
 
-procedure ParseNuGetLock(const AFileName, ARelativePath: string;
+procedure ParseNuGetLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Data: TJSONData;
   Dependencies: TJSONObject;
   I: Integer;
 begin
-  Data := ReadJSONFile(AFileName);
+  Data := ReadJSONStream(AStream);
   try
     if Data.JSONType <> jtObject then
       raise Exception.Create('The NuGet lock root must be a JSON object');
@@ -1743,8 +2315,8 @@ end;
 
   Parameters
   ----------
-  AFileName
-    Bounded Composer JSON manifest to read.
+  AStream
+    Bounded Composer JSON manifest stream to read.
   ARelativePath
     Root-relative evidence path.
   AComponents
@@ -1760,7 +2332,7 @@ end;
   Exception
     Propagated for malformed JSON and file I/O failures.
 }
-procedure ParseComposerJSON(const AFileName, ARelativePath: string;
+procedure ParseComposerJSON(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Data: TJSONData;
@@ -1768,7 +2340,7 @@ var
   Licenses, Publishers: TStringList;
   NameValue, VersionValue: string;
 begin
-  Data := ReadJSONFile(AFileName);
+  Data := ReadJSONStream(AStream);
   Licenses := CreateDeclarationList;
   Publishers := CreateDeclarationList;
   try
@@ -1845,13 +2417,13 @@ begin
     end;
 end;
 
-procedure ParseComposerLock(const AFileName, ARelativePath: string;
+procedure ParseComposerLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Data: TJSONData;
   Root: TJSONObject;
 begin
-  Data := ReadJSONFile(AFileName);
+  Data := ReadJSONStream(AStream);
   try
     if Data.JSONType <> jtObject then
       raise Exception.Create('The Composer lock root must be a JSON object');
@@ -1927,12 +2499,12 @@ begin
   end;
 end;
 
-procedure ParseLazarusXML(const AFileName, ARelativePath: string;
+procedure ParseLazarusXML(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Document: TXMLDocument;
 begin
-  ReadSafeXMLFile(AFileName, Document);
+  ReadSafeXMLStream(AStream, Document);
   try
     WalkLazarusRequirements(Document.DocumentElement, AComponents,
       ARelativePath, False);
@@ -1964,13 +2536,13 @@ begin
   end;
 end;
 
-procedure ParsePipfileLock(const AFileName, ARelativePath: string;
+procedure ParsePipfileLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Data: TJSONData;
   Root: TJSONObject;
 begin
-  Data := ReadJSONFile(AFileName);
+  Data := ReadJSONStream(AStream);
   try
     if Data.JSONType <> jtObject then
       raise Exception.Create('The Pipfile lock root must be a JSON object');
@@ -1984,7 +2556,7 @@ begin
   end;
 end;
 
-procedure ParseGoSum(const AFileName, ARelativePath: string;
+procedure ParseGoSum(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Lines, Parts: TStringList;
@@ -1996,7 +2568,7 @@ begin
   try
     Parts.Delimiter := ' ';
     Parts.StrictDelimiter := True;
-    Lines.LoadFromFile(AFileName);
+    LoadLinesFromStream(AStream, Lines);
     for I := 0 to Lines.Count - 1 do
     begin
       LineValue := Trim(Lines[I]);
@@ -2428,7 +3000,7 @@ begin
   end;
 end;
 
-procedure ParseLockNameVersionBlocks(const AFileName, ARelativePath,
+procedure ParseLockNameVersionBlocks(AStream: TStream; const ARelativePath,
   AEcosystem, AParser: string; AComponents: TObjectList);
 var
   Lines: TStringList;
@@ -2448,7 +3020,7 @@ var
 begin
   Lines := TStringList.Create;
   try
-    Lines.LoadFromFile(AFileName);
+    LoadLinesFromStream(AStream, Lines);
     NameValue := '';
     VersionValue := '';
     InPackage := False;
@@ -2482,8 +3054,8 @@ end;
 
   Parameters
   ----------
-  AFileName
-    Cargo.toml file to read without evaluating workspace inheritance.
+  AStream
+    Cargo.toml stream to read without evaluating workspace inheritance.
   ARelativePath
     Root-relative evidence path.
   AComponents
@@ -2498,7 +3070,7 @@ end;
   Exception
     Propagated when file reading or component allocation fails.
 }
-procedure ParseCargoTOML(const AFileName, ARelativePath: string;
+procedure ParseCargoTOML(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Lines: TStringList;
@@ -2511,7 +3083,7 @@ begin
   Licenses := CreateDeclarationList;
   Publishers := CreateDeclarationList;
   try
-    Lines.LoadFromFile(AFileName);
+    LoadLinesFromStream(AStream, Lines);
     SectionValue := '';
     ProjectName := '';
     ProjectVersion := '';
@@ -2600,8 +3172,8 @@ end;
 
   Parameters
   ----------
-  AFileName
-    pyproject.toml file to read without executing a build backend.
+  AStream
+    pyproject.toml stream to read without executing a build backend.
   ARelativePath
     Root-relative evidence path.
   AComponents
@@ -2622,7 +3194,7 @@ end;
   references, dynamic values, multiline values, and dependency tables are not
   interpreted.
 }
-procedure ParsePyProjectTOML(const AFileName, ARelativePath: string;
+procedure ParsePyProjectTOML(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Lines: TStringList;
@@ -2638,7 +3210,7 @@ begin
   PoetryLicenses := CreateDeclarationList;
   PoetryPublishers := CreateDeclarationList;
   try
-    Lines.LoadFromFile(AFileName);
+    LoadLinesFromStream(AStream, Lines);
     SectionValue := '';
     ProjectName := '';
     ProjectVersion := '';
@@ -2698,7 +3270,7 @@ begin
   end;
 end;
 
-procedure ParseYarnLock(const AFileName, ARelativePath: string;
+procedure ParseYarnLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Lines: TStringList;
@@ -2717,7 +3289,7 @@ var
 begin
   Lines := TStringList.Create;
   try
-    Lines.LoadFromFile(AFileName);
+    LoadLinesFromStream(AStream, Lines);
     NameValue := '';
     VersionValue := '';
     for I := 0 to Lines.Count - 1 do
@@ -2750,7 +3322,7 @@ begin
   end;
 end;
 
-procedure ParseGradleLock(const AFileName, ARelativePath: string;
+procedure ParseGradleLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Lines, Parts: TStringList;
@@ -2762,7 +3334,7 @@ begin
   try
     Parts.Delimiter := ':';
     Parts.StrictDelimiter := True;
-    Lines.LoadFromFile(AFileName);
+    LoadLinesFromStream(AStream, Lines);
     for I := 0 to Lines.Count - 1 do
     begin
       LineValue := Trim(Lines[I]);
@@ -2786,7 +3358,7 @@ begin
   end;
 end;
 
-procedure ParseGemLock(const AFileName, ARelativePath: string;
+procedure ParseGemLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Lines: TStringList;
@@ -2796,7 +3368,7 @@ var
 begin
   Lines := TStringList.Create;
   try
-    Lines.LoadFromFile(AFileName);
+    LoadLinesFromStream(AStream, Lines);
     InSpecs := False;
     for I := 0 to Lines.Count - 1 do
     begin
@@ -2827,7 +3399,8 @@ begin
   end;
 end;
 
-procedure ParseEnvironmentYAML(const AFileName, ARelativePath: string;
+procedure ParseEnvironmentYAML(AStream: TStream;
+  const ARelativePath: string;
   AComponents: TObjectList);
 var
   Lines: TStringList;
@@ -2837,7 +3410,7 @@ var
 begin
   Lines := TStringList.Create;
   try
-    Lines.LoadFromFile(AFileName);
+    LoadLinesFromStream(AStream, Lines);
     InDependencies := False;
     for I := 0 to Lines.Count - 1 do
     begin
@@ -2904,14 +3477,14 @@ begin
     end;
 end;
 
-procedure ParsePackageResolved(const AFileName, ARelativePath: string;
+procedure ParsePackageResolved(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Data: TJSONData;
   Root, ObjectValue: TJSONObject;
   Pins: TJSONArray;
 begin
-  Data := ReadJSONFile(AFileName);
+  Data := ReadJSONStream(AStream);
   try
     if Data.JSONType <> jtObject then
       raise Exception.Create('The Swift resolved root must be a JSON object');
@@ -2928,7 +3501,7 @@ begin
   end;
 end;
 
-procedure ParsePodfileLock(const AFileName, ARelativePath: string;
+procedure ParsePodfileLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Lines: TStringList;
@@ -2938,7 +3511,7 @@ var
 begin
   Lines := TStringList.Create;
   try
-    Lines.LoadFromFile(AFileName);
+    LoadLinesFromStream(AStream, Lines);
     InPods := False;
     for I := 0 to Lines.Count - 1 do
     begin
@@ -2970,7 +3543,7 @@ begin
   end;
 end;
 
-procedure ParseVcpkgJSON(const AFileName, ARelativePath: string;
+procedure ParseVcpkgJSON(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Data, Entry: TJSONData;
@@ -2979,7 +3552,7 @@ var
   I: Integer;
   NameValue, VersionValue: string;
 begin
-  Data := ReadJSONFile(AFileName);
+  Data := ReadJSONStream(AStream);
   try
     if Data.JSONType <> jtObject then
       raise Exception.Create('The vcpkg manifest root must be a JSON object');
@@ -3007,7 +3580,7 @@ begin
   end;
 end;
 
-procedure ParseConanText(const AFileName, ARelativePath: string;
+procedure ParseConanText(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Lines: TStringList;
@@ -3016,7 +3589,7 @@ var
 begin
   Lines := TStringList.Create;
   try
-    Lines.LoadFromFile(AFileName);
+    LoadLinesFromStream(AStream, Lines);
     SectionValue := '';
     for I := 0 to Lines.Count - 1 do
     begin
@@ -3045,7 +3618,7 @@ begin
   end;
 end;
 
-procedure ParsePNPMLock(const AFileName, ARelativePath: string;
+procedure ParsePNPMLock(AStream: TStream; const ARelativePath: string;
   AComponents: TObjectList);
 var
   Lines: TStringList;
@@ -3054,7 +3627,7 @@ var
 begin
   Lines := TStringList.Create;
   try
-    Lines.LoadFromFile(AFileName);
+    LoadLinesFromStream(AStream, Lines);
     for I := 0 to Lines.Count - 1 do
     begin
       LineValue := Trim(Lines[I]);
@@ -3081,12 +3654,15 @@ end;
 function ManifestSizeLimit(AParserKind: TParserKind): Int64;
 const
   SmallManifestLimit: Int64 = 8 * 1024 * 1024;
+  InstalledManifestLimit: Int64 = 2 * 1024 * 1024;
   JSONLockLimit: Int64 = 32 * 1024 * 1024;
   LineLockLimit: Int64 = 64 * 1024 * 1024;
 begin
   case AParserKind of
     pkNone:
       Result := 0;
+    pkInstalledPackageJSON, pkPythonDistInfoMetadata:
+      Result := InstalledManifestLimit;
     pkPackageLockJSON, pkNuGetLock, pkComposerLock, pkPipfileLock,
     pkPackageResolved:
       Result := JSONLockLimit;
@@ -3106,7 +3682,7 @@ begin
     pkPyProjectTOML];
 end;
 
-procedure ParseArtifact(const AFileName, ARelativePath: string;
+procedure ParseArtifact(AStream: TStream; const ARelativePath: string;
   AParserKind: TParserKind; AArtifact: TArtifact; AComponents: TObjectList);
 var
   InitialCount: Integer;
@@ -3124,38 +3700,42 @@ begin
   end;
   try
     case AParserKind of
-      pkPackageJSON: ParsePackageJSON(AFileName, ARelativePath, AComponents);
-      pkPackageLockJSON: ParsePackageLock(AFileName, ARelativePath, AComponents);
-      pkRequirements: ParseRequirements(AFileName, ARelativePath, AComponents);
-      pkGoMod: ParseGoMod(AFileName, ARelativePath, AComponents);
-      pkMavenPOM: ParseMavenPOM(AFileName, ARelativePath, AComponents);
-      pkMSBuildProject: ParseMSBuild(AFileName, ARelativePath,
+      pkPackageJSON: ParsePackageJSON(AStream, ARelativePath, AComponents);
+      pkInstalledPackageJSON: ParseInstalledPackageJSON(AStream,
+        ARelativePath, AComponents);
+      pkPythonDistInfoMetadata: ParsePythonDistInfoMetadata(AStream,
+        ARelativePath, AComponents);
+      pkPackageLockJSON: ParsePackageLock(AStream, ARelativePath, AComponents);
+      pkRequirements: ParseRequirements(AStream, ARelativePath, AComponents);
+      pkGoMod: ParseGoMod(AStream, ARelativePath, AComponents);
+      pkMavenPOM: ParseMavenPOM(AStream, ARelativePath, AComponents);
+      pkMSBuildProject: ParseMSBuild(AStream, ARelativePath,
         'msbuild-package-reference', AComponents, False);
-      pkNuGetLock: ParseNuGetLock(AFileName, ARelativePath, AComponents);
-      pkDirectoryPackages: ParseMSBuild(AFileName, ARelativePath,
+      pkNuGetLock: ParseNuGetLock(AStream, ARelativePath, AComponents);
+      pkDirectoryPackages: ParseMSBuild(AStream, ARelativePath,
         'msbuild-central-package-xml', AComponents, True);
-      pkComposerJSON: ParseComposerJSON(AFileName, ARelativePath, AComponents);
-      pkComposerLock: ParseComposerLock(AFileName, ARelativePath, AComponents);
-      pkLazarusXML: ParseLazarusXML(AFileName, ARelativePath, AComponents);
-      pkPipfileLock: ParsePipfileLock(AFileName, ARelativePath, AComponents);
-      pkGoSum: ParseGoSum(AFileName, ARelativePath, AComponents);
-      pkCargoLock: ParseLockNameVersionBlocks(AFileName, ARelativePath,
+      pkComposerJSON: ParseComposerJSON(AStream, ARelativePath, AComponents);
+      pkComposerLock: ParseComposerLock(AStream, ARelativePath, AComponents);
+      pkLazarusXML: ParseLazarusXML(AStream, ARelativePath, AComponents);
+      pkPipfileLock: ParsePipfileLock(AStream, ARelativePath, AComponents);
+      pkGoSum: ParseGoSum(AStream, ARelativePath, AComponents);
+      pkCargoLock: ParseLockNameVersionBlocks(AStream, ARelativePath,
         'Cargo', 'conservative-cargo-lock', AComponents);
-      pkPoetryLock: ParseLockNameVersionBlocks(AFileName, ARelativePath,
+      pkPoetryLock: ParseLockNameVersionBlocks(AStream, ARelativePath,
         'PyPI', 'conservative-poetry-lock', AComponents);
-      pkCargoTOML: ParseCargoTOML(AFileName, ARelativePath, AComponents);
-      pkYarnLock: ParseYarnLock(AFileName, ARelativePath, AComponents);
-      pkGradleLock: ParseGradleLock(AFileName, ARelativePath, AComponents);
-      pkGemLock: ParseGemLock(AFileName, ARelativePath, AComponents);
-      pkEnvironmentYAML: ParseEnvironmentYAML(AFileName, ARelativePath,
+      pkCargoTOML: ParseCargoTOML(AStream, ARelativePath, AComponents);
+      pkYarnLock: ParseYarnLock(AStream, ARelativePath, AComponents);
+      pkGradleLock: ParseGradleLock(AStream, ARelativePath, AComponents);
+      pkGemLock: ParseGemLock(AStream, ARelativePath, AComponents);
+      pkEnvironmentYAML: ParseEnvironmentYAML(AStream, ARelativePath,
         AComponents);
-      pkPackageResolved: ParsePackageResolved(AFileName, ARelativePath,
+      pkPackageResolved: ParsePackageResolved(AStream, ARelativePath,
         AComponents);
-      pkPodfileLock: ParsePodfileLock(AFileName, ARelativePath, AComponents);
-      pkVcpkgJSON: ParseVcpkgJSON(AFileName, ARelativePath, AComponents);
-      pkConanText: ParseConanText(AFileName, ARelativePath, AComponents);
-      pkPNPMLock: ParsePNPMLock(AFileName, ARelativePath, AComponents);
-      pkPyProjectTOML: ParsePyProjectTOML(AFileName, ARelativePath,
+      pkPodfileLock: ParsePodfileLock(AStream, ARelativePath, AComponents);
+      pkVcpkgJSON: ParseVcpkgJSON(AStream, ARelativePath, AComponents);
+      pkConanText: ParseConanText(AStream, ARelativePath, AComponents);
+      pkPNPMLock: ParsePNPMLock(AStream, ARelativePath, AComponents);
+      pkPyProjectTOML: ParsePyProjectTOML(AStream, ARelativePath,
         AComponents);
     else
       raise Exception.Create('No parser is registered for the detected artifact');
@@ -3185,6 +3765,30 @@ begin
       AArtifact.MessageText := AArtifact.MessageText + ' ';
     AArtifact.MessageText := AArtifact.MessageText +
       'No dependency components were identified.';
+  end;
+end;
+
+procedure ParseArtifact(const AFileName, ARelativePath: string;
+  AParserKind: TParserKind; AArtifact: TArtifact; AComponents: TObjectList);
+var
+  Stream: TFileStream;
+begin
+  Stream := nil;
+  try
+    try
+      Stream := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyWrite);
+      ParseArtifact(Stream, ARelativePath, AParserKind, AArtifact,
+        AComponents);
+    except
+      on E: Exception do
+      begin
+        AArtifact.Status := arsFailed;
+        AArtifact.MessageText := E.Message;
+        AArtifact.ComponentCount := 0;
+      end;
+    end;
+  finally
+    Stream.Free;
   end;
 end;
 

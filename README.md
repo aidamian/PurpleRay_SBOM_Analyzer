@@ -231,6 +231,16 @@ still apply to that scan. When link following is enabled, canonical paths
 prevent loops and links cannot leave the selected root unless the corresponding
 advanced option is also enabled.
 
+**Reuse verified evidence from the last successful scan** is an opt-in
+performance setting. A cache hit still requires a fresh SHA-256 of the pinned
+file plus the same native identity, root, profile, platform, scanner contract,
+and evidence-affecting settings; it avoids repeated parsing and binary/archive
+inspection, not file verification. **Full rescan this time and replace the
+verified cache** performs one refresh. The bounded snapshot stays in the
+local application-data profile when reuse is later disabled; disabling the
+checkbox does not delete it. Headless command-line scans never read or write
+this desktop cache.
+
 Cancel always targets the running scan even when an older history row is
 selected, and asks for confirmation. `Escape` does not cancel while focus is in
 an edit, memo, or combo box. Closing during a scan offers to cancel and then
@@ -401,6 +411,7 @@ Files in that directory are user data:
 - `history.json.bak`: previous valid history
 - `history.corrupt-<timestamp>.json`: a malformed history preserved for
   diagnosis
+- `scan-cache.json`: optional, bounded evidence snapshot for verified rescans
 - `sboms/<task-id>.cdx.json`: generated CycloneDX documents
 
 History and settings are written through a flushed temporary file, with one
@@ -438,25 +449,18 @@ preserved as `purpleray-sbom-analyzer:soname-abi-version`, not emitted as a
 product version. An unversioned import such as `kernel32.dll` has no defensible
 component version, so its `version` member is intentionally omitted.
 
-For native binaries, bounded internal parsing is the portable baseline. It
-reads ELF `DT_NEEDED` entries, PE import and delay-import tables, and Mach-O
-load-dylib commands without loading or executing the target. The scanner then
-uses these safe, locally available OS facilities where they apply:
+Native binaries are inspected only through bounded internal readers attached
+to the verified input handle. The scanner reads ELF `PT_INTERP`, `DT_NEEDED`,
+`DT_SONAME`, and GNU build-ID evidence; PE imports, delay imports, and
+`VERSIONINFO`; and Mach-O load-dylib commands without loading or executing the
+target. It does not reopen the scanned pathname or invoke `readelf`, `ldd`,
+`codesign`, PowerShell, or another external inspection tool.
 
-- Linux: `readelf --dynamic --notes` to corroborate ELF declarations and obtain
-  GNU build IDs, when `readelf` is already installed.
-- macOS: `/usr/bin/codesign --display` for Mach-O signing identifiers and hash
-  metadata.
-- Windows: the native version-resource API for PE file-version evidence.
-
-These facilities are detected at runtime; none is downloaded or installed by
-the application. Each invoked tool is launched directly with an argument
-list—never through a shell—and has a three-second execution limit, a 512 KiB
-output limit, and cooperative cancellation. The scanned binary is provided
-only as input and is never run. `ldd` is deliberately excluded because some
-implementations may execute the program being inspected. SDK utilities that
-would prompt for or require a separate installation are likewise not assumed
-to exist.
+When a binary has a name, an exact fixed version, and a verified SHA-256, the
+SBOM may include a checksum-qualified `pkg:generic` identifier. PE
+`CompanyName` and `ProductName` values may also produce a clearly marked,
+conservative CPE candidate. These are inventory evidence synthesized from the
+file itself, not a package-registry or NVD CPE-dictionary resolution.
 
 ## Project layout
 

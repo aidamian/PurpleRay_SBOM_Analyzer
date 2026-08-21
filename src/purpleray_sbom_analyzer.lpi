@@ -15,6 +15,7 @@
       <UseXPManifest Value="True"/>
       <XPManifest>
         <DpiAware Value="True/PM"/>
+        <LongPathAware Value="True"/>
       </XPManifest>
     </General>
     <VersionInfo>

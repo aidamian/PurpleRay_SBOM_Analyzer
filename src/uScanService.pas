@@ -88,6 +88,10 @@ function ResolveScanOutputFileName(const ATargetDirectory,
     strict default, which pins and revalidates the exact output parent across
     the scan; the GUI worker explicitly selects managed application data and
     retains the application-owned path behavior.
+  ACacheProfileDirectory
+    Optional application-data directory for the explicitly enabled GUI rescan
+    cache. An empty value disables cache access regardless of task settings;
+    command-line callers intentionally retain that default.
 
   Returns
   -------
@@ -112,7 +116,8 @@ function ResolveScanOutputFileName(const ATargetDirectory,
 function ExecuteScanToFile(ATask: TScanTask; const AOutputFileName: string;
   ACancelCheck: TCancelCheck = nil;
   AProgressCallback: TScanProgressCallback = nil;
-  AOutputPolicy: TScanOutputPolicy = sopRequireOutsideTarget): Boolean;
+  AOutputPolicy: TScanOutputPolicy = sopRequireOutsideTarget;
+  const ACacheProfileDirectory: string = ''): Boolean;
 
 implementation
 
@@ -263,11 +268,13 @@ end;
 
 function ExecuteScanToFile(ATask: TScanTask; const AOutputFileName: string;
   ACancelCheck: TCancelCheck; AProgressCallback: TScanProgressCallback;
-  AOutputPolicy: TScanOutputPolicy): Boolean;
+  AOutputPolicy: TScanOutputPolicy;
+  const ACacheProfileDirectory: string): Boolean;
 var
   Content: UTF8String;
-  Digest, OutputFileName, OutputLeafName: string;
+  CacheDiagnostic, Digest, OutputFileName, OutputLeafName: string;
   Engine: TScanEngine;
+  ExecutionOptions: TScanExecutionOptions;
   OutputDirectoryPin: TPinnedDirectory;
   PinnedOutputActivated: Boolean;
 begin
@@ -276,6 +283,7 @@ begin
   if Trim(AOutputFileName) = '' then
     raise EArgumentException.Create('SBOM output filename must not be empty');
 
+  Engine := nil;
   OutputDirectoryPin := nil;
   if AOutputPolicy = sopRequireOutsideTarget then
     OutputFileName := PinStrictScanOutput(ATask.TargetDirectory,
@@ -290,12 +298,11 @@ begin
     PinnedOutputActivated := False;
     ATask.GeneratedSBOMPath := '';
     ATask.GeneratedSBOMSHA256 := '';
-    Engine := TScanEngine.Create(ACancelCheck, AProgressCallback);
-    try
-      Engine.Scan(ATask);
-    finally
-      Engine.Free;
-    end;
+    ExecutionOptions := DefaultScanExecutionOptions;
+    ExecutionOptions.CacheProfileDirectory := ACacheProfileDirectory;
+    Engine := TScanEngine.Create(ACancelCheck, AProgressCallback,
+      ExecutionOptions);
+    Engine.Scan(ATask);
 
     if ATask.Status = tsCompleted then
     begin
@@ -321,6 +328,8 @@ begin
         end;
         ATask.GeneratedSBOMPath := OutputFileName;
         ATask.GeneratedSBOMSHA256 := Digest;
+        if not (Assigned(ACancelCheck) and ACancelCheck()) then
+          Engine.CommitRescanCache(CacheDiagnostic);
       except
         on E: EAbort do
         begin
@@ -352,6 +361,7 @@ begin
     FinalizeTaskTiming(ATask);
     Result := ATask.Status = tsCompleted;
   finally
+    Engine.Free;
     OutputDirectoryPin.Free;
   end;
 end;

@@ -1102,7 +1102,7 @@ begin
     for I := 0 to ATasks.Count - 1 do
       TasksArray.Add(TScanTask(ATasks[I]).ToJSON);
     Root.Add('tasks', TasksArray);
-    Content := UTF8Encode(NormalizeJSONLineEndings(Root.FormatJSON([], 2)) + #10);
+    Content := SerializeJSONUTF8(Root, [], 2, True);
     WriteAtomicUTF8(HistoryFileName, Content, True);
   finally
     Root.Free;

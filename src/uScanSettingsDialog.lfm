@@ -30,7 +30,7 @@ object ScanSettingsDialog: TScanSettingsDialog
       BevelOuter = bvNone
       ClientHeight = 12
       ClientWidth = 620
-      TabOrder = 10
+      TabOrder = 12
     end
     object DescriptionLabel: TLabel
       Left = 12
@@ -39,7 +39,7 @@ object ScanSettingsDialog: TScanSettingsDialog
       Width = 596
       Anchors = [akTop, akLeft, akRight]
       AutoSize = False
-      Caption = 'Review the selected target and choose how this scan treats paths, symbolic links, hashes, and ignored files.'
+      Caption = 'Review the selected target and choose how this scan treats paths, symbolic links, hashes, verified cache data, and ignored files.'
       WordWrap = True
     end
     object TargetFolderLabel: TLabel
@@ -108,10 +108,33 @@ object ScanSettingsDialog: TScanSettingsDialog
       Caption = 'Calculate SHA-256 for manifests and binaries'
       TabOrder = 5
     end
+    object FUseRescanCache: TCheckBox
+      Left = 12
+      Height = 23
+      Top = 254
+      Width = 596
+      Anchors = [akTop, akLeft, akRight]
+      Caption = 'Reuse verified evidence from the last successful scan'
+      Hint = 'Every candidate is freshly SHA-256 hashed before a cache hit. Cache data stays in this application profile; turning reuse off does not delete it.'
+      OnChange = RescanCacheChanged
+      ShowHint = True
+      TabOrder = 6
+    end
+    object FRefreshRescanCache: TCheckBox
+      Left = 34
+      Height = 23
+      Top = 281
+      Width = 574
+      Anchors = [akTop, akLeft, akRight]
+      Caption = 'Full rescan this time and replace the verified cache'
+      Hint = 'Bypass existing cached evidence for this scan, then replace it only after the SBOM is written successfully.'
+      ShowHint = True
+      TabOrder = 7
+    end
     object AuthorPersistenceLabel: TLabel
       Left = 12
       Height = 44
-      Top = 256
+      Top = 312
       Width = 596
       Anchors = [akTop, akLeft, akRight]
       AutoSize = False
@@ -121,13 +144,13 @@ object ScanSettingsDialog: TScanSettingsDialog
     object AuthorOrganizationPanel: TPanel
       Left = 0
       Height = 32
-      Top = 306
+      Top = 362
       Width = 620
       Anchors = [akTop, akLeft, akRight]
       BevelOuter = bvNone
       ClientHeight = 32
       ClientWidth = 620
-      TabOrder = 6
+      TabOrder = 8
       object AuthorOrganizationLabel: TLabel
         Left = 12
         Height = 32
@@ -155,13 +178,13 @@ object ScanSettingsDialog: TScanSettingsDialog
     object AuthorEmailPanel: TPanel
       Left = 0
       Height = 32
-      Top = 338
+      Top = 394
       Width = 620
       Anchors = [akTop, akLeft, akRight]
       BevelOuter = bvNone
       ClientHeight = 32
       ClientWidth = 620
-      TabOrder = 7
+      TabOrder = 9
       object AuthorEmailLabel: TLabel
         Left = 12
         Height = 32
@@ -189,13 +212,13 @@ object ScanSettingsDialog: TScanSettingsDialog
     object IgnoreHeaderPanel: TPanel
       Left = 0
       Height = 32
-      Top = 370
+      Top = 426
       Width = 620
       Anchors = [akTop, akLeft, akRight]
       BevelOuter = bvNone
       ClientHeight = 32
       ClientWidth = 620
-      TabOrder = 8
+      TabOrder = 10
       object IgnorePatternsLabel: TLabel
         Left = 12
         Height = 32
@@ -224,12 +247,12 @@ object ScanSettingsDialog: TScanSettingsDialog
     end
     object FIgnorePatterns: TMemo
       Left = 12
-      Height = 220
-      Top = 402
+      Height = 164
+      Top = 458
       Width = 596
       Anchors = [akTop, akLeft, akRight, akBottom]
       ScrollBars = ssAutoVertical
-      TabOrder = 9
+      TabOrder = 11
       WordWrap = False
     end
   end

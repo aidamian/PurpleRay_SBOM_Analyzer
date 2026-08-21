@@ -122,7 +122,7 @@ function HandleCommandLine: Integer;
 implementation
 
 uses
-  fpjson, jsonparser, uJSONUtils, uScanService, uVersionInfo,
+  fpjson, uJSONUtils, uPlatform, uScanService, uVersionInfo,
   {$IFDEF Windows}
   Windows, ShellApi;
   {$ELSE}
@@ -353,9 +353,10 @@ end;
 }
 procedure ValidateSettingsObject(AObject: TJSONObject);
 const
-  BooleanNames: array[0..4] of string = (
+  BooleanNames: array[0..6] of string = (
     'include_absolute_paths', 'follow_symbolic_links', 'allow_outside_root',
-    'calculate_sha256', 'remember_privacy_choices');
+    'calculate_sha256', 'remember_privacy_choices', 'use_rescan_cache',
+    'refresh_rescan_cache');
   StringNames: array[0..1] of string = (
     'sbom_author_organization', 'sbom_author_email');
 var
@@ -381,19 +382,9 @@ function LoadCommandLineSettings(const AFileName: string): TScanSettings;
 var
   Data: TJSONData;
   Root, SettingsObject: TJSONObject;
-  Stream: TFileStream;
 begin
   Result := nil;
-  Stream := TFileStream.Create(ExpandFileName(AFileName),
-    fmOpenRead or fmShareDenyWrite);
-  try
-    if Stream.Size > MaximumSettingsBytes then
-      raise EReadError.CreateFmt('settings file exceeds the %d-byte limit',
-        [MaximumSettingsBytes]);
-    Data := GetJSON(Stream);
-  finally
-    Stream.Free;
-  end;
+  Data := ReadJSONFile(ExpandFileName(AFileName), MaximumSettingsBytes);
   try
     if Data.JSONType <> jtObject then
       raise EJSON.Create('settings root is not a JSON object');
@@ -665,7 +656,7 @@ begin
   try
     try
       Target := NormalizeScanTarget(AOptions.ScanDirectory);
-      if not DirectoryExists(Target) then
+      if not DirectoryExists(NativeFileSystemPath(Target)) then
         raise EInOutError.Create('scan directory does not exist: ' + Target);
       OutputPath := ResolveScanOutputFileName(Target,
         AOptions.OutputFileName);
@@ -673,6 +664,10 @@ begin
         Settings := TScanSettings.Create
       else
         Settings := LoadCommandLineSettings(AOptions.SettingsFileName);
+      { Headless scans deliberately have no desktop data-profile dependency.
+        Accept shared settings files, but never read or write the GUI cache. }
+      Settings.UseRescanCache := False;
+      Settings.RefreshRescanCache := False;
       Task := TScanTask.Create;
       Task.TargetDirectory := Target;
       Task.TargetRootName := ExtractFileName(Target);

@@ -29,6 +29,12 @@ interface
 uses
   Classes, SysUtils;
 
+type
+  TNativeBinaryMetadata = record
+    SONAME: string;
+    BuildID: string;
+  end;
+
 {**
   Extracts direct native-library declarations using bounded static parsing.
 
@@ -53,7 +59,60 @@ uses
     structures otherwise return False without executing the target.
 }
 function InspectNativeDependencies(const AFileName, AFormatName: string;
-  ADependencies: TStrings): Boolean;
+  ADependencies: TStrings): Boolean; overload;
+
+{**
+  Extracts native-library declarations from a verified bounded stream.
+
+  Parameters
+  ----------
+  AStream
+    Caller-owned seekable binary input.
+  AFormatName
+    Format previously established by TBinaryInfo.
+  ADependencies
+    Caller-owned list augmented with unique import or load declarations.
+
+  Returns
+  -------
+  Boolean
+    True when at least one new dependency declaration is added.
+
+  Raises
+  ------
+  EReadError, EStreamError
+    Propagated when the bounded stream cannot satisfy a requested read.
+*}
+function InspectNativeDependencies(AStream: TStream;
+  const AFormatName: string; ADependencies: TStrings): Boolean; overload;
+
+{**
+  Extracts native dependency declarations and bounded format metadata.
+
+  Parameters
+  ----------
+  AStream
+    Caller-owned verified and bounded binary stream.
+  AFormatName
+    Format previously established by TBinaryInfo.
+  ADependencies
+    Caller-owned list augmented with direct loader declarations; nil is
+    accepted when only metadata is required.
+  AMetadata
+    Receives an ELF DT_SONAME and GNU build ID when present.
+
+  Returns
+  -------
+  Boolean
+    True when at least one dependency or metadata value is found.
+
+  Raises
+  ------
+  EArgumentNilException, EStreamError
+    Propagated for nil input or an in-range stream read failure.
+*}
+function InspectNativeEvidence(AStream: TStream; const AFormatName: string;
+  ADependencies: TStrings; out AMetadata: TNativeBinaryMetadata): Boolean;
 
 {**
   Extracts a version only when a native library declaration explicitly uses a
@@ -80,206 +139,22 @@ function NativeDependencyVersion(const ADeclaration: string): string;
 
 implementation
 
+uses
+  uBoundedBinaryReader;
+
 const
   MaximumDependencies = 4096;
   MaximumDependencyName = 1024;
   MaximumMachCommands = 4096;
   MaximumProgramHeaders = 1024;
   MaximumDynamicEntries = 16384;
+  MaximumELFNoteSegments = 128;
+  MaximumELFNoteEntries = 4096;
+  MaximumELFNoteRegion = 4 * 1024 * 1024;
+  MaximumBuildIDBytes = 128;
 
 type
-  {**
-    Random-access reader that range-checks every request against file size.
-
-    Notes
-    -----
-    Scalar methods return False for truncated or out-of-range structures rather
-    than raising parser-specific exceptions. File-open/read exceptions from the
-    underlying TFileStream may still propagate.
-  }
-  TBinaryReader = class
-  private
-    FStream: TFileStream;
-  public
-    {**
-      Opens a binary for bounded random-access inspection.
-
-      Parameters
-      ----------
-      AFileName
-        Binary file to open read-only.
-
-      Returns
-      -------
-      TBinaryReader
-        Initialized reader owned by the caller.
-
-      Raises
-      ------
-      EFOpenError
-        Raised when the file cannot be opened.
-    }
-    constructor Create(const AFileName: string);
-
-    {**
-      Releases the underlying file stream.
-
-      Parameters
-      ----------
-      None
-
-      Returns
-      -------
-      None
-
-      Raises
-      ------
-      None
-    }
-    destructor Destroy; override;
-
-    {**
-      Returns the opened file size.
-
-      Parameters
-      ----------
-      None
-
-      Returns
-      -------
-      QWord
-        File length in bytes.
-
-      Raises
-      ------
-      None
-    }
-    function Size: QWord;
-
-    {**
-      Reads an exact byte range after validating it against the file length.
-
-      Parameters
-      ----------
-      AOffset
-        Zero-based file offset.
-      ABuffer
-        Caller-provided destination buffer.
-      ACount
-        Number of bytes requested.
-
-      Returns
-      -------
-      Boolean
-        True only when the complete in-range request is read.
-
-      Raises
-      ------
-      EStreamError
-        May propagate from an underlying seek or read failure.
-    }
-    function ReadBuffer(AOffset: QWord; var ABuffer; ACount: Integer): Boolean;
-
-    {**
-      Reads one endian-aware 16-bit unsigned integer.
-
-      Parameters
-      ----------
-      AOffset
-        Zero-based file offset.
-      ABigEndian
-        Selects big-endian decoding when True.
-      AValue
-        Receives the decoded value on success.
-
-      Returns
-      -------
-      Boolean
-        True when two bytes were available.
-
-      Raises
-      ------
-      EStreamError
-        May propagate from an underlying seek or read failure.
-    }
-    function ReadUInt16(AOffset: QWord; ABigEndian: Boolean;
-      out AValue: Word): Boolean;
-
-    {**
-      Reads one endian-aware 32-bit unsigned integer.
-
-      Parameters
-      ----------
-      AOffset
-        Zero-based file offset.
-      ABigEndian
-        Selects big-endian decoding when True.
-      AValue
-        Receives the decoded value on success.
-
-      Returns
-      -------
-      Boolean
-        True when four bytes were available.
-
-      Raises
-      ------
-      EStreamError
-        May propagate from an underlying seek or read failure.
-    }
-    function ReadUInt32(AOffset: QWord; ABigEndian: Boolean;
-      out AValue: UInt32): Boolean;
-
-    {**
-      Reads one endian-aware 64-bit unsigned integer.
-
-      Parameters
-      ----------
-      AOffset
-        Zero-based file offset.
-      ABigEndian
-        Selects big-endian decoding when True.
-      AValue
-        Receives the decoded value on success.
-
-      Returns
-      -------
-      Boolean
-        True when eight bytes were available.
-
-      Raises
-      ------
-      EStreamError
-        May propagate from an underlying seek or read failure.
-    }
-    function ReadUInt64(AOffset: QWord; ABigEndian: Boolean;
-      out AValue: QWord): Boolean;
-
-    {**
-      Reads a bounded null-terminated dependency name.
-
-      Parameters
-      ----------
-      AOffset
-        Zero-based file offset at the first string byte.
-      AMaximumLength
-        Hard upper bound for the decoded byte string.
-      AValue
-        Receives the decoded string on success.
-
-      Returns
-      -------
-      Boolean
-        True when a terminator is found within the permitted range.
-
-      Raises
-      ------
-      EStreamError
-        May propagate from an underlying seek or read failure.
-    }
-    function ReadCString(AOffset: QWord; AMaximumLength: Integer;
-      out AValue: string): Boolean;
-  end;
+  TBinaryReader = TBoundedBinaryReader;
 
   TPESection = record
     VirtualAddress: QWord;
@@ -296,6 +171,12 @@ type
   end;
   TLoadSegments = array of TLoadSegment;
   TQWordValues = array of QWord;
+
+  TFileRange = record
+    FileOffset: QWord;
+    FileSize: QWord;
+  end;
+  TFileRanges = array of TFileRange;
 
 {**
   Checks that a version candidate contains only nonempty numeric segments.
@@ -374,116 +255,6 @@ begin
   if IsNumericDottedVersion(Candidate) and
     (not RequireDottedCandidate or (Pos('.', Candidate) > 0)) then
     Result := Candidate;
-end;
-
-constructor TBinaryReader.Create(const AFileName: string);
-begin
-  inherited Create;
-  FStream := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyNone);
-end;
-
-destructor TBinaryReader.Destroy;
-begin
-  FStream.Free;
-  inherited Destroy;
-end;
-
-function TBinaryReader.Size: QWord;
-begin
-  Result := QWord(FStream.Size);
-end;
-
-function TBinaryReader.ReadBuffer(AOffset: QWord; var ABuffer;
-  ACount: Integer): Boolean;
-begin
-  Result := (ACount >= 0) and (AOffset <= QWord(High(Int64))) and
-    (QWord(ACount) <= Size) and (AOffset <= Size - QWord(ACount));
-  if not Result or (ACount = 0) then
-    Exit;
-  FStream.Position := Int64(AOffset);
-  Result := FStream.Read(ABuffer, ACount) = ACount;
-end;
-
-function TBinaryReader.ReadUInt16(AOffset: QWord; ABigEndian: Boolean;
-  out AValue: Word): Boolean;
-var
-  Buffer: array[0..1] of Byte;
-begin
-  AValue := 0;
-  Result := ReadBuffer(AOffset, Buffer, SizeOf(Buffer));
-  if not Result then
-    Exit;
-  if ABigEndian then
-    AValue := (Word(Buffer[0]) shl 8) or Word(Buffer[1])
-  else
-    AValue := Word(Buffer[0]) or (Word(Buffer[1]) shl 8);
-end;
-
-function TBinaryReader.ReadUInt32(AOffset: QWord; ABigEndian: Boolean;
-  out AValue: UInt32): Boolean;
-var
-  Buffer: array[0..3] of Byte;
-begin
-  AValue := 0;
-  Result := ReadBuffer(AOffset, Buffer, SizeOf(Buffer));
-  if not Result then
-    Exit;
-  if ABigEndian then
-    AValue := (UInt32(Buffer[0]) shl 24) or
-      (UInt32(Buffer[1]) shl 16) or (UInt32(Buffer[2]) shl 8) or Buffer[3]
-  else
-    AValue := UInt32(Buffer[0]) or (UInt32(Buffer[1]) shl 8) or
-      (UInt32(Buffer[2]) shl 16) or (UInt32(Buffer[3]) shl 24);
-end;
-
-function TBinaryReader.ReadUInt64(AOffset: QWord; ABigEndian: Boolean;
-  out AValue: QWord): Boolean;
-var
-  First, Second: UInt32;
-begin
-  AValue := 0;
-  Result := ReadUInt32(AOffset, ABigEndian, First) and
-    ReadUInt32(AOffset + 4, ABigEndian, Second);
-  if not Result then
-    Exit;
-  if ABigEndian then
-    AValue := (QWord(First) shl 32) or Second
-  else
-    AValue := QWord(First) or (QWord(Second) shl 32);
-end;
-
-function TBinaryReader.ReadCString(AOffset: QWord; AMaximumLength: Integer;
-  out AValue: string): Boolean;
-var
-  Buffer: array of Byte;
-  Available: QWord;
-  Count, I: Integer;
-  RawValue: RawByteString;
-begin
-  Result := False;
-  AValue := '';
-  if (AMaximumLength <= 0) or (AOffset >= Size) then
-    Exit;
-  Available := Size - AOffset;
-  Count := AMaximumLength;
-  if Available < QWord(Count) then
-    Count := Integer(Available);
-  SetLength(Buffer, Count);
-  if (Count = 0) or not ReadBuffer(AOffset, Buffer[0], Count) then
-    Exit;
-  I := 0;
-  while (I < Count) and (Buffer[I] <> 0) do
-  begin
-    if Buffer[I] < 32 then
-      Exit;
-    Inc(I);
-  end;
-  if (I = 0) or (I = Count) then
-    Exit;
-  SetLength(RawValue, I);
-  Move(Buffer[0], RawValue[1], I);
-  AValue := string(RawValue);
-  Result := True;
 end;
 
 procedure AddDependency(ADependencies: TStrings; const AValue: string);
@@ -600,7 +371,8 @@ end;
 function InspectPEDependencies(AReader: TBinaryReader;
   ADependencies: TStrings): Boolean;
 var
-  PEOffset, OptionalOffset, SectionOffset, DataDirectoryOffset: QWord;
+  PEOffset, OptionalOffset, OptionalEnd, SectionOffset, DataDirectoryOffset,
+    DelayDirectoryOffset: QWord;
   ImportRVA, ImportSize, DelayRVA, DelaySize, SizeOfHeaders: UInt32;
   ImageBase32: UInt32;
   ImageBase: QWord;
@@ -627,6 +399,7 @@ begin
   OptionalOffset := PEOffset + 24;
   if (OptionalSize > AReader.Size - OptionalOffset) then
     Exit;
+  OptionalEnd := OptionalOffset + OptionalSize;
   if not AReader.ReadUInt16(OptionalOffset, False, Magic) or
     not AReader.ReadUInt32(OptionalOffset + 60, False, SizeOfHeaders) then
     Exit;
@@ -680,11 +453,16 @@ begin
       ParsePEImportDirectory(AReader, ImportRVA, ImportSize, SizeOfHeaders,
         ImageBase, False, Sections, ADependencies);
   if NumberOfDirectories > 13 then
-    if AReader.ReadUInt32(DataDirectoryOffset + 13 * 8, False, DelayRVA) and
-      AReader.ReadUInt32(DataDirectoryOffset + 13 * 8 + 4, False,
-        DelaySize) then
+  begin
+    DelayDirectoryOffset := DataDirectoryOffset + QWord(13) * 8;
+    if (DelayDirectoryOffset <= OptionalEnd) and
+      (8 <= OptionalEnd - DelayDirectoryOffset) and
+      AReader.ContainsRange(DelayDirectoryOffset, 8) and
+      AReader.ReadUInt32(DelayDirectoryOffset, False, DelayRVA) and
+      AReader.ReadUInt32(DelayDirectoryOffset + 4, False, DelaySize) then
       ParsePEImportDirectory(AReader, DelayRVA, DelaySize, SizeOfHeaders,
         ImageBase, True, Sections, ADependencies);
+  end;
   Result := ADependencies.Count > InitialCount;
 end;
 
@@ -850,42 +628,191 @@ begin
 end;
 
 {**
-  Maps an ELF dynamic string table and reads bounded DT_NEEDED entries.
+  Aligns an ELF note-field size to its four-byte boundary without overflow.
+
+  Parameters
+  ----------
+  AValue
+    Unaligned field size.
+  AAligned
+    Receives the aligned value on success.
+
+  Returns
+  -------
+  Boolean
+    True when adding alignment padding cannot overflow QWord.
+
+  Raises
+  ------
+  None
+}
+function TryAlignELFNote(AValue: QWord; out AAligned: QWord): Boolean;
+begin
+  Result := AValue <= High(QWord) - 3;
+  if Result then
+    AAligned := (AValue + 3) and not QWord(3)
+  else
+    AAligned := 0;
+end;
+
+{**
+  Validates the null-terminated owner field of a GNU ELF note.
+
+  Parameters
+  ----------
+  ABytes
+    Bounded owner bytes already read from the note.
+  ACount
+    Declared owner byte count before alignment padding.
+
+  Returns
+  -------
+  Boolean
+    True only for ``GNU`` followed by a terminator and optional zero padding.
+
+  Raises
+  ------
+  None
+*}
+function IsGNUELFNoteOwner(const ABytes: array of Byte;
+  ACount: Integer): Boolean;
+var
+  I: Integer;
+begin
+  Result := (ACount >= 4) and (ACount <= Length(ABytes)) and
+    (ABytes[0] = Ord('G')) and (ABytes[1] = Ord('N')) and
+    (ABytes[2] = Ord('U')) and (ABytes[3] = 0);
+  if not Result then
+    Exit;
+  for I := 4 to ACount - 1 do
+    if ABytes[I] <> 0 then
+      Exit(False);
+end;
+
+{**
+  Extracts the first bounded NT_GNU_BUILD_ID descriptor from one note region.
+
+  Parameters
+  ----------
+  AReader
+    Range-checking reader for the complete ELF file.
+  ARange
+    File range supplied by one PT_NOTE program header.
+  ABigEndian
+    Selects the note-header byte order.
+  ABuildID
+    Receives lowercase hexadecimal descriptor bytes.
+
+  Returns
+  -------
+  Boolean
+    True when a structurally valid GNU build-ID note is found.
+
+  Raises
+  ------
+  EStreamError
+    Propagated when an in-range read fails.
+  EOutOfMemory
+    Propagated for the bounded descriptor allocation.
+}
+function TryReadGNUBuildID(AReader: TBinaryReader; const ARange: TFileRange;
+  ABigEndian: Boolean; out ABuildID: string): Boolean;
+var
+  Cursor, RegionEnd, AlignedNameSize, AlignedDescriptorSize: QWord;
+  NameSize, DescriptorSize, NoteType: UInt32;
+  NameBytes: array[0..15] of Byte;
+  Descriptor: array of Byte;
+  I, EntryCount: Integer;
+begin
+  Result := False;
+  ABuildID := '';
+  if (ARange.FileSize = 0) or
+    (ARange.FileSize > MaximumELFNoteRegion) or
+    not AReader.ContainsRange(ARange.FileOffset, ARange.FileSize) then
+    Exit;
+  Cursor := ARange.FileOffset;
+  RegionEnd := Cursor + ARange.FileSize;
+  EntryCount := 0;
+  while (Cursor < RegionEnd) and (EntryCount < MaximumELFNoteEntries) do
+  begin
+    Inc(EntryCount);
+    if (RegionEnd - Cursor < 12) or
+      not AReader.ReadUInt32(Cursor, ABigEndian, NameSize) or
+      not AReader.ReadUInt32(Cursor + 4, ABigEndian, DescriptorSize) or
+      not AReader.ReadUInt32(Cursor + 8, ABigEndian, NoteType) or
+      not TryAlignELFNote(NameSize, AlignedNameSize) or
+      not TryAlignELFNote(DescriptorSize, AlignedDescriptorSize) then
+      Exit;
+    Inc(Cursor, 12);
+    if (AlignedNameSize > RegionEnd - Cursor) then
+      Exit;
+    FillChar(NameBytes, SizeOf(NameBytes), 0);
+    if (NameSize > 0) and (NameSize <= SizeOf(NameBytes)) and
+      not AReader.ReadBuffer(Cursor, NameBytes, Integer(NameSize)) then
+      Exit;
+    Inc(Cursor, AlignedNameSize);
+    if (AlignedDescriptorSize > RegionEnd - Cursor) then
+      Exit;
+    if (NoteType = 3) and
+      IsGNUELFNoteOwner(NameBytes, Integer(NameSize)) and
+      (DescriptorSize > 0) and
+      (DescriptorSize <= MaximumBuildIDBytes) then
+    begin
+      SetLength(Descriptor, DescriptorSize);
+      if not AReader.ReadBuffer(Cursor, Descriptor[0], DescriptorSize) then
+        Exit;
+      ABuildID := '';
+      for I := 0 to High(Descriptor) do
+        ABuildID := ABuildID + LowerCase(IntToHex(Descriptor[I], 2));
+      Exit(True);
+    end;
+    Inc(Cursor, AlignedDescriptorSize);
+  end;
+end;
+
+{**
+  Maps ELF program headers, dynamic strings, and GNU build-ID notes.
 
   Parameters
   ----------
   AReader
     Reader for a 32-bit or 64-bit, little- or big-endian ELF file.
   ADependencies
-    List augmented with unique shared-object declarations.
+    List augmented with unique DT_NEEDED shared-object declarations.
+  AMetadata
+    Receives bounded DT_SONAME and GNU build-ID evidence.
 
   Returns
   -------
   Boolean
-    True when at least one dependency is added.
+    True when at least one dependency or metadata value is found.
 
   Raises
   ------
-  None
-    Unsupported, truncated, extended, or malformed structures return False.
+  EStreamError
+    Propagated when an in-range stream read fails. Unsupported, truncated,
+    over-cap, or malformed structures otherwise return False.
 }
-function InspectELFDependencies(AReader: TBinaryReader;
-  ADependencies: TStrings): Boolean;
+function InspectELFEvidence(AReader: TBinaryReader;
+  ADependencies: TStrings; out AMetadata: TNativeBinaryMetadata): Boolean;
 var
   Ident: array[0..15] of Byte;
   Is64Bit, BigEndian: Boolean;
   ProgramOffset, HeaderOffset, DynamicOffset, DynamicSize, StringAddress,
-    StringSize, StringOffset, Tag, Value, EntrySize: QWord;
+    StringSize, StringOffset, Tag, Value, EntrySize, SONAMEIndex: QWord;
   ProgramEntrySize, ProgramCount: Word;
   ProgramType, Value32: UInt32;
   Segments: TLoadSegments;
+  NoteRanges: TFileRanges;
   Needed: TQWordValues;
-  I, SegmentCount, NeededCount, InitialCount, NameLimit: Integer;
+  I, SegmentCount, NoteCount, NeededCount, InitialCount, NameLimit: Integer;
   DynamicEntryCount: QWord;
   FoundStringOffset: Boolean;
   DependencyName: string;
 begin
   Result := False;
+  AMetadata.SONAME := '';
+  AMetadata.BuildID := '';
   InitialCount := ADependencies.Count;
   if not AReader.ReadBuffer(0, Ident, SizeOf(Ident)) or
     (Ident[0] <> $7F) or (Ident[1] <> Ord('E')) or
@@ -917,7 +844,9 @@ begin
     (QWord(ProgramCount) * ProgramEntrySize > AReader.Size - ProgramOffset) then
     Exit;
   SetLength(Segments, ProgramCount);
+  SetLength(NoteRanges, ProgramCount);
   SegmentCount := 0;
+  NoteCount := 0;
   DynamicOffset := 0;
   DynamicSize := 0;
   for I := 0 to ProgramCount - 1 do
@@ -929,6 +858,7 @@ begin
       if not AReader.ReadUInt64(HeaderOffset + 8, BigEndian, Value) then Exit;
       if ProgramType = 1 then Segments[SegmentCount].FileOffset := Value;
       if ProgramType = 2 then DynamicOffset := Value;
+      if ProgramType = 4 then NoteRanges[NoteCount].FileOffset := Value;
       if not AReader.ReadUInt64(HeaderOffset + 16, BigEndian, Tag) then Exit;
       if ProgramType = 1 then Segments[SegmentCount].VirtualAddress := Tag;
       if not AReader.ReadUInt64(HeaderOffset + 32, BigEndian, Value) then Exit;
@@ -939,6 +869,7 @@ begin
       Value := Value32;
       if ProgramType = 1 then Segments[SegmentCount].FileOffset := Value;
       if ProgramType = 2 then DynamicOffset := Value;
+      if ProgramType = 4 then NoteRanges[NoteCount].FileOffset := Value;
       if not AReader.ReadUInt32(HeaderOffset + 8, BigEndian, Value32) then Exit;
       Tag := Value32;
       if ProgramType = 1 then Segments[SegmentCount].VirtualAddress := Tag;
@@ -951,19 +882,31 @@ begin
       Inc(SegmentCount);
     end
     else if ProgramType = 2 then
-      DynamicSize := Value;
+      DynamicSize := Value
+    else if (ProgramType = 4) and (NoteCount < MaximumELFNoteSegments) then
+    begin
+      NoteRanges[NoteCount].FileSize := Value;
+      Inc(NoteCount);
+    end;
   end;
   SetLength(Segments, SegmentCount);
-  if (DynamicSize = 0) or (DynamicOffset >= AReader.Size) then Exit;
-  if DynamicSize > AReader.Size - DynamicOffset then
-    DynamicSize := AReader.Size - DynamicOffset;
+  SetLength(NoteRanges, NoteCount);
+  for I := 0 to High(NoteRanges) do
+    if TryReadGNUBuildID(AReader, NoteRanges[I], BigEndian,
+      AMetadata.BuildID) then
+      Break;
+  Result := AMetadata.BuildID <> '';
+  if (DynamicSize = 0) or not AReader.ContainsRange(DynamicOffset,
+    DynamicSize) then
+    Exit;
   SetLength(Needed, MaximumDependencies);
   NeededCount := 0;
   StringAddress := 0;
   StringSize := 0;
+  SONAMEIndex := High(QWord);
   DynamicEntryCount := DynamicSize div EntrySize;
   if DynamicEntryCount > MaximumDynamicEntries then
-    DynamicEntryCount := MaximumDynamicEntries;
+    Exit;
   for I := 0 to Integer(DynamicEntryCount) - 1 do
   begin
     HeaderOffset := DynamicOffset + QWord(I) * EntrySize;
@@ -985,9 +928,10 @@ begin
         begin Needed[NeededCount] := Value; Inc(NeededCount); end;
       5: StringAddress := Value;
       10: StringSize := Value;
+      14: if SONAMEIndex = High(QWord) then SONAMEIndex := Value;
     end;
   end;
-  if (StringAddress = 0) or (NeededCount = 0) then Exit;
+  if StringAddress = 0 then Exit;
   StringOffset := 0;
   FoundStringOffset := False;
   for I := 0 to High(Segments) do
@@ -1002,6 +946,19 @@ begin
       Break;
     end;
   if not FoundStringOffset then Exit;
+  if SONAMEIndex <> High(QWord) then
+  begin
+    if (StringSize = 0) or (SONAMEIndex < StringSize) then
+    begin
+      NameLimit := MaximumDependencyName;
+      if (StringSize > SONAMEIndex) and
+        (StringSize - SONAMEIndex < QWord(NameLimit)) then
+        NameLimit := Integer(StringSize - SONAMEIndex);
+      if (StringOffset <= High(QWord) - SONAMEIndex) then
+        AReader.ReadCString(StringOffset + SONAMEIndex, NameLimit,
+          AMetadata.SONAME);
+    end;
+  end;
   for I := 0 to NeededCount - 1 do
   begin
     if (StringSize > 0) and (Needed[I] >= StringSize) then Continue;
@@ -1014,27 +971,72 @@ begin
       DependencyName) then
       AddDependency(ADependencies, DependencyName);
   end;
-  Result := ADependencies.Count > InitialCount;
+  Result := Result or (AMetadata.SONAME <> '') or
+    (ADependencies.Count > InitialCount);
 end;
 
 function InspectNativeDependencies(const AFileName, AFormatName: string;
   ADependencies: TStrings): Boolean;
 var
-  Reader: TBinaryReader;
+  Stream: TFileStream;
 begin
   Result := False;
   if ADependencies = nil then
     Exit;
-  Reader := TBinaryReader.Create(AFileName);
+  Stream := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyNone);
   try
-    if SameText(AFormatName, 'PE') then
-      Result := InspectPEDependencies(Reader, ADependencies)
-    else if SameText(AFormatName, 'ELF') then
-      Result := InspectELFDependencies(Reader, ADependencies)
-    else if Pos('Mach-O', AFormatName) = 1 then
-      Result := InspectMachDependencies(Reader, ADependencies);
+    Result := InspectNativeDependencies(Stream, AFormatName, ADependencies);
   finally
-    Reader.Free;
+    Stream.Free;
+  end;
+end;
+
+function InspectNativeDependencies(AStream: TStream;
+  const AFormatName: string; ADependencies: TStrings): Boolean;
+var
+  Metadata: TNativeBinaryMetadata;
+  InitialCount: Integer;
+begin
+  Result := False;
+  if ADependencies = nil then
+    Exit;
+  InitialCount := ADependencies.Count;
+  InspectNativeEvidence(AStream, AFormatName, ADependencies, Metadata);
+  Result := ADependencies.Count > InitialCount;
+end;
+
+function InspectNativeEvidence(AStream: TStream; const AFormatName: string;
+  ADependencies: TStrings; out AMetadata: TNativeBinaryMetadata): Boolean;
+var
+  Reader: TBinaryReader;
+  LocalDependencies: TStringList;
+begin
+  AMetadata.SONAME := '';
+  AMetadata.BuildID := '';
+  if AStream = nil then
+    raise EArgumentNilException.Create('Native binary input stream is nil');
+  LocalDependencies := nil;
+  if ADependencies = nil then
+  begin
+    LocalDependencies := TStringList.Create;
+    ADependencies := LocalDependencies;
+  end;
+  try
+    Reader := TBinaryReader.Create(AStream);
+    try
+      if SameText(AFormatName, 'PE') then
+        Result := InspectPEDependencies(Reader, ADependencies)
+      else if SameText(AFormatName, 'ELF') then
+        Result := InspectELFEvidence(Reader, ADependencies, AMetadata)
+      else if Pos('Mach-O', AFormatName) = 1 then
+        Result := InspectMachDependencies(Reader, ADependencies)
+      else
+        Result := False;
+    finally
+      Reader.Free;
+    end;
+  finally
+    LocalDependencies.Free;
   end;
 end;
 

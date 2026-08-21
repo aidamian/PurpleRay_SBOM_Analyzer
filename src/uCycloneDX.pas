@@ -699,6 +699,25 @@ begin
     if AComponent.DependencyScope <> '' then
       Values.Add('purpleray-sbom-analyzer:dependency-scope' + #1 +
         AComponent.DependencyScope);
+    if SameText(AComponent.Ecosystem, 'native') and
+      (Pos('pkg:generic/', AComponent.PackageURL) = 1) then
+      Values.Add('purpleray-sbom-analyzer:binary-package-url-evidence' + #1 +
+        'binary name + exact fixed version + verified SHA-256');
+    if AComponent.CPEEvidence <> '' then
+      Values.Add('purpleray-sbom-analyzer:cpe-evidence' + #1 +
+        AComponent.CPEEvidence);
+    if AComponent.CompanyName <> '' then
+      Values.Add('purpleray-sbom-analyzer:pe-company-name' + #1 +
+        AComponent.CompanyName);
+    if AComponent.ProductName <> '' then
+      Values.Add('purpleray-sbom-analyzer:pe-product-name' + #1 +
+        AComponent.ProductName);
+    if AComponent.NativeSONAME <> '' then
+      Values.Add('purpleray-sbom-analyzer:elf-soname' + #1 +
+        AComponent.NativeSONAME);
+    if AComponent.NativeBuildID <> '' then
+      Values.Add('purpleray-sbom-analyzer:elf-build-id' + #1 +
+        AComponent.NativeBuildID);
     ABIValue := SONAMEABIVersion(AComponent);
     RequestedRange := ComponentRequestedRange(AComponent);
     if RequestedRange <> '' then
@@ -764,6 +783,8 @@ begin
   if (AComponent.PackageURL <> '') and
     ComponentHasExactVersion(AComponent) then
     Result.Add('purl', AComponent.PackageURL);
+  if AComponent.CPE <> '' then
+    Result.Add('cpe', AComponent.CPE);
   if AComponent.SHA256 <> '' then
   begin
     Hashes := TJSONArray.Create;
@@ -832,6 +853,8 @@ begin
   if (AProjectComponent.PackageURL <> '') and
     ComponentHasExactVersion(AProjectComponent) then
     Result.Add('purl', AProjectComponent.PackageURL);
+  if AProjectComponent.CPE <> '' then
+    Result.Add('cpe', AProjectComponent.CPE);
   if AProjectComponent.SHA256 <> '' then
   begin
     Hashes := TJSONArray.Create;
@@ -1533,7 +1556,6 @@ var
   PromotedProject: uModels.TComponent;
   PrimaryReference, SpecVersionText: string;
   I: Integer;
-  JSONText: string;
 begin
   SpecVersionText := CycloneDXSpecVersionText(ASpecVersion);
   Root := TJSONObject.Create;
@@ -1566,10 +1588,10 @@ begin
     Metadata.Add('tools', Tools);
     Properties := TJSONArray.Create;
     AddProperty(Properties, 'purpleray-sbom-analyzer:inspection-method',
-      'local static artifact and binary dependency-table inspection with ' +
-      'safe operating-system evidence');
+      'local bounded static artifact and binary inspection');
     if ATask.InspectionTools.Count > 0 then
-      AddProperty(Properties, 'purpleray-sbom-analyzer:system-tools',
+      AddProperty(Properties,
+        'purpleray-sbom-analyzer:binary-evidence-readers',
         StringReplace(ATask.InspectionTools.CommaText, ',', ', ',
           [rfReplaceAll]));
     AddProperty(Properties, 'purpleray-sbom-analyzer:completeness',
@@ -1596,8 +1618,7 @@ begin
     Root.Add('dependencies', Dependencies);
     Root.Add('compositions', BuildIncompleteCompositions);
 
-    JSONText := NormalizeJSONLineEndings(Root.FormatJSON([], 2));
-    Result := UTF8Encode(JSONText + #10);
+    Result := SerializeJSONUTF8(Root, [], 2, True);
   finally
     Root.Free;
   end;

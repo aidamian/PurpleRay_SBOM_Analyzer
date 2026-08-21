@@ -42,6 +42,8 @@ type
     FAllowOutsideRoot: TCheckBox;
     FRememberPrivacyChoices: TCheckBox;
     FCalculateSHA256: TCheckBox;
+    FUseRescanCache: TCheckBox;
+    FRefreshRescanCache: TCheckBox;
     AuthorPersistenceLabel: TLabel;
     AuthorOrganizationPanel: TPanel;
     AuthorOrganizationLabel: TLabel;
@@ -73,6 +75,24 @@ type
       None
     }
     procedure FollowLinksChanged(Sender: TObject);
+
+    {**
+      Enables the one-scan full-refresh override only when cache reuse is on.
+
+      Parameters
+      ----------
+      Sender
+        LCL control that raised the event; the value is not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure RescanCacheChanged(Sender: TObject);
 
     {**
       Restores the default ignore-pattern list without changing other fields.
@@ -269,6 +289,13 @@ begin
     FAllowOutsideRoot.Checked := False;
 end;
 
+procedure TScanSettingsDialog.RescanCacheChanged(Sender: TObject);
+begin
+  FRefreshRescanCache.Enabled := FUseRescanCache.Checked;
+  if not FRefreshRescanCache.Enabled then
+    FRefreshRescanCache.Checked := False;
+end;
+
 procedure TScanSettingsDialog.RestoreDefaultsClicked(Sender: TObject);
 var
   Defaults: TScanSettings;
@@ -317,10 +344,13 @@ begin
     Dialog.FRememberPrivacyChoices.Checked :=
       ASettings.RememberPrivacyChoices;
     Dialog.FCalculateSHA256.Checked := ASettings.CalculateSHA256;
+    Dialog.FUseRescanCache.Checked := ASettings.UseRescanCache;
+    Dialog.FRefreshRescanCache.Checked := ASettings.RefreshRescanCache;
     Dialog.FAuthorOrganization.Text := ASettings.SBOMAuthorOrganization;
     Dialog.FAuthorEmail.Text := ASettings.SBOMAuthorEmail;
     Dialog.FIgnorePatterns.Lines.Assign(ASettings.IgnorePatterns);
     Dialog.FollowLinksChanged(nil);
+    Dialog.RescanCacheChanged(nil);
     Result := Dialog.ShowModal = mrOK;
     if Result then
     begin
@@ -330,6 +360,9 @@ begin
       ASettings.RememberPrivacyChoices :=
         Dialog.FRememberPrivacyChoices.Checked;
       ASettings.CalculateSHA256 := Dialog.FCalculateSHA256.Checked;
+      ASettings.UseRescanCache := Dialog.FUseRescanCache.Checked;
+      ASettings.RefreshRescanCache := Dialog.FRefreshRescanCache.Checked and
+        Dialog.FUseRescanCache.Checked;
       ASettings.SBOMAuthorOrganization :=
         Trim(Dialog.FAuthorOrganization.Text);
       ASettings.SBOMAuthorEmail := Trim(Dialog.FAuthorEmail.Text);

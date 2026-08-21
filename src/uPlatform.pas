@@ -60,6 +60,29 @@ type
   public
     destructor Destroy; override;
     procedure VerifyCurrentPath;
+    {**
+      Returns a bounded native identity token without exposing the path.
+
+      The token is stable for the lifetime of the pinned directory and is
+      suitable for cache-context invalidation. Unsupported paused targets
+      return an empty token so callers fail closed instead of persisting a
+      pathname.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      string
+        Platform-prefixed storage and file identity, or an empty string on an
+        unsupported target.
+
+      Raises
+      ------
+      None
+    *}
+    function IdentityToken: string;
     function CreateFileExclusive(const AFileName: string): THandle;
     function ReplaceFileAtomically(const ASourceFileName,
       ADestinationFileName: string): Boolean;
@@ -171,6 +194,32 @@ function MigrateApplicationDataDirectory(const ASource, ADestination: string;
   None
 }
 function CanonicalPath(const APath: string): string;
+
+{**
+  Converts one path for native filesystem access without changing display
+  spelling retained by callers.
+
+  On Windows the result is an absolute UTF-8 ``\\?\`` drive path or
+  ``\\?\UNC\`` share path, so wide Win32 and RTL filesystem calls are not
+  constrained by the legacy MAX_PATH boundary. Other platforms return the
+  input unchanged. The returned value is for immediate filesystem access
+  only and must not be persisted or shown to users.
+
+  Parameters
+  ----------
+  APath
+    Ordinary UTF-8 path or search mask.
+
+  Returns
+  -------
+  string
+    Native access spelling for the current platform.
+
+  Raises
+  ------
+  None
+}
+function NativeFileSystemPath(const APath: string): string;
 
 {**
   Tests whether a canonical path is equal to or beneath a canonical root.
@@ -468,6 +517,21 @@ end;
 {$ENDIF}
 
 {$IFDEF Windows}
+{** Builds the wide extended-length spelling accepted by Win32 file APIs. *}
+function ExtendedWindowsPath(const APath: string): UnicodeString;
+var
+  Expanded: UnicodeString;
+begin
+  Expanded := UTF8Decode(APath);
+  if Copy(Expanded, 1, 4) = '\\?\' then
+    Exit(Expanded);
+  Expanded := UTF8Decode(ExpandFileName(APath));
+  if Copy(Expanded, 1, 2) = '\\' then
+    Result := '\\?\UNC\' + Copy(Expanded, 3, MaxInt)
+  else
+    Result := '\\?\' + Expanded;
+end;
+
 {**
   Returns the normalized filesystem path reached by an open Windows handle.
 
@@ -547,6 +611,23 @@ begin
   Result := ExcludeTrailingPathDelimiter(APath);
 end;
 {$ENDIF}
+
+function NativeFileSystemPath(const APath: string): string;
+{$IFDEF Windows}
+var
+  RawPath: RawByteString;
+{$ENDIF}
+begin
+  {$IFDEF Windows}
+  if APath = '' then
+    Exit('');
+  RawPath := RawByteString(UTF8Encode(ExtendedWindowsPath(APath)));
+  SetCodePage(RawPath, CP_UTF8, False);
+  Result := string(RawPath);
+  {$ELSE}
+  Result := APath;
+  {$ENDIF}
+end;
 
 {**
   Rejects path syntax where a pinned-directory operation requires one leaf.
@@ -671,7 +752,7 @@ begin
   {$ENDIF}
   {$IFDEF Windows}
   FillChar(CurrentInformation, SizeOf(CurrentInformation), 0);
-  DirectoryWide := UTF8Decode(FDirectoryName);
+  DirectoryWide := ExtendedWindowsPath(FDirectoryName);
   CurrentHandle := CreateFileW(PWideChar(DirectoryWide), FILE_READ_ATTRIBUTES,
     FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
     OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);
@@ -709,6 +790,23 @@ begin
   if not DirectoryExists(FDirectoryName) then
     raise EInOutError.Create('Pinned output directory is no longer ' +
       'reachable: ' + FDirectoryName);
+  {$ENDIF}
+  {$ENDIF}
+end;
+
+function TPinnedDirectory.IdentityToken: string;
+begin
+  {$IFDEF UNIX}
+  Result := 'unix:' + LowerCase(IntToHex(FDevice, 16)) + ':' +
+    LowerCase(IntToHex(FInode, 16));
+  {$ENDIF}
+  {$IFDEF Windows}
+  Result := 'windows:' + LowerCase(IntToHex(FVolumeSerialNumber, 8)) + ':' +
+    LowerCase(IntToHex(FFileIndex, 16));
+  {$ENDIF}
+  {$IFNDEF UNIX}
+  {$IFNDEF Windows}
+  Result := '';
   {$ENDIF}
   {$ENDIF}
 end;
@@ -752,8 +850,8 @@ begin
   until (Result <> feInvalidHandle) or (fpGetErrNo <> ESysEINTR);
   {$ENDIF}
   {$IFDEF Windows}
-  FileNameWide := UTF8Decode(IncludeTrailingPathDelimiter(FDirectoryName) +
-    AFileName);
+  FileNameWide := ExtendedWindowsPath(
+    IncludeTrailingPathDelimiter(FDirectoryName) + AFileName);
   Result := CreateFileW(PWideChar(FileNameWide), GENERIC_WRITE, 0, nil,
     CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
   {$ENDIF}
@@ -814,10 +912,10 @@ begin
     PChar(ADestinationFileName)) = 0;
   {$ENDIF}
   {$IFDEF Windows}
-  SourceWide := UTF8Decode(IncludeTrailingPathDelimiter(FDirectoryName) +
-    ASourceFileName);
-  DestinationWide := UTF8Decode(IncludeTrailingPathDelimiter(FDirectoryName) +
-    ADestinationFileName);
+  SourceWide := ExtendedWindowsPath(
+    IncludeTrailingPathDelimiter(FDirectoryName) + ASourceFileName);
+  DestinationWide := ExtendedWindowsPath(
+    IncludeTrailingPathDelimiter(FDirectoryName) + ADestinationFileName);
   Result := MoveFileExW(PWideChar(SourceWide), PWideChar(DestinationWide),
     AtomicMoveReplaceExisting or AtomicMoveWriteThrough);
   {$ENDIF}
@@ -859,8 +957,8 @@ begin
   Result := CUnlinkAt(FPinnedHandle, PChar(AFileName), 0) = 0;
   {$ENDIF}
   {$IFDEF Windows}
-  FileNameWide := UTF8Decode(IncludeTrailingPathDelimiter(FDirectoryName) +
-    AFileName);
+  FileNameWide := ExtendedWindowsPath(
+    IncludeTrailingPathDelimiter(FDirectoryName) + AFileName);
   Result := Windows.DeleteFileW(PWideChar(FileNameWide));
   {$ENDIF}
   {$IFNDEF UNIX}
@@ -890,7 +988,7 @@ begin
   if Trim(ADirectory) = '' then
     raise EInOutError.Create('Output directory must not be empty');
   DirectoryName := CanonicalPath(ADirectory);
-  if not DirectoryExists(DirectoryName) then
+  if not DirectoryExists(NativeFileSystemPath(DirectoryName)) then
     raise EInOutError.Create('Output directory does not exist: ' +
       DirectoryName);
 
@@ -910,8 +1008,8 @@ begin
       raise EInOutError.CreateFmt('Unable to pin output directory: %s (%s)',
         [DirectoryName, SysErrorMessage(ErrorCode)]);
     end;
-    { POSIX defines FD_CLOEXEC as bit 1. Do not expose the output-directory
-      capability to readelf, otool, or other child tools invoked by a scan. }
+    { POSIX defines FD_CLOEXEC as bit 1. Do not expose the pinned-directory
+      capability to any child process. }
     if fpFcntl(Result.FPinnedHandle, F_SetFd, 1) <> 0 then
     begin
       ErrorCode := fpGetErrNo;
@@ -952,7 +1050,7 @@ begin
         'pinned: ' + DirectoryName);
     {$ENDIF}
     {$IFDEF Windows}
-    DirectoryWide := UTF8Decode(DirectoryName);
+    DirectoryWide := ExtendedWindowsPath(DirectoryName);
     Result.FPinnedHandle := CreateFileW(PWideChar(DirectoryWide),
       FILE_READ_ATTRIBUTES, FILE_SHARE_READ or FILE_SHARE_WRITE, nil,
       OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);
@@ -997,7 +1095,7 @@ begin
       ParentDirectory := ExtractFileDir(GuardDirectory);
       if SameFileName(ParentDirectory, GuardDirectory) then
         Break;
-      GuardWide := UTF8Decode(GuardDirectory);
+      GuardWide := ExtendedWindowsPath(GuardDirectory);
       GuardHandle := CreateFileW(PWideChar(GuardWide), FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ or FILE_SHARE_WRITE, nil, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS, 0);
@@ -1273,7 +1371,7 @@ begin
   {$ENDIF}
   {$IFDEF Windows}
   Result := ExpandFileName(APath);
-  WidePath := UTF8Decode(Result);
+  WidePath := ExtendedWindowsPath(Result);
   Handle := CreateFileW(PWideChar(WidePath), 0,
     FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
     OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);
@@ -1329,7 +1427,7 @@ begin
   Result := (fpLStat(PChar(APath), Info) = 0) and FPS_ISLNK(Info.st_mode);
   {$ENDIF}
   {$IFDEF Windows}
-  WidePath := UTF8Decode(APath);
+  WidePath := ExtendedWindowsPath(APath);
   Attributes := GetFileAttributesW(PWideChar(WidePath));
   Result := (Attributes <> INVALID_FILE_ATTRIBUTES) and
     ((Attributes and FILE_ATTRIBUTE_REPARSE_POINT) <> 0);
@@ -1402,7 +1500,7 @@ begin
     fsekRegularFile;
   {$ENDIF}
   {$IFDEF Windows}
-  WidePath := UTF8Decode(APath);
+  WidePath := ExtendedWindowsPath(APath);
   Attributes := GetFileAttributesW(PWideChar(WidePath));
   if Attributes = INVALID_FILE_ATTRIBUTES then
   begin
@@ -1470,7 +1568,7 @@ begin
   {$IFDEF Windows}
   if AFindResult in [ErrorFileNotFound, ErrorNoMoreFiles] then
   begin
-    if DirectoryExists(ADirectory) then
+    if DirectoryExists(NativeFileSystemPath(ADirectory)) then
       Exit(False);
     AReason := SysErrorMessage(AFindResult);
     if AReason = '' then

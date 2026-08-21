@@ -1791,6 +1791,9 @@ var
   SettingsWarning: string;
 begin
   FSettings := FSettingsStore.Load(SettingsWarning);
+  { Refresh is intentionally task-local even if an older or hand-edited
+    settings file contains it. }
+  FSettings.RefreshRescanCache := False;
   FStartupWarning := FHistoryService.StartupWarning;
   if SettingsWarning <> '' then
   begin
@@ -1967,10 +1970,10 @@ begin
 
     AddSection('Evidence and output');
     if ATask.InspectionTools.Count > 0 then
-      AddRow('Operating-system evidence', JoinedValues(ATask.InspectionTools))
+      AddRow('Binary evidence readers', JoinedValues(ATask.InspectionTools))
     else
-      AddRow('Operating-system evidence',
-        'No approved tool was available or applicable');
+      AddRow('Binary evidence readers',
+        'No additional native metadata was applicable');
     AddRow('Generated SBOM', ATask.GeneratedSBOMPath);
     AddRow('Generated SBOM SHA-256', ATask.GeneratedSBOMSHA256);
 
@@ -1983,9 +1986,8 @@ begin
       AddRow('SBOM author email', ATask.Settings.SBOMAuthorEmail);
 
     FSummaryNotes.Lines.Add('Completeness notice');
-    FSummaryNotes.Lines.Add('Results combine internal ' +
-      'static inspection with safe evidence from applicable operating-system ' +
-      'tools. Direct linked-library declarations may be identified, but ' +
+    FSummaryNotes.Lines.Add('Results use bounded internal static inspection. ' +
+      'Direct linked-library declarations may be identified, but ' +
       'runtime-loaded or undeclared dependencies can still be missed. This is ' +
       'not a vulnerability or license-compliance assessment.');
     if ATask.FilesInspected = 0 then
@@ -2320,8 +2322,8 @@ begin
       Exit;
     FirstSection := True;
     AddSection('Completeness notice');
-    FMessagesMemo.Lines.Add('Internal static ' +
-      'inspection is enriched by applicable safe operating-system tools, but ' +
+    FMessagesMemo.Lines.Add('Bounded internal static inspection can identify ' +
+      'direct declarations, but ' +
       'runtime-loaded or undeclared dependencies can still be missed.');
     if ATask.Warnings.Count > 0 then
     begin
@@ -2487,6 +2489,9 @@ begin
     if not TScanSettingsDialog.Execute(WorkingSettings, Target) then
       Exit;
     PersistedSettings := WorkingSettings.Clone;
+    { A full-cache refresh is a deliberate one-scan override. Cache reuse may
+      persist, but a later scan must never inherit the refresh request. }
+    PersistedSettings.RefreshRescanCache := False;
     if not PersistedSettings.RememberPrivacyChoices then
     begin
       PersistedSettings.IncludeAbsolutePaths := False;

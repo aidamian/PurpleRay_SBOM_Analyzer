@@ -39,6 +39,10 @@ type
     FollowSymbolicLinks: Boolean;
     AllowOutsideRoot: Boolean;
     CalculateSHA256: Boolean;
+    { Reuse remains opt-in. RefreshRescanCache bypasses reads for one scan
+      while rebuilding the last-successful profile-local snapshot. }
+    UseRescanCache: Boolean;
+    RefreshRescanCache: Boolean;
     SBOMAuthorOrganization: string;
     SBOMAuthorEmail: string;
     RememberPrivacyChoices: Boolean;
@@ -152,6 +156,8 @@ type
 
       Raises
       ------
+      EJSON
+        Raised when a present settings member has an incompatible JSON type.
       EOutOfMemory
         Propagated if the settings object cannot be allocated.
     }
@@ -255,6 +261,12 @@ type
     Version: string;
     Ecosystem: string;
     PackageURL: string;
+    CPE: string;
+    CPEEvidence: string;
+    CompanyName: string;
+    ProductName: string;
+    NativeSONAME: string;
+    NativeBuildID: string;
     SourceArtifact: string;
     SourceParser: string;
     DependencyScope: string;
@@ -674,6 +686,8 @@ begin
   FollowSymbolicLinks := False;
   AllowOutsideRoot := False;
   CalculateSHA256 := True;
+  UseRescanCache := False;
+  RefreshRescanCache := False;
   SBOMAuthorOrganization := '';
   SBOMAuthorEmail := '';
   RememberPrivacyChoices := False;
@@ -690,6 +704,8 @@ begin
   FollowSymbolicLinks := ASource.FollowSymbolicLinks;
   AllowOutsideRoot := ASource.AllowOutsideRoot;
   CalculateSHA256 := ASource.CalculateSHA256;
+  UseRescanCache := ASource.UseRescanCache;
+  RefreshRescanCache := ASource.RefreshRescanCache;
   SBOMAuthorOrganization := ASource.SBOMAuthorOrganization;
   SBOMAuthorEmail := ASource.SBOMAuthorEmail;
   RememberPrivacyChoices := ASource.RememberPrivacyChoices;
@@ -711,6 +727,8 @@ begin
   Result.Add('follow_symbolic_links', FollowSymbolicLinks);
   Result.Add('allow_outside_root', AllowOutsideRoot);
   Result.Add('calculate_sha256', CalculateSHA256);
+  Result.Add('use_rescan_cache', UseRescanCache);
+  Result.Add('refresh_rescan_cache', RefreshRescanCache);
   if SBOMAuthorOrganization <> '' then
     Result.Add('sbom_author_organization', SBOMAuthorOrganization);
   if SBOMAuthorEmail <> '' then
@@ -722,30 +740,76 @@ begin
 end;
 
 class function TScanSettings.FromJSON(AObject: TJSONObject): TScanSettings;
+const
+  BooleanNames: array[0..6] of string = (
+    'include_absolute_paths', 'follow_symbolic_links', 'allow_outside_root',
+    'calculate_sha256', 'use_rescan_cache', 'refresh_rescan_cache',
+    'remember_privacy_choices');
+  StringNames: array[0..1] of string = (
+    'sbom_author_organization', 'sbom_author_email');
+var
+  Data: TJSONData;
+  I, J: Integer;
 begin
   Result := TScanSettings.Create;
-  if AObject = nil then
-    Exit;
-  Result.IncludeAbsolutePaths := JSONBoolean(AObject, 'include_absolute_paths', False);
-  Result.FollowSymbolicLinks := JSONBoolean(AObject, 'follow_symbolic_links', False);
-  Result.AllowOutsideRoot := JSONBoolean(AObject, 'allow_outside_root', False);
-  Result.CalculateSHA256 := JSONBoolean(AObject, 'calculate_sha256', True);
-  Result.SBOMAuthorOrganization := JSONString(AObject,
-    'sbom_author_organization');
-  Result.SBOMAuthorEmail := JSONString(AObject, 'sbom_author_email');
-  Result.RememberPrivacyChoices := JSONBoolean(AObject,
-    'remember_privacy_choices', False);
-  if JSONArray(AObject, 'ignore_patterns') <> nil then
-    JSONToStrings(JSONArray(AObject, 'ignore_patterns'), Result.IgnorePatterns);
+  try
+    if AObject = nil then
+      Exit;
+    for I := Low(BooleanNames) to High(BooleanNames) do
+    begin
+      Data := AObject.Find(BooleanNames[I]);
+      if (Data <> nil) and (Data.JSONType <> jtBoolean) then
+        raise EJSON.CreateFmt('scan setting "%s" must be a Boolean',
+          [BooleanNames[I]]);
+    end;
+    for I := Low(StringNames) to High(StringNames) do
+    begin
+      Data := AObject.Find(StringNames[I]);
+      if (Data <> nil) and (Data.JSONType <> jtString) then
+        raise EJSON.CreateFmt('scan setting "%s" must be a string',
+          [StringNames[I]]);
+    end;
+    Data := AObject.Find('ignore_patterns');
+    if (Data <> nil) and (Data.JSONType <> jtArray) then
+      raise EJSON.Create('scan setting "ignore_patterns" must be an array');
+    if Data <> nil then
+      for J := 0 to TJSONArray(Data).Count - 1 do
+        if TJSONArray(Data).Items[J].JSONType <> jtString then
+          raise EJSON.Create(
+            'scan setting "ignore_patterns" entries must be strings');
+
+    Result.IncludeAbsolutePaths := JSONBoolean(AObject,
+      'include_absolute_paths', False);
+    Result.FollowSymbolicLinks := JSONBoolean(AObject,
+      'follow_symbolic_links', False);
+    Result.AllowOutsideRoot := JSONBoolean(AObject,
+      'allow_outside_root', False);
+    Result.CalculateSHA256 := JSONBoolean(AObject, 'calculate_sha256', True);
+    Result.UseRescanCache := JSONBoolean(AObject, 'use_rescan_cache', False);
+    Result.RefreshRescanCache := JSONBoolean(AObject,
+      'refresh_rescan_cache', False);
+    Result.SBOMAuthorOrganization := JSONString(AObject,
+      'sbom_author_organization');
+    Result.SBOMAuthorEmail := JSONString(AObject, 'sbom_author_email');
+    Result.RememberPrivacyChoices := JSONBoolean(AObject,
+      'remember_privacy_choices', False);
+    if Data <> nil then
+      JSONToStrings(TJSONArray(Data), Result.IgnorePatterns);
+  except
+    FreeAndNil(Result);
+    raise;
+  end;
 end;
 
 function TScanSettings.AsSummary: string;
 begin
   Result := Format('absolute paths: %s; follow symlinks: %s; leave root: %s; '+
-    'SHA-256: %s; ignore patterns: %d; SBOM author configured: %s; ' +
+    'SHA-256: %s; rescan cache: %s; full cache refresh: %s; ' +
+    'ignore patterns: %d; SBOM author configured: %s; ' +
     'remember privacy choices: %s', [BoolToStr(IncludeAbsolutePaths, True),
     BoolToStr(FollowSymbolicLinks, True), BoolToStr(AllowOutsideRoot, True),
-    BoolToStr(CalculateSHA256, True), IgnorePatterns.Count,
+    BoolToStr(CalculateSHA256, True), BoolToStr(UseRescanCache, True),
+    BoolToStr(RefreshRescanCache, True), IgnorePatterns.Count,
     BoolToStr((Trim(SBOMAuthorOrganization) <> '') or
       (Trim(SBOMAuthorEmail) <> ''), True),
     BoolToStr(RememberPrivacyChoices, True)]);
@@ -830,6 +894,12 @@ begin
   Result.Version := Version;
   Result.Ecosystem := Ecosystem;
   Result.PackageURL := PackageURL;
+  Result.CPE := CPE;
+  Result.CPEEvidence := CPEEvidence;
+  Result.CompanyName := CompanyName;
+  Result.ProductName := ProductName;
+  Result.NativeSONAME := NativeSONAME;
+  Result.NativeBuildID := NativeBuildID;
   Result.SourceArtifact := SourceArtifact;
   Result.SourceParser := SourceParser;
   Result.DependencyScope := DependencyScope;
@@ -851,6 +921,18 @@ begin
   Result.Add('ecosystem', Ecosystem);
   if PackageURL <> '' then
     Result.Add('package_url', PackageURL);
+  if CPE <> '' then
+    Result.Add('cpe', CPE);
+  if CPEEvidence <> '' then
+    Result.Add('cpe_evidence', CPEEvidence);
+  if CompanyName <> '' then
+    Result.Add('company_name', CompanyName);
+  if ProductName <> '' then
+    Result.Add('product_name', ProductName);
+  if NativeSONAME <> '' then
+    Result.Add('native_soname', NativeSONAME);
+  if NativeBuildID <> '' then
+    Result.Add('native_build_id', NativeBuildID);
   Result.Add('source_artifact', SourceArtifact);
   Result.Add('source_parser', SourceParser);
   if DependencyScope <> '' then
@@ -882,6 +964,12 @@ begin
   Result.Version := JSONString(AObject, 'version');
   Result.Ecosystem := JSONString(AObject, 'ecosystem');
   Result.PackageURL := JSONString(AObject, 'package_url');
+  Result.CPE := JSONString(AObject, 'cpe');
+  Result.CPEEvidence := JSONString(AObject, 'cpe_evidence');
+  Result.CompanyName := JSONString(AObject, 'company_name');
+  Result.ProductName := JSONString(AObject, 'product_name');
+  Result.NativeSONAME := JSONString(AObject, 'native_soname');
+  Result.NativeBuildID := JSONString(AObject, 'native_build_id');
   Result.SourceArtifact := JSONString(AObject, 'source_artifact');
   Result.SourceParser := JSONString(AObject, 'source_parser');
   Result.DependencyScope := JSONString(AObject, 'dependency_scope');
