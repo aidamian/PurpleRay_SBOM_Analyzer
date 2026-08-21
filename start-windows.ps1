@@ -6,102 +6,309 @@ Please retain the applicable attribution notices and cite the project using
 the BibTeX entry in NOTICE.
 #>
 
-$ErrorActionPreference = 'Stop'
-$ProjectRepository = 'aidamian/PurpleRay_SBOM_Analyzer'
+[CmdletBinding()]
+param(
+    [string]$ReleaseVersion,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$ApplicationArguments
+)
 
-function Stop-WithError {
-    param([Parameter(Mandatory = $true)][string]$Message)
+$ReleaseVersionWasPassed = $PSBoundParameters.ContainsKey('ReleaseVersion')
 
-    [Console]::Error.WriteLine("start-windows.ps1: $Message")
-    exit 1
-}
+& {
+    param(
+        [string]$RequestedReleaseVersion,
+        [bool]$VersionArgumentWasPassed,
+        [string[]]$ForwardedArguments
+    )
 
-if ($env:OS -ne 'Windows_NT') {
-    Stop-WithError 'this script must be run from Windows PowerShell or PowerShell on Windows'
-}
-if (-not [Environment]::Is64BitOperatingSystem) {
-    Stop-WithError 'the published release requires 64-bit Windows'
-}
-if (-not [Environment]::UserInteractive) {
-    Stop-WithError 'an interactive Windows desktop session is required'
-}
+    $ErrorActionPreference = 'Stop'
+    $ProgressPreference = 'SilentlyContinue'
+    $ProjectRepository = 'aidamian/PurpleRay_SBOM_Analyzer'
+    $ProjectUrl = "https://github.com/$ProjectRepository"
 
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    function Stop-WithError {
+        param([Parameter(Mandatory = $true)][string]$Message)
 
-$Release = Invoke-RestMethod `
-    -Uri "https://api.github.com/repos/$ProjectRepository/releases/latest" `
-    -Headers @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'PurpleRay-SBOM-Analyzer-start-windows' }
-$TagName = [string]$Release.tag_name
-if ($TagName -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
-    Stop-WithError "GitHub returned an invalid release tag: $TagName"
-}
+        throw [InvalidOperationException]::new("start-windows.ps1: $Message")
+    }
 
-$AssetName = "purpleray-sbom-analyzer-$TagName-windows-x64.zip"
-$Asset = $Release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
-$ChecksumAsset = $Release.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' } | Select-Object -First 1
-if (-not $Asset -or -not $ChecksumAsset) {
-    Stop-WithError 'the latest release does not contain the Windows package and checksums'
-}
+    function Test-CanonicalVersion {
+        param([AllowEmptyString()][string]$Version)
 
-$InstallDirectory = Join-Path (Get-Location).ProviderPath "PurpleRay_SBOM_Analyzer_$TagName"
-$DataDirectory = Join-Path (Join-Path $HOME '.purpleray') 'sbom-analyzer'
-$ArchivePath = Join-Path $InstallDirectory ".$AssetName.download.zip"
-$ChecksumPath = Join-Path $InstallDirectory '.SHA256SUMS.txt.download'
-$BinaryPath = Join-Path $InstallDirectory 'purpleray-sbom-analyzer.exe'
+        return $Version -cmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+    }
 
-New-Item -ItemType Directory -Force -Path $InstallDirectory, $DataDirectory | Out-Null
+    function Get-FinalResponseUri {
+        param([Parameter(Mandatory = $true)]$Response)
 
-try {
-    Write-Host "Downloading PurpleRay SBOM Analyzer $TagName into $InstallDirectory"
-    Invoke-WebRequest -UseBasicParsing -Uri $Asset.browser_download_url -OutFile $ArchivePath
-    Invoke-WebRequest -UseBasicParsing -Uri $ChecksumAsset.browser_download_url -OutFile $ChecksumPath
+        if ($Response.BaseResponse.RequestMessage -and
+            $Response.BaseResponse.RequestMessage.RequestUri) {
+            return [Uri]$Response.BaseResponse.RequestMessage.RequestUri
+        }
+        if ($Response.BaseResponse.ResponseUri) {
+            return [Uri]$Response.BaseResponse.ResponseUri
+        }
+        Stop-WithError 'could not determine the final URL for the latest release'
+    }
 
-    $EscapedAssetName = [Regex]::Escape($AssetName)
-    $ChecksumLine = Get-Content -LiteralPath $ChecksumPath |
-        Where-Object { $_ -match "^[0-9A-Fa-f]{64}\s+\*?$EscapedAssetName$" } |
-        Select-Object -First 1
-    if (-not $ChecksumLine) {
+    function Get-PublishedChecksum {
+        param(
+            [Parameter(Mandatory = $true)][string]$ChecksumFile,
+            [Parameter(Mandatory = $true)][string]$AssetName
+        )
+
+        $Pattern = '^([0-9A-Fa-f]{64})\s+\*?' + [Regex]::Escape($AssetName) + '$'
+        foreach ($Line in Get-Content -LiteralPath $ChecksumFile) {
+            $Match = [Regex]::Match([string]$Line, $Pattern)
+            if ($Match.Success) {
+                return $Match.Groups[1].Value.ToLowerInvariant()
+            }
+        }
         Stop-WithError "no valid checksum was published for $AssetName"
     }
 
-    $ExpectedChecksum = ($ChecksumLine -split '\s+')[0].ToLowerInvariant()
-    $ActualChecksum = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($ActualChecksum -ne $ExpectedChecksum) {
-        Stop-WithError 'release checksum verification failed'
+    function Test-PackageChecksum {
+        param(
+            [Parameter(Mandatory = $true)][string]$Path,
+            [Parameter(Mandatory = $true)][string]$ExpectedChecksum
+        )
+
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            return $false
+        }
+        $ActualChecksum = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+        return $ActualChecksum -ceq $ExpectedChecksum
     }
 
-    Expand-Archive -LiteralPath $ArchivePath -DestinationPath $InstallDirectory -Force
-}
-finally {
-    Remove-Item -LiteralPath $ArchivePath, $ChecksumPath -Force -ErrorAction SilentlyContinue
-}
+    function Test-ZipLayout {
+        param([Parameter(Mandatory = $true)][string]$ArchivePath)
 
-if (-not (Test-Path -LiteralPath $BinaryPath -PathType Leaf)) {
-    Stop-WithError 'the Windows archive did not contain purpleray-sbom-analyzer.exe'
-}
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $Archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+        try {
+            $Names = @($Archive.Entries | ForEach-Object { $_.FullName })
+        }
+        finally {
+            $Archive.Dispose()
+        }
 
-$Signature = Get-AuthenticodeSignature -LiteralPath $BinaryPath
-if ($Signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-    Write-Warning (
-        'This Windows release is not Authenticode-signed. Windows Smart App Control ' +
-        'can block unsigned applications even after their checksum is verified.'
-    )
-}
+        $IsLegacyLayout = $Names.Count -eq 1 -and
+            $Names[0] -ceq 'purpleray-sbom-analyzer.exe'
+        $IsCurrentLayout = $Names.Count -eq 3 -and
+            $Names -ccontains 'LICENSE' -and
+            $Names -ccontains 'NOTICE' -and
+            $Names -ccontains 'purpleray-sbom-analyzer.exe'
+        if (-not $IsLegacyLayout -and -not $IsCurrentLayout) {
+            Stop-WithError (
+                'the Windows archive has an unexpected layout; expected the executable ' +
+                'alone (legacy) or the executable, LICENSE, and NOTICE at its root'
+            )
+        }
+        return $IsCurrentLayout
+    }
 
-Write-Host "Shared application data: $DataDirectory"
-Write-Host "Launching $BinaryPath"
-try {
-    Start-Process -FilePath $BinaryPath -WorkingDirectory $InstallDirectory
-}
-catch {
-    if ($_.Exception.Message -match 'Application Control policy|Smart App Control') {
+    function ConvertTo-NativeArgument {
+        param([AllowEmptyString()][string]$Argument)
+
+        if ($Argument.Length -gt 0 -and $Argument -notmatch '[\s"]') {
+            return $Argument
+        }
+
+        $Builder = [Text.StringBuilder]::new()
+        [void]$Builder.Append('"')
+        $BackslashCount = 0
+        foreach ($Character in $Argument.ToCharArray()) {
+            if ($Character -eq '\') {
+                $BackslashCount++
+                continue
+            }
+            if ($Character -eq '"') {
+                [void]$Builder.Append(('\' * (($BackslashCount * 2) + 1)))
+                [void]$Builder.Append('"')
+                $BackslashCount = 0
+                continue
+            }
+            if ($BackslashCount -gt 0) {
+                [void]$Builder.Append(('\' * $BackslashCount))
+                $BackslashCount = 0
+            }
+            [void]$Builder.Append($Character)
+        }
+        if ($BackslashCount -gt 0) {
+            [void]$Builder.Append(('\' * ($BackslashCount * 2)))
+        }
+        [void]$Builder.Append('"')
+        return $Builder.ToString()
+    }
+
+    if ($env:OS -ne 'Windows_NT') {
+        Stop-WithError 'this script must be run from Windows PowerShell or PowerShell on Windows'
+    }
+    if (-not [Environment]::Is64BitOperatingSystem) {
+        Stop-WithError 'the published release requires 64-bit Windows'
+    }
+    if (-not [Environment]::UserInteractive) {
+        Stop-WithError 'an interactive Windows desktop session is required'
+    }
+
+    if ($VersionArgumentWasPassed) {
+        $SelectedVersion = $RequestedReleaseVersion
+    }
+    else {
+        $SelectedVersion = [Environment]::GetEnvironmentVariable('PURPLERAY_VERSION')
+    }
+    if ($null -ne $SelectedVersion -and $SelectedVersion.Length -gt 0 -and
+        -not (Test-CanonicalVersion $SelectedVersion)) {
         Stop-WithError (
-            'Windows Smart App Control blocked this unsigned release. Windows has no ' +
-            'per-app exception. For an immediate local test, open Windows Security > ' +
-            'App & browser control > Smart App Control settings, turn Smart App Control ' +
-            'Off, and run this script again. The permanent project fix is a release ' +
-            'signed with a publicly trusted Authenticode certificate.'
+            "release version must be canonical MAJOR.MINOR.PATCH without a v prefix: $SelectedVersion"
         )
     }
-    throw
-}
+    if ($VersionArgumentWasPassed -and
+        ($null -eq $SelectedVersion -or $SelectedVersion.Length -eq 0)) {
+        Stop-WithError '-ReleaseVersion requires canonical MAJOR.MINOR.PATCH'
+    }
+
+    $PreviousSecurityProtocol = [Net.ServicePointManager]::SecurityProtocol
+    try {
+        [Net.ServicePointManager]::SecurityProtocol =
+            $PreviousSecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+        if ($SelectedVersion) {
+            $TagName = "v$SelectedVersion"
+        }
+        else {
+            $LatestResponse = Invoke-WebRequest -UseBasicParsing -Uri "$ProjectUrl/releases/latest"
+            $LatestUri = Get-FinalResponseUri $LatestResponse
+            $TagName = $LatestUri.AbsolutePath.TrimEnd('/').Split('/')[-1]
+            if (-not $TagName.StartsWith('v', [StringComparison]::Ordinal)) {
+                Stop-WithError "GitHub returned an invalid release tag: $TagName"
+            }
+            $SelectedVersion = $TagName.Substring(1)
+            if (-not (Test-CanonicalVersion $SelectedVersion)) {
+                Stop-WithError "GitHub returned a non-canonical release tag: $TagName"
+            }
+        }
+
+        $AssetName = "purpleray-sbom-analyzer-$TagName-windows-x64.zip"
+        $ReleaseBaseUrl = "$ProjectUrl/releases/download/$TagName"
+        $InstallDirectory = Join-Path (Get-Location).ProviderPath "PurpleRay_SBOM_Analyzer_$TagName"
+        $UserProfileDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+        if (-not $UserProfileDirectory) {
+            Stop-WithError 'could not determine the current Windows user profile directory'
+        }
+        $DataDirectory = Join-Path (Join-Path $UserProfileDirectory '.purpleray') 'sbom-analyzer'
+        $ArchivePath = Join-Path $InstallDirectory $AssetName
+        $ChecksumPath = Join-Path $InstallDirectory ".SHA256SUMS.$PID.download"
+        $DownloadPath = Join-Path $InstallDirectory ".$AssetName.$PID.download"
+        $ExtractDirectory = Join-Path $InstallDirectory ".extract.$([Guid]::NewGuid().ToString('N'))"
+        $BinaryPath = Join-Path $InstallDirectory 'purpleray-sbom-analyzer.exe'
+        $StagedBinaryPath = Join-Path $InstallDirectory '.purpleray-sbom-analyzer.exe.staged'
+
+        New-Item -ItemType Directory -Force -Path $InstallDirectory, $DataDirectory | Out-Null
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri "$ReleaseBaseUrl/SHA256SUMS.txt" `
+                -OutFile $ChecksumPath
+            $ExpectedChecksum = Get-PublishedChecksum $ChecksumPath $AssetName
+
+            if (Test-PackageChecksum $ArchivePath $ExpectedChecksum) {
+                Write-Host "Using checksum-verified cached package: $ArchivePath"
+            }
+            else {
+                if (Test-Path -LiteralPath $ArchivePath -PathType Leaf) {
+                    Write-Warning 'Cached package failed checksum verification; downloading a fresh copy.'
+                }
+                Write-Host "Downloading $AssetName"
+                Invoke-WebRequest -UseBasicParsing -Uri "$ReleaseBaseUrl/$AssetName" `
+                    -OutFile $DownloadPath
+                if (-not (Test-PackageChecksum $DownloadPath $ExpectedChecksum)) {
+                    Stop-WithError 'release checksum verification failed'
+                }
+                Move-Item -LiteralPath $DownloadPath -Destination $ArchivePath -Force
+            }
+
+            if (Get-Command gh -ErrorAction SilentlyContinue) {
+                Write-Host "Verifying GitHub build-provenance attestation for $AssetName"
+                & gh attestation verify $ArchivePath --repo $ProjectRepository
+                if ($LASTEXITCODE -ne 0) {
+                    Stop-WithError 'GitHub build-provenance attestation verification failed'
+                }
+            }
+            else {
+                Write-Host (
+                    'GitHub CLI was not found; checksum verification succeeded, but provenance ' +
+                    'was not checked.'
+                )
+                Write-Host (
+                    "Optional: install gh, then run: gh attestation verify `"$ArchivePath`" " +
+                    "--repo $ProjectRepository"
+                )
+            }
+
+            $HasNotices = Test-ZipLayout $ArchivePath
+            New-Item -ItemType Directory -Path $ExtractDirectory | Out-Null
+            Expand-Archive -LiteralPath $ArchivePath -DestinationPath $ExtractDirectory
+            $ExtractedBinaryPath = Join-Path $ExtractDirectory 'purpleray-sbom-analyzer.exe'
+            Copy-Item -LiteralPath $ExtractedBinaryPath -Destination $StagedBinaryPath -Force
+            Move-Item -LiteralPath $StagedBinaryPath -Destination $BinaryPath -Force
+            if ($HasNotices) {
+                Copy-Item -LiteralPath (Join-Path $ExtractDirectory 'LICENSE') `
+                    -Destination (Join-Path $InstallDirectory 'LICENSE') -Force
+                Copy-Item -LiteralPath (Join-Path $ExtractDirectory 'NOTICE') `
+                    -Destination (Join-Path $InstallDirectory 'NOTICE') -Force
+            }
+        }
+        finally {
+            Remove-Item -LiteralPath $ChecksumPath, $DownloadPath, $StagedBinaryPath `
+                -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $ExtractDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        if (-not (Test-Path -LiteralPath $BinaryPath -PathType Leaf)) {
+            Stop-WithError 'the Windows archive did not contain purpleray-sbom-analyzer.exe'
+        }
+
+        $Signature = Get-AuthenticodeSignature -LiteralPath $BinaryPath
+        if ($Signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            Write-Warning (
+                'This Windows release is not Authenticode-signed, so Smart App Control may block it. ' +
+                'Disabling Smart App Control reduces protection and, depending on the Windows build ' +
+                'and system state, may be irreversible without resetting or reinstalling Windows. ' +
+                'Check the current Microsoft FAQ and prefer a disposable VM for unsigned-build testing: ' +
+                'https://support.microsoft.com/en-us/windows/security/threat-malware-protection/' +
+                'smart-app-control-frequently-asked-questions'
+            )
+        }
+
+        Write-Host "Shared application data: $DataDirectory"
+        Write-Host "Launching $BinaryPath"
+        $StartProcessParameters = @{
+            FilePath = $BinaryPath
+            WorkingDirectory = $InstallDirectory
+        }
+        if ($ForwardedArguments.Count -gt 0) {
+            $StartProcessParameters.ArgumentList =
+                (($ForwardedArguments | ForEach-Object { ConvertTo-NativeArgument $_ }) -join ' ')
+        }
+        try {
+            Start-Process @StartProcessParameters
+        }
+        catch {
+            if ($_.Exception.Message -match 'Application Control policy|Smart App Control') {
+                Stop-WithError (
+                    'Windows Smart App Control blocked this unsigned release. Windows has no ' +
+                    'per-app exception. Disabling Smart App Control reduces protection and, ' +
+                    'depending on the Windows build and system state, may be irreversible without ' +
+                    'resetting or reinstalling Windows. Check the current Microsoft FAQ and prefer ' +
+                    'a disposable VM for unsigned-build testing: https://support.microsoft.com/' +
+                    'en-us/windows/security/threat-malware-protection/' +
+                    'smart-app-control-frequently-asked-questions'
+                )
+            }
+            throw
+        }
+    }
+    finally {
+        [Net.ServicePointManager]::SecurityProtocol = $PreviousSecurityProtocol
+    }
+} $ReleaseVersion $ReleaseVersionWasPassed $ApplicationArguments

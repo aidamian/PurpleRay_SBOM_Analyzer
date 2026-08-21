@@ -135,26 +135,9 @@ type
     }
     procedure DeliverCompletion;
 
-    {**
-      Generates, hashes, and atomically persists CycloneDX for FTask.
-
-      Parameters
-      ----------
-      None
-
-      Returns
-      -------
-      None
-
-      Raises
-      ------
-      EFCreateError, EWriteError, EInOutError
-        Propagated when SBOM generation or atomic persistence fails.
-    }
-    procedure GenerateSBOM;
   protected
     {**
-      Runs the scanner and conditionally generates the completed task's SBOM.
+      Runs the shared scanner-to-SBOM service for the worker's private task.
 
       Parameters
       ----------
@@ -167,8 +150,8 @@ type
       Raises
       ------
       Exception
-        Scanner construction, execution, or teardown failures propagate to
-        Execute's last-resort containment boundary.
+        Scanner construction, execution, generation, or teardown failures
+        propagate to Execute's last-resort containment boundary.
     }
     procedure PerformScan; virtual;
 
@@ -239,7 +222,7 @@ type
 implementation
 
 uses
-  uCycloneDX, uAtomicFiles, uSHA256, uTimeUtils;
+  uScanService, uTimeUtils;
 
 procedure TScanWorker.MarkTaskFailed(const AMessage: string);
 var
@@ -320,10 +303,9 @@ begin
     FOnComplete(Self, FTask);
 end;
 
-procedure TScanWorker.GenerateSBOM;
+procedure TScanWorker.PerformScan;
 var
-  DirectoryName, FileName, Digest: string;
-  Content: UTF8String;
+  DirectoryName, FileName: string;
 begin
   DirectoryName := IncludeTrailingPathDelimiter(FDataDirectory) + 'sboms';
   if not ForceDirectories(DirectoryName) then
@@ -331,41 +313,8 @@ begin
       [DirectoryName]);
   FileName := IncludeTrailingPathDelimiter(DirectoryName) + FTask.ID +
     '.cdx.json';
-  Content := GenerateCycloneDX(FTask);
-  WriteAtomicUTF8(FileName, Content, False);
-  if not SHA256File(FileName, Digest, @CancellationRequested, nil) then
-    raise EAbort.Create('SBOM generation was cancelled');
-  FTask.GeneratedSBOMPath := FileName;
-  FTask.GeneratedSBOMSHA256 := Digest;
-end;
-
-procedure TScanWorker.PerformScan;
-var
-  Engine: TScanEngine;
-begin
-  Engine := TScanEngine.Create(@CancellationRequested, @EngineProgress);
-  try
-    Engine.Scan(FTask);
-    if Terminated and (FTask.Status = tsCompleted) then
-      FTask.Status := tsCancelled
-    else if FTask.Status = tsCompleted then
-    begin
-      try
-        GenerateSBOM;
-      except
-        on E: EAbort do
-          FTask.Status := tsCancelled;
-        on E: Exception do
-        begin
-          FTask.Status := tsFailed;
-          FTask.Errors.Add('Unable to generate the CycloneDX file: ' +
-            E.Message);
-        end;
-      end;
-    end;
-  finally
-    Engine.Free;
-  end;
+  ExecuteScanToFile(FTask, FileName, @CancellationRequested, @EngineProgress,
+    sopManagedApplicationData);
 end;
 
 procedure TScanWorker.Execute;

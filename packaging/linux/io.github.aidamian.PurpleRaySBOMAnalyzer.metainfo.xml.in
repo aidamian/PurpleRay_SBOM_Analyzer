@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.aidamian.PurpleRaySBOMAnalyzer</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <name>PurpleRay SBOM Analyzer</name>
+  <summary>Generate and compare CycloneDX software bills of materials</summary>
+  <description>
+    <p>
+      PurpleRay SBOM Analyzer scans application folders, records component
+      evidence, exports CycloneDX JSON, and compares completed scans locally.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.aidamian.PurpleRaySBOMAnalyzer.desktop</launchable>
+  <url type="homepage">https://github.com/aidamian/PurpleRay_SBOM_Analyzer</url>
+  <url type="bugtracker">https://github.com/aidamian/PurpleRay_SBOM_Analyzer/issues</url>
+  <developer id="io.github.aidamian">
+    <name>Andrei Ionut Damian</name>
+  </developer>
+  <categories>
+    <category>Development</category>
+    <category>Utility</category>
+  </categories>
+  <releases>
+    <release version="@VERSION@" date="@RELEASE_DATE@" />
+  </releases>
+  <content_rating type="oars-1.1" />
+</component>
+

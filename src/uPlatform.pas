@@ -7,7 +7,8 @@
   Description
   -----------
   Supplies the application-data location and migration, canonical path checks,
-  symbolic-link detection, durable flushing, and portable file copying.
+  symbolic-link detection, durable flushing, atomic file replacement, and
+  portable file copying.
 
   Citation request
   ----------------
@@ -35,6 +36,60 @@ type
     fsekDirectory,
     fsekUnsupported
   );
+
+  {**
+    Retains the identity and native handle of one existing directory.
+
+    The pin supports exclusive leaf creation, same-directory atomic rename,
+    cleanup, and explicit path-identity checks without redirecting operations
+    through a pathname that may have been rebound during a long scan.
+  }
+  TPinnedDirectory = class
+  private
+    FDirectoryName: string;
+    FPinnedHandle: THandle;
+    {$IFDEF UNIX}
+    FDevice: QWord;
+    FInode: QWord;
+    {$ENDIF}
+    {$IFDEF Windows}
+    FVolumeSerialNumber: Cardinal;
+    FFileIndex: QWord;
+    FGuardHandles: array of THandle;
+    {$ENDIF}
+  public
+    destructor Destroy; override;
+    procedure VerifyCurrentPath;
+    function CreateFileExclusive(const AFileName: string): THandle;
+    function ReplaceFileAtomically(const ASourceFileName,
+      ADestinationFileName: string): Boolean;
+    function DeleteFile(const AFileName: string): Boolean;
+    property DirectoryName: string read FDirectoryName;
+  end;
+
+{**
+  Opens and pins the exact existing directory reached by a path.
+
+  Parameters
+  ----------
+  ADirectory
+    Existing directory to pin. Symbolic links and reparse points are resolved
+    before the directory identity is captured.
+
+  Returns
+  -------
+  TPinnedDirectory
+    Caller-owned pin whose DirectoryName is the canonical validated path.
+
+  Raises
+  ------
+  EInOutError
+    Raised when the directory cannot be opened, is not a directory, changes
+    identity while it is being pinned, or cannot be protected on Windows.
+  EOutOfMemory
+    May propagate while allocating the pin or Windows ancestor guards.
+}
+function PinExistingDirectory(const ADirectory: string): TPinnedDirectory;
 
 {**
   Returns the canonical per-user application-data directory, creating it once.
@@ -286,6 +341,47 @@ function DirectoryEnumerationContinuationFailed(AFindResult: Integer;
 procedure FlushFileStream(AStream: TFileStream);
 
 {**
+  Flushes one already-open native file handle to durable storage.
+
+  Parameters
+  ----------
+  AHandle
+    Valid native file handle owned by the caller.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EWriteError, EOSError
+    Raised when the operating system cannot flush the handle.
+}
+procedure FlushFileHandle(AHandle: THandle);
+
+{**
+  Atomically renames a completed file over an optional existing destination.
+
+  Parameters
+  ----------
+  ASource
+    Existing source file in the destination filesystem.
+  ADestination
+    Final filename to create or atomically replace.
+
+  Returns
+  -------
+  Boolean
+    True only when the native atomic rename/replace operation succeeds.
+
+  Raises
+  ------
+  None
+    Native failures are returned as False for the persistence caller to report.
+}
+function ReplaceFileAtomically(const ASource, ADestination: string): Boolean;
+
+{**
   Copies a file byte-for-byte and flushes the destination before returning.
 
   Parameters
@@ -314,6 +410,13 @@ uses
 
 function CRealPath(PathName, ResolvedName: PChar): PChar; cdecl;
   external 'c' name 'realpath';
+function COpenAt(ADirectoryHandle: LongInt; APath: PChar; AFlags: LongInt;
+  AMode: TMode): LongInt; cdecl; external 'c' name 'openat';
+function CRenameAt(ASourceDirectoryHandle: LongInt; ASourcePath: PChar;
+  ADestinationDirectoryHandle: LongInt; ADestinationPath: PChar): LongInt;
+  cdecl; external 'c' name 'renameat';
+function CUnlinkAt(ADirectoryHandle: LongInt; APath: PChar;
+  AFlags: LongInt): LongInt; cdecl; external 'c' name 'unlinkat';
 {$ENDIF}
 
 {$IFDEF Windows}
@@ -328,6 +431,600 @@ function GetFinalPathNameByHandleW(AHandle: THandle; APath: PWideChar;
 var
   CachedApplicationDataDirectory: string = '';
   CachedMigrationWarning: string = '';
+
+function ExcludeTrailingDelimiterUnlessRoot(const APath: string): string;
+  forward;
+
+{$IFDEF Linux}
+{**
+  Returns the kernel path currently associated with an open Linux handle.
+
+  Parameters
+  ----------
+  AHandle
+    Open directory descriptor to resolve through procfs.
+
+  Returns
+  -------
+  string
+    Current absolute directory path reported by the kernel.
+
+  Raises
+  ------
+  EInOutError
+    Raised when the descriptor path is unavailable or has been unlinked.
+}
+function CurrentLinuxPathFromHandle(AHandle: THandle): string;
+var
+  DescriptorLink: RawByteString;
+begin
+  DescriptorLink := fpReadLink('/proc/self/fd/' + IntToStr(AHandle));
+  Result := ExcludeTrailingDelimiterUnlessRoot(string(DescriptorLink));
+  if (Result = '') or ((Length(Result) >= 10) and
+    (Copy(Result, Length(Result) - 9, 10) = ' (deleted)')) then
+    raise EInOutError.Create('Pinned output directory handle is no longer ' +
+      'reachable through its validated path');
+end;
+{$ENDIF}
+
+{$IFDEF Windows}
+{**
+  Returns the normalized filesystem path reached by an open Windows handle.
+
+  Parameters
+  ----------
+  AHandle
+    Open file or directory handle whose final path is requested.
+
+  Returns
+  -------
+  string
+    UTF-8 drive or UNC path without the Win32 extended-length prefix.
+
+  Raises
+  ------
+  EInOutError
+    Raised when Windows cannot return a bounded final path for the handle.
+}
+function FinalWindowsPathFromHandle(AHandle: THandle): string;
+const
+  FileNameNormalized = 0;
+var
+  ResolvedPath: UnicodeString;
+  WideBuffer: array[0..32767] of WideChar;
+  PathLength: DWORD;
+  ErrorCode: Cardinal;
+begin
+  PathLength := GetFinalPathNameByHandleW(AHandle, @WideBuffer[0],
+    Length(WideBuffer), FileNameNormalized);
+  if (PathLength = 0) or (PathLength >= DWORD(Length(WideBuffer))) then
+  begin
+    ErrorCode := GetLastError;
+    raise EInOutError.CreateFmt('Unable to resolve pinned output directory ' +
+      'handle: %s', [SysErrorMessage(ErrorCode)]);
+  end;
+  SetString(ResolvedPath, PWideChar(@WideBuffer[0]), PathLength);
+  if Copy(ResolvedPath, 1, 8) = '\\?\UNC\' then
+    ResolvedPath := '\\' + Copy(ResolvedPath, 9, MaxInt)
+  else if Copy(ResolvedPath, 1, 4) = '\\?\' then
+    Delete(ResolvedPath, 1, 4);
+  Result := ExcludeTrailingDelimiterUnlessRoot(UTF8Encode(ResolvedPath));
+end;
+
+{**
+  Finds the immutable drive root or UNC share root for a Windows path.
+
+  Parameters
+  ----------
+  APath
+    Canonical absolute drive or UNC path.
+
+  Returns
+  -------
+  string
+    Drive root such as C:\ or UNC share root such as \\server\share.
+
+  Raises
+  ------
+  None
+}
+function WindowsVolumeRoot(const APath: string): string;
+var
+  CharacterIndex, SeparatorCount: Integer;
+begin
+  if Copy(APath, 1, 2) <> '\\' then
+    Exit(ExcludeTrailingDelimiterUnlessRoot(
+      IncludeTrailingPathDelimiter(ExtractFileDrive(APath))));
+
+  SeparatorCount := 0;
+  for CharacterIndex := 3 to Length(APath) do
+    if APath[CharacterIndex] = '\' then
+    begin
+      Inc(SeparatorCount);
+      if SeparatorCount = 2 then
+        Exit(Copy(APath, 1, CharacterIndex - 1));
+    end;
+  Result := ExcludeTrailingPathDelimiter(APath);
+end;
+{$ENDIF}
+
+{**
+  Rejects path syntax where a pinned-directory operation requires one leaf.
+
+  Parameters
+  ----------
+  AFileName
+    Candidate filename relative to a pinned directory.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EArgumentException
+    Raised for an empty name, dot entry, embedded NUL, path separator, or
+    Windows alternate-data-stream delimiter.
+}
+procedure ValidatePinnedLeafName(const AFileName: string);
+begin
+  if (AFileName = '') or (AFileName = '.') or (AFileName = '..') or
+    (Pos(#0, AFileName) > 0) or
+    (ExtractFileName(AFileName) <> AFileName) then
+    raise EArgumentException.Create('Pinned file operation requires a ' +
+      'single filename: ' + AFileName);
+  {$IFDEF Windows}
+  if (Pos('/', AFileName) > 0) or (Pos(':', AFileName) > 0) then
+    raise EArgumentException.Create('Pinned file operation requires a ' +
+      'single filename: ' + AFileName);
+  {$ENDIF}
+end;
+
+{**
+  Releases all operating-system handles retained by a directory pin.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+}
+destructor TPinnedDirectory.Destroy;
+{$IFDEF Windows}
+var
+  GuardIndex: Integer;
+{$ENDIF}
+begin
+  if FPinnedHandle <> feInvalidHandle then
+  begin
+    FileClose(FPinnedHandle);
+    FPinnedHandle := feInvalidHandle;
+  end;
+  {$IFDEF Windows}
+  for GuardIndex := High(FGuardHandles) downto Low(FGuardHandles) do
+    if FGuardHandles[GuardIndex] <> feInvalidHandle then
+      CloseHandle(FGuardHandles[GuardIndex]);
+  SetLength(FGuardHandles, 0);
+  {$ENDIF}
+  inherited Destroy;
+end;
+
+{**
+  Confirms that the canonical path still reaches the pinned directory object.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  EInOutError
+    Raised when the path is missing, rebound, or no longer a directory.
+}
+procedure TPinnedDirectory.VerifyCurrentPath;
+{$IFDEF UNIX}
+var
+  PathInformation: Stat;
+  ErrorCode: Integer;
+  {$IFDEF Linux}
+  CurrentHandlePath: string;
+  {$ENDIF}
+{$ENDIF}
+{$IFDEF Windows}
+var
+  CurrentHandle: THandle;
+  CurrentInformation: TByHandleFileInformation;
+  CurrentIndex: QWord;
+  DirectoryWide: UnicodeString;
+  ErrorCode: Cardinal;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  FillChar(PathInformation, SizeOf(PathInformation), 0);
+  if fpStat(PChar(FDirectoryName), PathInformation) <> 0 then
+  begin
+    ErrorCode := fpGetErrNo;
+    raise EInOutError.CreateFmt('Pinned output directory is no longer ' +
+      'reachable: %s (%s)', [FDirectoryName, SysErrorMessage(ErrorCode)]);
+  end;
+  if (not FPS_ISDIR(PathInformation.st_mode)) or
+    (QWord(PathInformation.st_dev) <> FDevice) or
+    (QWord(PathInformation.st_ino) <> FInode) then
+    raise EInOutError.Create('Pinned output directory was replaced or ' +
+      'rebound: ' + FDirectoryName);
+  {$IFDEF Linux}
+  CurrentHandlePath := CurrentLinuxPathFromHandle(FPinnedHandle);
+  if not SameFileName(CurrentHandlePath, FDirectoryName) then
+    raise EInOutError.Create('Pinned output directory was moved or rebound: ' +
+      FDirectoryName);
+  {$ENDIF}
+  {$ENDIF}
+  {$IFDEF Windows}
+  FillChar(CurrentInformation, SizeOf(CurrentInformation), 0);
+  DirectoryWide := UTF8Decode(FDirectoryName);
+  CurrentHandle := CreateFileW(PWideChar(DirectoryWide), FILE_READ_ATTRIBUTES,
+    FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
+    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);
+  if CurrentHandle = INVALID_HANDLE_VALUE then
+  begin
+    ErrorCode := GetLastError;
+    raise EInOutError.CreateFmt('Pinned output directory is no longer ' +
+      'reachable: %s (%s)', [FDirectoryName, SysErrorMessage(ErrorCode)]);
+  end;
+  try
+    if not GetFileInformationByHandle(CurrentHandle, CurrentInformation) then
+    begin
+      ErrorCode := GetLastError;
+      raise EInOutError.CreateFmt('Unable to verify pinned output directory: ' +
+        '%s (%s)', [FDirectoryName, SysErrorMessage(ErrorCode)]);
+    end;
+    CurrentIndex := (QWord(CurrentInformation.nFileIndexHigh) shl 32) or
+      QWord(CurrentInformation.nFileIndexLow);
+    if ((CurrentInformation.dwFileAttributes and
+      FILE_ATTRIBUTE_DIRECTORY) = 0) or
+      (CurrentInformation.dwVolumeSerialNumber <> FVolumeSerialNumber) or
+      (CurrentIndex <> FFileIndex) then
+      raise EInOutError.Create('Pinned output directory was replaced or ' +
+        'rebound: ' + FDirectoryName);
+    if not SameFileName(FinalWindowsPathFromHandle(FPinnedHandle),
+      FDirectoryName) then
+      raise EInOutError.Create('Pinned output directory was moved or ' +
+        'rebound: ' + FDirectoryName);
+  finally
+    CloseHandle(CurrentHandle);
+  end;
+  {$ENDIF}
+  {$IFNDEF UNIX}
+  {$IFNDEF Windows}
+  if not DirectoryExists(FDirectoryName) then
+    raise EInOutError.Create('Pinned output directory is no longer ' +
+      'reachable: ' + FDirectoryName);
+  {$ENDIF}
+  {$ENDIF}
+end;
+
+{**
+  Exclusively creates one regular file inside the pinned directory.
+
+  Parameters
+  ----------
+  AFileName
+    Single relative filename; directory separators are rejected.
+
+  Returns
+  -------
+  THandle
+    Caller-owned writable native handle to the newly created file.
+
+  Raises
+  ------
+  EArgumentException
+    Raised when AFileName is not one leaf name.
+  EFCreateError
+    Raised when exclusive creation fails.
+  EInOutError
+    Raised when the pinned path was replaced before creation.
+}
+function TPinnedDirectory.CreateFileExclusive(const AFileName: string):
+  THandle;
+var
+  ErrorCode: Integer;
+  {$IFDEF Windows}
+  FileNameWide: UnicodeString;
+  {$ENDIF}
+begin
+  ValidatePinnedLeafName(AFileName);
+  VerifyCurrentPath;
+  {$IFDEF UNIX}
+  repeat
+    Result := COpenAt(FPinnedHandle, PChar(AFileName),
+      O_WRONLY or O_CREAT or O_EXCL, &600);
+  until (Result <> feInvalidHandle) or (fpGetErrNo <> ESysEINTR);
+  {$ENDIF}
+  {$IFDEF Windows}
+  FileNameWide := UTF8Decode(IncludeTrailingPathDelimiter(FDirectoryName) +
+    AFileName);
+  Result := CreateFileW(PWideChar(FileNameWide), GENERIC_WRITE, 0, nil,
+    CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
+  {$ENDIF}
+  {$IFNDEF UNIX}
+  {$IFNDEF Windows}
+  if FileExists(IncludeTrailingPathDelimiter(FDirectoryName) + AFileName) then
+    Result := feInvalidHandle
+  else
+    Result := FileCreate(IncludeTrailingPathDelimiter(FDirectoryName) +
+      AFileName);
+  {$ENDIF}
+  {$ENDIF}
+  if Result = feInvalidHandle then
+  begin
+    ErrorCode := GetLastOSError;
+    raise EFCreateError.CreateFmt('Unable to create exclusive pinned file: ' +
+      '%s (%s)', [AFileName, SysErrorMessage(ErrorCode)]);
+  end;
+end;
+
+{**
+  Atomically renames one pinned-directory leaf over another leaf.
+
+  Parameters
+  ----------
+  ASourceFileName
+    Existing source leaf in the pinned directory.
+  ADestinationFileName
+    Final destination leaf in the same pinned directory.
+
+  Returns
+  -------
+  Boolean
+    True only when the native directory-relative replacement succeeds.
+
+  Raises
+  ------
+  EArgumentException
+    Raised when either argument is not one leaf name.
+  EInOutError
+    Raised when the pinned path was replaced before activation.
+}
+function TPinnedDirectory.ReplaceFileAtomically(const ASourceFileName,
+  ADestinationFileName: string): Boolean;
+{$IFDEF Windows}
+const
+  AtomicMoveReplaceExisting = $00000001;
+  AtomicMoveWriteThrough = $00000008;
+var
+  SourceWide, DestinationWide: UnicodeString;
+{$ENDIF}
+begin
+  ValidatePinnedLeafName(ASourceFileName);
+  ValidatePinnedLeafName(ADestinationFileName);
+  VerifyCurrentPath;
+  {$IFDEF UNIX}
+  Result := CRenameAt(FPinnedHandle, PChar(ASourceFileName), FPinnedHandle,
+    PChar(ADestinationFileName)) = 0;
+  {$ENDIF}
+  {$IFDEF Windows}
+  SourceWide := UTF8Decode(IncludeTrailingPathDelimiter(FDirectoryName) +
+    ASourceFileName);
+  DestinationWide := UTF8Decode(IncludeTrailingPathDelimiter(FDirectoryName) +
+    ADestinationFileName);
+  Result := MoveFileExW(PWideChar(SourceWide), PWideChar(DestinationWide),
+    AtomicMoveReplaceExisting or AtomicMoveWriteThrough);
+  {$ENDIF}
+  {$IFNDEF UNIX}
+  {$IFNDEF Windows}
+  Result := uPlatform.ReplaceFileAtomically(
+    IncludeTrailingPathDelimiter(FDirectoryName) + ASourceFileName,
+    IncludeTrailingPathDelimiter(FDirectoryName) + ADestinationFileName);
+  {$ENDIF}
+  {$ENDIF}
+end;
+
+{**
+  Removes one leaf from the pinned directory without following a rebound path.
+
+  Parameters
+  ----------
+  AFileName
+    Single relative filename to remove.
+
+  Returns
+  -------
+  Boolean
+    True when the entry was removed; False on a native deletion failure.
+
+  Raises
+  ------
+  EArgumentException
+    Raised when AFileName is not one leaf name.
+}
+function TPinnedDirectory.DeleteFile(const AFileName: string): Boolean;
+{$IFDEF Windows}
+var
+  FileNameWide: UnicodeString;
+{$ENDIF}
+begin
+  ValidatePinnedLeafName(AFileName);
+  {$IFDEF UNIX}
+  Result := CUnlinkAt(FPinnedHandle, PChar(AFileName), 0) = 0;
+  {$ENDIF}
+  {$IFDEF Windows}
+  FileNameWide := UTF8Decode(IncludeTrailingPathDelimiter(FDirectoryName) +
+    AFileName);
+  Result := Windows.DeleteFileW(PWideChar(FileNameWide));
+  {$ENDIF}
+  {$IFNDEF UNIX}
+  {$IFNDEF Windows}
+  Result := SysUtils.DeleteFile(IncludeTrailingPathDelimiter(FDirectoryName) +
+    AFileName);
+  {$ENDIF}
+  {$ENDIF}
+end;
+
+function PinExistingDirectory(const ADirectory: string): TPinnedDirectory;
+var
+  DirectoryName: string;
+  {$IFDEF UNIX}
+  HandleInformation, PathInformation: Stat;
+  ErrorCode: Integer;
+  {$ENDIF}
+  {$IFDEF Windows}
+  DirectoryWide, GuardWide: UnicodeString;
+  GuardDirectory, ParentDirectory, VolumeRoot: string;
+  DirectoryInformation: TByHandleFileInformation;
+  GuardHandle: THandle;
+  GuardCount: Integer;
+  ErrorCode: Cardinal;
+  {$ENDIF}
+begin
+  if Trim(ADirectory) = '' then
+    raise EInOutError.Create('Output directory must not be empty');
+  DirectoryName := CanonicalPath(ADirectory);
+  if not DirectoryExists(DirectoryName) then
+    raise EInOutError.Create('Output directory does not exist: ' +
+      DirectoryName);
+
+  Result := TPinnedDirectory.Create;
+  Result.FPinnedHandle := feInvalidHandle;
+  try
+    Result.FDirectoryName := DirectoryName;
+    {$IFDEF UNIX}
+    repeat
+      Result.FPinnedHandle := fpOpen(PChar(DirectoryName),
+        O_RDONLY or O_DIRECTORY);
+    until (Result.FPinnedHandle <> feInvalidHandle) or
+      (fpGetErrNo <> ESysEINTR);
+    if Result.FPinnedHandle = feInvalidHandle then
+    begin
+      ErrorCode := fpGetErrNo;
+      raise EInOutError.CreateFmt('Unable to pin output directory: %s (%s)',
+        [DirectoryName, SysErrorMessage(ErrorCode)]);
+    end;
+    { POSIX defines FD_CLOEXEC as bit 1. Do not expose the output-directory
+      capability to readelf, otool, or other child tools invoked by a scan. }
+    if fpFcntl(Result.FPinnedHandle, F_SetFd, 1) <> 0 then
+    begin
+      ErrorCode := fpGetErrNo;
+      raise EInOutError.CreateFmt('Unable to protect pinned output-directory ' +
+        'handle: %s (%s)', [DirectoryName, SysErrorMessage(ErrorCode)]);
+    end;
+    FillChar(HandleInformation, SizeOf(HandleInformation), 0);
+    FillChar(PathInformation, SizeOf(PathInformation), 0);
+    if fpFStat(Result.FPinnedHandle, HandleInformation) <> 0 then
+    begin
+      ErrorCode := fpGetErrNo;
+      raise EInOutError.CreateFmt('Unable to inspect pinned output ' +
+        'directory: %s (%s)', [DirectoryName, SysErrorMessage(ErrorCode)]);
+    end;
+    if not FPS_ISDIR(HandleInformation.st_mode) then
+      raise EInOutError.Create('Pinned output path is not a directory: ' +
+        DirectoryName);
+    Result.FDevice := QWord(HandleInformation.st_dev);
+    Result.FInode := QWord(HandleInformation.st_ino);
+    { Resolve again after opening. If the preflight pathname was swapped to a
+      symlink before fpOpen, this captures the directory actually reached by
+      the pinned handle rather than retaining the stale outside-root text. }
+    {$IFDEF Linux}
+    DirectoryName := CurrentLinuxPathFromHandle(Result.FPinnedHandle);
+    {$ELSE}
+    DirectoryName := CanonicalPath(DirectoryName);
+    {$ENDIF}
+    Result.FDirectoryName := DirectoryName;
+    if fpStat(PChar(DirectoryName), PathInformation) <> 0 then
+    begin
+      ErrorCode := fpGetErrNo;
+      raise EInOutError.CreateFmt('Unable to verify pinned output ' +
+        'directory: %s (%s)', [DirectoryName, SysErrorMessage(ErrorCode)]);
+    end;
+    if (QWord(PathInformation.st_dev) <> Result.FDevice) or
+      (QWord(PathInformation.st_ino) <> Result.FInode) then
+      raise EInOutError.Create('Output directory changed while it was being ' +
+        'pinned: ' + DirectoryName);
+    {$ENDIF}
+    {$IFDEF Windows}
+    DirectoryWide := UTF8Decode(DirectoryName);
+    Result.FPinnedHandle := CreateFileW(PWideChar(DirectoryWide),
+      FILE_READ_ATTRIBUTES, FILE_SHARE_READ or FILE_SHARE_WRITE, nil,
+      OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);
+    if Result.FPinnedHandle = INVALID_HANDLE_VALUE then
+    begin
+      ErrorCode := GetLastError;
+      raise EInOutError.CreateFmt('Unable to pin output directory: %s (%s)',
+        [DirectoryName, SysErrorMessage(ErrorCode)]);
+    end;
+    FillChar(DirectoryInformation, SizeOf(DirectoryInformation), 0);
+    if not GetFileInformationByHandle(Result.FPinnedHandle,
+      DirectoryInformation) then
+    begin
+      ErrorCode := GetLastError;
+      raise EInOutError.CreateFmt('Unable to inspect pinned output ' +
+        'directory: %s (%s)', [DirectoryName, SysErrorMessage(ErrorCode)]);
+    end;
+    if (DirectoryInformation.dwFileAttributes and
+      FILE_ATTRIBUTE_DIRECTORY) = 0 then
+      raise EInOutError.Create('Pinned output path is not a directory: ' +
+        DirectoryName);
+    Result.FVolumeSerialNumber := DirectoryInformation.dwVolumeSerialNumber;
+    Result.FFileIndex := (QWord(DirectoryInformation.nFileIndexHigh) shl 32) or
+      QWord(DirectoryInformation.nFileIndexLow);
+    { GetFinalPathNameByHandleW binds containment to the directory actually
+      opened even when a junction or reparse point changed after preflight. }
+    DirectoryName := FinalWindowsPathFromHandle(Result.FPinnedHandle);
+    Result.FDirectoryName := DirectoryName;
+
+    { Keep every mutable ancestor open without delete sharing. Together with
+      the final-directory handle this prevents a pathname component from
+      being renamed or removed before the pinned operation finishes. }
+    VolumeRoot := WindowsVolumeRoot(DirectoryName);
+    GuardDirectory := ExtractFileDir(DirectoryName);
+    while GuardDirectory <> '' do
+    begin
+      { Drive roots and UNC share roots cannot be renamed within their own
+        volume. ExtractFileDir would otherwise descend from a UNC share to an
+        invalid server-only path such as \\server. }
+      if SameFileName(GuardDirectory, VolumeRoot) then
+        Break;
+      ParentDirectory := ExtractFileDir(GuardDirectory);
+      if SameFileName(ParentDirectory, GuardDirectory) then
+        Break;
+      GuardWide := UTF8Decode(GuardDirectory);
+      GuardHandle := CreateFileW(PWideChar(GuardWide), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ or FILE_SHARE_WRITE, nil, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS, 0);
+      if GuardHandle = INVALID_HANDLE_VALUE then
+      begin
+        ErrorCode := GetLastError;
+        raise EInOutError.CreateFmt('Unable to protect output-directory ' +
+          'ancestor: %s (%s)', [GuardDirectory,
+          SysErrorMessage(ErrorCode)]);
+      end;
+      GuardCount := Length(Result.FGuardHandles);
+      SetLength(Result.FGuardHandles, GuardCount + 1);
+      Result.FGuardHandles[GuardCount] := GuardHandle;
+      GuardDirectory := ParentDirectory;
+    end;
+    Result.VerifyCurrentPath;
+    {$ENDIF}
+    {$IFNDEF UNIX}
+    {$IFNDEF Windows}
+    Result.FPinnedHandle := feInvalidHandle;
+    {$ENDIF}
+    {$ENDIF}
+  except
+    Result.Free;
+    raise;
+  end;
+end;
 
 {**
   Removes redundant trailing delimiters without collapsing a filesystem root.
@@ -841,17 +1538,48 @@ begin
   {$ENDIF}
 end;
 
-procedure FlushFileStream(AStream: TFileStream);
+procedure FlushFileHandle(AHandle: THandle);
 begin
-  if AStream = nil then
-    Exit;
   {$IFDEF UNIX}
-  if fpFsync(AStream.Handle) <> 0 then
+  if fpFsync(AHandle) <> 0 then
     raise EWriteError.CreateFmt('Unable to flush file stream: %s',
       [SysErrorMessage(fpGetErrNo)]);
   {$ELSE}
-  if not FlushFileBuffers(AStream.Handle) then
+  if not FlushFileBuffers(AHandle) then
     RaiseLastOSError;
+  {$ENDIF}
+end;
+
+procedure FlushFileStream(AStream: TFileStream);
+begin
+  if AStream <> nil then
+    FlushFileHandle(AStream.Handle);
+end;
+
+function ReplaceFileAtomically(const ASource, ADestination: string): Boolean;
+{$IFDEF Windows}
+const
+  AtomicMoveReplaceExisting = $00000001;
+  AtomicMoveWriteThrough = $00000008;
+var
+  DestinationWide, SourceWide: UnicodeString;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  Result := fpRename(PChar(ASource), PChar(ADestination)) = 0;
+  {$ENDIF}
+  {$IFDEF Windows}
+  SourceWide := UTF8Decode(ASource);
+  DestinationWide := UTF8Decode(ADestination);
+  Result := MoveFileExW(PWideChar(SourceWide), PWideChar(DestinationWide),
+    AtomicMoveReplaceExisting or AtomicMoveWriteThrough);
+  {$ENDIF}
+  {$IFNDEF UNIX}
+  {$IFNDEF Windows}
+  if FileExists(ADestination) and not DeleteFile(ADestination) then
+    Exit(False);
+  Result := RenameFile(ASource, ADestination);
+  {$ENDIF}
   {$ENDIF}
 end;
 

@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+
+PackageIdentifier: AndreiIonutDamian.PurpleRaySBOMAnalyzer
+PackageVersion: @VERSION@
+PackageLocale: en-US
+Publisher: Andrei Ionut Damian
+PublisherUrl: https://github.com/aidamian
+PublisherSupportUrl: https://github.com/aidamian/PurpleRay_SBOM_Analyzer/issues
+PackageName: PurpleRay SBOM Analyzer
+PackageUrl: https://github.com/aidamian/PurpleRay_SBOM_Analyzer
+License: Apache-2.0
+LicenseUrl: https://github.com/aidamian/PurpleRay_SBOM_Analyzer/blob/main/LICENSE
+Copyright: Copyright (c) 2026 Andrei Ionut Damian
+ShortDescription: Generate, inspect, and compare local CycloneDX software bills of materials.
+Description: PurpleRay SBOM Analyzer scans application folders, records component evidence, exports CycloneDX JSON, and compares completed scans locally.
+Moniker: purpleray-sbom-analyzer
+Tags:
+  - cyclonedx
+  - sbom
+  - software-composition-analysis
+ReleaseNotesUrl: https://github.com/aidamian/PurpleRay_SBOM_Analyzer/releases/tag/v@VERSION@
+ManifestType: defaultLocale
+ManifestVersion: 1.10.0
+

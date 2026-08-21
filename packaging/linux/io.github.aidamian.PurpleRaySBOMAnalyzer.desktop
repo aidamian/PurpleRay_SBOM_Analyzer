@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=PurpleRay SBOM Analyzer
+Comment=Generate and compare CycloneDX software bills of materials
+Exec=purpleray-sbom-analyzer
+Icon=io.github.aidamian.PurpleRaySBOMAnalyzer
+Terminal=false
+Categories=Development;
+Keywords=SBOM;CycloneDX;software;components;security;
+StartupNotify=true

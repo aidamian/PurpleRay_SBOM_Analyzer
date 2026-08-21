@@ -22,7 +22,9 @@ permissions:
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('purpleray-sbom-analyzer-pr-{0}', github.event.pull_request.number) || 'purpleray-sbom-analyzer-release' }}
-  cancel-in-progress: true
+  # New commits may supersede an open PR run, but a release run must finish so
+  # its version tag can never be left without the corresponding release.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FPC_VERSION: '3.2.2'
@@ -114,6 +116,9 @@ jobs:
           echo "Version: ${{ steps.version.outputs.version }}"
           echo "Publish release: ${{ steps.version.outputs.is_release }}"
 
+      - name: Verify tracked version fallbacks
+        run: scripts/check-version.sh
+
   build:
     name: ${{ matrix.config.name }}
     needs: prepare
@@ -126,7 +131,6 @@ jobs:
             id: windows
             os: windows-latest
             widgetset: win32
-            package_suffix: windows-x64.zip
             use_cache: 'true'
             laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus Windows 64 bits/Lazarus 4.2/lazarus-4.2-fpc-3.2.2-win64.exe
             fpc_url: ''
@@ -134,7 +138,6 @@ jobs:
             id: linux
             os: ubuntu-24.04
             widgetset: gtk3
-            package_suffix: linux-x64
             use_cache: 'true'
             laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus Linux amd64 DEB/Lazarus 4.2/lazarus-project_4.2.0-0_amd64.deb
             fpc_url: |-
@@ -146,7 +149,6 @@ jobs:
           #   id: macos
           #   os: macos-15-intel
           #   widgetset: cocoa
-          #   package_suffix: macos.zip
           #   use_cache: 'true'
           #   laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus macOS x86-64/Lazarus 4.2/lazarus-darwin-x86_64-4.2.zip
           #   fpc_url: https://sourceforge.net/projects/lazarus/files/Lazarus macOS x86-64/Lazarus 4.2/fpc-3.2.2.intelarm64-macosx.dmg
@@ -197,7 +199,7 @@ jobs:
             timeout --signal=TERM --kill-after=10s 120s \
             apt-get install "${apt_options[@]}" \
               --yes --no-install-recommends libgtk-3-dev libgtk2.0-dev \
-              python3-jsonschema
+              appstream desktop-file-utils python3-jsonschema
 
       - name: Cache pinned Linux toolchain installers
         if: runner.os == 'Linux'
@@ -316,6 +318,187 @@ jobs:
           PURPLERAY_CYCLONEDX_FIXTURE_DIR: ${{ runner.temp }}/cyclonedx-fixtures
         run: scripts/run-tests.sh -Px86_64
 
+      - name: Build native application
+        run: >-
+          lazbuild -B --build-mode=Release
+          --widgetset=${{ matrix.config.widgetset }}
+          --cpu=x86_64 src/purpleray_sbom_analyzer.lpi
+
+      - name: Verify native Linux command line without a display
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          application='build/release/purpleray-sbom-analyzer'
+          version='${{ needs.prepare.outputs.version }}'
+          cli_root="$RUNNER_TEMP/purpleray-cli-smoke"
+          target="$cli_root/target-ță"
+          output="$cli_root/result-ță.cdx.json"
+          mkdir -p "$target"
+          printf '%s\n' \
+            '{"name":"ci-headless-fixture","version":"1.0.0","dependencies":{"left-pad":"1.3.0"}}' \
+            > "$target/package.json"
+
+          profile_fingerprint() {
+            local root
+            for root in "$HOME/.purpleray" "$HOME/.sbom-analyzer"; do
+              if [[ ! -e "$root" ]]; then
+                printf 'ABSENT|%s\n' "$root"
+                continue
+              fi
+              find "$root" -printf 'ENTRY|%y|%P|%s|%T@\n' | sort
+              find "$root" -type f -print0 | sort -z |
+                xargs -0 -r sha256sum
+            done | sha256sum | awk '{ print $1 }'
+          }
+          profile_before=$(profile_fingerprint)
+
+          version_output=$(env -u DISPLAY -u WAYLAND_DISPLAY \
+            "$application" --version)
+          test "$version_output" = "PurpleRay SBOM Analyzer $version"
+          env -u DISPLAY -u WAYLAND_DISPLAY \
+            "$application" --help > "$cli_root/help.stdout" \
+            2> "$cli_root/help.stderr"
+          grep -F 'Usage:' "$cli_root/help.stdout"
+          test ! -s "$cli_root/help.stderr"
+
+          set +e
+          env -u DISPLAY -u WAYLAND_DISPLAY \
+            "$application" --unknown > "$cli_root/usage.stdout" \
+            2> "$cli_root/usage.stderr"
+          usage_status=$?
+          set -e
+          test "$usage_status" -eq 2
+          test ! -s "$cli_root/usage.stdout"
+          grep -F 'unknown argument: --unknown' "$cli_root/usage.stderr"
+
+          env -u DISPLAY -u WAYLAND_DISPLAY \
+            "$application" --scan "$target" --output "$output" \
+            > "$cli_root/scan.stdout" 2> "$cli_root/scan.stderr"
+          grep -F "SBOM written: $output" "$cli_root/scan.stdout"
+          test ! -s "$cli_root/scan.stderr"
+          test -s "$output"
+          test "$(profile_fingerprint)" = "$profile_before"
+
+      - name: Verify native Windows command line with redirected streams
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $application = (Resolve-Path 'build/release/purpleray-sbom-analyzer.exe').Path
+          $version = '${{ needs.prepare.outputs.version }}'
+          $cliRoot = Join-Path $env:RUNNER_TEMP 'purpleray-cli-ță'
+          $target = Join-Path $cliRoot 'target-ță'
+          $output = Join-Path $cliRoot 'result-ță.cdx.json'
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          [IO.File]::WriteAllText(
+            (Join-Path $target 'package.json'),
+            '{"name":"ci-headless-fixture","version":"1.0.0","dependencies":{"left-pad":"1.3.0"}}',
+            [Text.UTF8Encoding]::new($false)
+          )
+
+          function Get-ProfileFingerprint {
+            $userProfile = [Environment]::GetFolderPath(
+              [Environment+SpecialFolder]::UserProfile
+            )
+            $roots = @(
+              (Join-Path $userProfile '.purpleray'),
+              (Join-Path $userProfile '.sbom-analyzer')
+            )
+            $records = foreach ($root in $roots) {
+              if (-not (Test-Path -LiteralPath $root)) {
+                "ABSENT|$root"
+                continue
+              }
+              $rootItem = Get-Item -LiteralPath $root -Force
+              "DIRECTORY|$($rootItem.FullName)|$($rootItem.LastWriteTimeUtc.Ticks)"
+              Get-ChildItem -LiteralPath $root -Force -Recurse | Sort-Object FullName |
+                ForEach-Object {
+                  if ($_.PSIsContainer) {
+                    'DIRECTORY|{0}|{1}' -f $_.FullName, $_.LastWriteTimeUtc.Ticks
+                  }
+                  else {
+                    $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+                    'FILE|{0}|{1}|{2}|{3}' -f $_.FullName, $_.Length,
+                      $_.LastWriteTimeUtc.Ticks, $hash
+                  }
+                }
+            }
+            return ($records -join "`n")
+          }
+
+          function Invoke-NativeCli {
+            param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+            $startInfo = [Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $application
+            $startInfo.WorkingDirectory = (Split-Path -Parent $application)
+            $startInfo.UseShellExecute = $false
+            $startInfo.CreateNoWindow = $true
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+            $startInfo.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+            $startInfo.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
+            foreach ($argument in $Arguments) {
+              [void]$startInfo.ArgumentList.Add($argument)
+            }
+            $process = [Diagnostics.Process]::new()
+            $process.StartInfo = $startInfo
+            if (-not $process.Start()) {
+              throw 'Unable to start the native command-line smoke process'
+            }
+            $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+            $stderrTask = $process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(120000)) {
+              $process.Kill($true)
+              throw 'Native command-line smoke process timed out'
+            }
+            $process.Refresh()
+            if ($process.MainWindowHandle -ne [IntPtr]::Zero) {
+              throw 'A command-line invocation created a main window'
+            }
+            [PSCustomObject]@{
+              ExitCode = $process.ExitCode
+              Stdout = $stdoutTask.Result
+              Stderr = $stderrTask.Result
+            }
+          }
+
+          $profileBefore = Get-ProfileFingerprint
+          $result = Invoke-NativeCli -Arguments @('--version')
+          if ($result.ExitCode -ne 0 -or
+              $result.Stdout.TrimEnd([char[]]"`r`n") -cne
+                "PurpleRay SBOM Analyzer $version" -or $result.Stderr) {
+            throw "Native --version failed: $($result | ConvertTo-Json -Compress)"
+          }
+          $result = Invoke-NativeCli -Arguments @('--help')
+          if ($result.ExitCode -ne 0 -or $result.Stdout -notmatch '(?m)^Usage:$' -or
+              $result.Stderr) {
+            throw 'Native --help failed'
+          }
+          $result = Invoke-NativeCli -Arguments @('--unknown')
+          if ($result.ExitCode -ne 2 -or $result.Stdout -or
+              $result.Stderr -notmatch 'unknown argument: --unknown') {
+            throw 'Native unknown-option handling failed'
+          }
+          $result = Invoke-NativeCli -Arguments @(
+            '--scan', $target, '--output', $output
+          )
+          if ($result.ExitCode -ne 0 -or
+              $result.Stdout.TrimEnd([char[]]"`r`n") -cne
+                "SBOM written: $output" -or $result.Stderr) {
+            throw "Native headless scan failed: $($result | ConvertTo-Json -Compress)"
+          }
+          if (-not (Test-Path -LiteralPath $output -PathType Leaf)) {
+            throw 'Native headless scan did not create its requested output'
+          }
+          $bom = Get-Content -LiteralPath $output -Raw | ConvertFrom-Json
+          if ($bom.bomFormat -cne 'CycloneDX' -or $bom.specVersion -cne '1.7') {
+            throw 'Native headless output is not CycloneDX 1.7 JSON'
+          }
+          $profileAfter = Get-ProfileFingerprint
+          if ($profileAfter -cne $profileBefore) {
+            throw 'Native command-line invocations changed desktop application data'
+          }
+
       - name: Validate generated CycloneDX 1.6 and 1.7 documents
         if: runner.os == 'Linux'
         timeout-minutes: 2
@@ -326,86 +509,28 @@ jobs:
           "$RUNNER_TEMP/cyclonedx-fixtures/structure-1.7.cdx.json"
           "$RUNNER_TEMP/cyclonedx-fixtures/compliance-1.6.cdx.json"
           "$RUNNER_TEMP/cyclonedx-fixtures/compliance-1.7.cdx.json"
-
-      - name: Build native application
-        run: >-
-          lazbuild -B --build-mode=Release
-          --widgetset=${{ matrix.config.widgetset }}
-          --cpu=x86_64 src/purpleray_sbom_analyzer.lpi
+          "$RUNNER_TEMP/purpleray-cli-smoke/result-ță.cdx.json"
 
       - name: Package and verify Windows executable
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $expectedVersion = '${{ needs.prepare.outputs.version }}'
-          $expectedFileVersion = "$expectedVersion.0"
-          $expectedParts = @($expectedVersion.Split('.') | ForEach-Object { [int]$_ })
-          $executable = Get-Item 'build/release/purpleray-sbom-analyzer.exe'
-          $versionInfo = $executable.VersionInfo
-          $expectedMetadata = [ordered]@{
-            ProductName = 'PurpleRay SBOM Analyzer'
-            ProductVersion = $expectedVersion
-            FileVersion = $expectedFileVersion
-            FileDescription = 'PurpleRay SBOM Analyzer'
-            CompanyName = 'Andrei Ionut Damian'
-            InternalName = 'purpleray-sbom-analyzer'
-            LegalCopyright = 'Copyright (c) 2026 Andrei Ionut Damian'
-            OriginalFilename = 'purpleray-sbom-analyzer.exe'
-          }
-          $expectedNumericMetadata = [ordered]@{
-            FileMajorPart = $expectedParts[0]
-            FileMinorPart = $expectedParts[1]
-            FileBuildPart = $expectedParts[2]
-            FilePrivatePart = 0
-            ProductMajorPart = $expectedParts[0]
-            ProductMinorPart = $expectedParts[1]
-            ProductBuildPart = $expectedParts[2]
-            ProductPrivatePart = 0
-          }
-          $metadataErrors = [System.Collections.Generic.List[string]]::new()
-          foreach ($field in $expectedMetadata.Keys) {
-            if ($versionInfo.$field -ne $expectedMetadata[$field]) {
-              $metadataErrors.Add(
-                "$field expected '$($expectedMetadata[$field])', got '$($versionInfo.$field)'"
-              )
-            }
-          }
-          foreach ($field in $expectedNumericMetadata.Keys) {
-            if ($versionInfo.$field -ne $expectedNumericMetadata[$field]) {
-              $metadataErrors.Add(
-                "$field expected '$($expectedNumericMetadata[$field])', got '$($versionInfo.$field)'"
-              )
-            }
-          }
-          if ($metadataErrors.Count -gt 0) {
-            throw "Invalid Windows version metadata:`n - $($metadataErrors -join "`n - ")"
-          }
-          $stage = 'build/package-windows'
-          $package = 'dist/purpleray-sbom-analyzer-v${{ needs.prepare.outputs.version }}-windows-x64.zip'
-          New-Item -ItemType Directory -Force -Path $stage, 'dist' | Out-Null
-          Copy-Item 'build/release/purpleray-sbom-analyzer.exe' "$stage/purpleray-sbom-analyzer.exe"
-          Compress-Archive -Path "$stage/purpleray-sbom-analyzer.exe" -DestinationPath $package -Force
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $package))
-          try {
-            $files = @($archive.Entries | Where-Object { -not $_.FullName.EndsWith('/') })
-            if ($files.Count -ne 1 -or $files[0].FullName -ne 'purpleray-sbom-analyzer.exe') {
-              throw 'Windows archive must contain exactly purpleray-sbom-analyzer.exe'
-            }
-          } finally {
-            $archive.Dispose()
-          }
+        run: scripts/package-windows.ps1 -Version '${{ needs.prepare.outputs.version }}'
 
-      - name: Package and verify Linux executable
+      - name: Generate and verify Windows package-manager manifests
+        if: runner.os == 'Windows'
+        run: >-
+          python scripts/generate-package-manifests.py
+          --version '${{ needs.prepare.outputs.version }}'
+          --windows-archive
+          'dist/purpleray-sbom-analyzer-v${{ needs.prepare.outputs.version }}-windows-x64.zip'
+          --output-dir dist
+
+      - name: Package and verify Linux distributions
         if: runner.os == 'Linux'
         run: |
-          mkdir -p dist
-          package='dist/purpleray-sbom-analyzer-v${{ needs.prepare.outputs.version }}-linux-x64'
-          cp build/release/purpleray-sbom-analyzer "$package"
-          chmod 755 "$package"
-          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 1
-          file "$package" | grep -E 'ELF 64-bit.*x86-64'
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$GITHUB_SHA")
+          export SOURCE_DATE_EPOCH
+          scripts/package-linux.sh '${{ needs.prepare.outputs.version }}'
 
       - name: Package and verify macOS application
         if: runner.os == 'macOS'
@@ -415,7 +540,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: package-${{ matrix.config.id }}
-          path: dist/purpleray-sbom-analyzer-v${{ needs.prepare.outputs.version }}-${{ matrix.config.package_suffix }}
+          path: dist/*
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -449,24 +574,81 @@ jobs:
         shell: bash
         run: |
           cd release-assets
+          export LC_ALL=C
           version='${{ needs.prepare.outputs.version }}'
           windows="purpleray-sbom-analyzer-v${version}-windows-x64.zip"
-          linux="purpleray-sbom-analyzer-v${version}-linux-x64"
+          linux="purpleray-sbom-analyzer-v${version}-linux-x64.tar.gz"
+          debian="purpleray-sbom-analyzer_${version}_amd64.deb"
+          scoop='purpleray-sbom-analyzer.json'
+          winget="purpleray-sbom-analyzer-v${version}-winget-manifests.zip"
           macos="purpleray-sbom-analyzer-v${version}-macos.zip"
-          available=()
+          required=("$windows" "$linux" "$debian" "$scoop" "$winget")
+          for asset in "${required[@]}"; do
+            if [[ ! -f "$asset" ]]; then
+              echo "Required release asset is missing: $asset" >&2
+              exit 1
+            fi
+          done
 
-          if [[ -f "$windows" ]]; then
-            test "$(unzip -Z1 "$windows" | grep -Evc '/$')" -eq 1
-            test "$(unzip -Z1 "$windows")" = 'purpleray-sbom-analyzer.exe'
-            unzip -p "$windows" | file - | grep -E 'PE32\+ executable.*x86-64'
-            available+=("$windows")
-          fi
+          mapfile -t windows_files < <(unzip -Z1 "$windows" | sed -n '/\/$/!p' | sort)
+          expected_windows=(LICENSE NOTICE purpleray-sbom-analyzer.exe)
+          test "${windows_files[*]}" = "${expected_windows[*]}"
+          unzip -p "$windows" purpleray-sbom-analyzer.exe |
+            file - | grep -E 'PE32\+ executable.*x86-64'
+          cmp ../LICENSE <(unzip -p "$windows" LICENSE)
+          cmp ../NOTICE <(unzip -p "$windows" NOTICE)
 
-          if [[ -f "$linux" ]]; then
-            file "$linux" | grep -E 'ELF 64-bit.*x86-64'
-            chmod 755 "$linux"
-            available+=("$linux")
-          fi
+          linux_root="purpleray-sbom-analyzer-v${version}-linux-x64"
+          mapfile -t linux_files < <(tar -tzf "$linux" | sed -n '/\/$/!p' | sort)
+          expected_linux=(
+            "$linux_root/LICENSE"
+            "$linux_root/NOTICE"
+            "$linux_root/purpleray-sbom-analyzer"
+            "$linux_root/share/applications/io.github.aidamian.PurpleRaySBOMAnalyzer.desktop"
+            "$linux_root/share/icons/hicolor/256x256/apps/io.github.aidamian.PurpleRaySBOMAnalyzer.png"
+            "$linux_root/share/metainfo/io.github.aidamian.PurpleRaySBOMAnalyzer.metainfo.xml"
+          )
+          test "${linux_files[*]}" = "${expected_linux[*]}"
+          tar -xOzf "$linux" "$linux_root/purpleray-sbom-analyzer" |
+            file - | grep -E 'ELF 64-bit.*x86-64'
+          cmp ../LICENSE <(tar -xOzf "$linux" "$linux_root/LICENSE")
+          cmp ../NOTICE <(tar -xOzf "$linux" "$linux_root/NOTICE")
+
+          test "$(dpkg-deb --field "$debian" Package)" = 'purpleray-sbom-analyzer'
+          test "$(dpkg-deb --field "$debian" Version)" = "$version"
+          test "$(dpkg-deb --field "$debian" Architecture)" = 'amd64'
+          test "$(dpkg-deb --field "$debian" Depends)" = 'libc6 (>= 2.34), libgtk-3-0'
+          mapfile -t debian_files < <(
+            dpkg-deb --fsys-tarfile "$debian" |
+              tar -tf - |
+              sed -e 's#^\./##' -e '/^$/d' -e '/\/$/d' |
+              sort
+          )
+          expected_debian=(
+            'usr/bin/purpleray-sbom-analyzer'
+            'usr/share/applications/io.github.aidamian.PurpleRaySBOMAnalyzer.desktop'
+            'usr/share/doc/purpleray-sbom-analyzer/LICENSE'
+            'usr/share/doc/purpleray-sbom-analyzer/NOTICE'
+            'usr/share/doc/purpleray-sbom-analyzer/copyright'
+            'usr/share/icons/hicolor/256x256/apps/io.github.aidamian.PurpleRaySBOMAnalyzer.png'
+            'usr/share/metainfo/io.github.aidamian.PurpleRaySBOMAnalyzer.metainfo.xml'
+          )
+          test "${debian_files[*]}" = "${expected_debian[*]}"
+          dpkg-deb --fsys-tarfile "$debian" |
+            tar -xOf - ./usr/bin/purpleray-sbom-analyzer |
+            file - | grep -E 'ELF 64-bit.*x86-64'
+          dpkg-deb --fsys-tarfile "$debian" |
+            tar -xOf - ./usr/share/doc/purpleray-sbom-analyzer/LICENSE |
+            cmp - ../LICENSE
+          dpkg-deb --fsys-tarfile "$debian" |
+            tar -xOf - ./usr/share/doc/purpleray-sbom-analyzer/NOTICE |
+            cmp - ../NOTICE
+
+          python3 ../scripts/generate-package-manifests.py \
+            --version "$version" --windows-archive "$windows" \
+            --output-dir . --verify-only
+
+          available=("${required[@]}")
 
           if [[ -f "$macos" ]]; then
             test "$(unzip -Z1 "$macos" | grep -Ec '^PurpleRay SBOM Analyzer\.app/Contents/MacOS/[^/]+$')" -eq 1
@@ -478,7 +660,23 @@ jobs:
           test "${#available[@]}" -gt 0
           test "$(find . -maxdepth 1 -type f | wc -l)" -eq "${#available[@]}"
           printf 'Publishing %s\n' "${available[@]}"
-          sha256sum "${available[@]}" > SHA256SUMS.txt
+          printf '%s\n' "${available[@]}" | sort | xargs sha256sum > SHA256SUMS.txt
+
+      - name: Validate package manifests against pinned official schemas
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          sudo apt-get update --quiet \
+            -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20
+          sudo apt-get install --yes --no-install-recommends \
+            python3-jsonschema python3-yaml
+          python3 scripts/validate-package-manifests.py --self-test \
+            --timeout-seconds 15 \
+            --scoop-manifest release-assets/purpleray-sbom-analyzer.json \
+            --winget-archive \
+            'release-assets/purpleray-sbom-analyzer-v${{ needs.prepare.outputs.version }}-winget-manifests.zip'
 
       - name: Attest release build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -549,3 +747,101 @@ jobs:
             gh release create "$TAG" "${assets[@]}" \
               --title "PurpleRay SBOM Analyzer $TAG" --notes-file release-notes.md
           fi
+
+      - name: Report WinGet submission gate
+        shell: bash
+        env:
+          WINGET_SUBMISSION_ENABLED: ${{ vars.WINGET_SUBMISSION_ENABLED }}
+        run: |
+          if [[ "$WINGET_SUBMISSION_ENABLED" == true ]]; then
+            echo '::notice title=WinGet submission enabled::The credential-gated WinGet submission job will run after this release.'
+            # shellcheck disable=SC2016
+            printf '%s\n' \
+              '### WinGet submission' \
+              '' \
+              'Enabled by the `WINGET_SUBMISSION_ENABLED` repository variable; the credential gate runs next.' \
+              >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '::notice title=WinGet submission disabled::Set WINGET_SUBMISSION_ENABLED=true after initial upstream approval to opt in.'
+            # shellcheck disable=SC2016
+            printf '%s\n' \
+              '### WinGet submission' \
+              '' \
+              'Disabled (the default). No additional runner was allocated; the release includes the validated manifest archive.' \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # Opt in only after the operator has arranged the initial upstream package:
+  # set WINGET_SUBMISSION_ENABLED=true and add WINGET_CREATE_GITHUB_TOKEN.
+  submit-winget:
+    name: Submit WinGet manifest (credential-gated)
+    if: ${{ always() && needs.prepare.result == 'success' && needs.release.result == 'success' && needs.prepare.outputs.is_release == 'true' && vars.WINGET_SUBMISSION_ENABLED == 'true' }}
+    needs: [prepare, release]
+    runs-on: windows-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check WinGet submission credential
+        id: credential
+        shell: pwsh
+        env:
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINGET_CREATE_GITHUB_TOKEN)) {
+            'enabled=false' | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            '::notice title=WinGet submission skipped::WINGET_CREATE_GITHUB_TOKEN is not configured; release assets and manifests were still published.'
+            @'
+          ### WinGet submission
+
+          Skipped: the `WINGET_CREATE_GITHUB_TOKEN` repository secret is not configured.
+          The release itself succeeded and includes the validated WinGet manifest archive.
+          '@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          } else {
+            'enabled=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            @'
+          ### WinGet submission
+
+          Credential gate passed; submission to `microsoft/winget-pkgs` is running.
+          '@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          }
+
+      - name: Download and verify pinned WingetCreate
+        if: steps.credential.outputs.enabled == 'true'
+        shell: pwsh
+        run: |
+          $tool = Join-Path $env:RUNNER_TEMP 'wingetcreate.exe'
+          Invoke-WebRequest `
+            -Uri 'https://github.com/microsoft/winget-create/releases/download/v1.12.13.0/wingetcreate.exe' `
+            -OutFile $tool
+          $actual = (Get-FileHash -LiteralPath $tool -Algorithm SHA256).Hash
+          $expected = '24042BD37915805615E6CF969AC57C6439124C3FE85823327F5F3FB24BD9FFEA'
+          if ($actual -ne $expected) {
+            throw "WingetCreate SHA-256 mismatch: $actual"
+          }
+
+      - name: Update and submit portable WinGet manifest
+        if: steps.credential.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+        run: |
+          $version = '${{ needs.prepare.outputs.version }}'
+          $identifier = 'AndreiIonutDamian.PurpleRaySBOMAnalyzer'
+          $installerUrl = (
+            'https://github.com/aidamian/PurpleRay_SBOM_Analyzer/releases/' +
+            "download/v$version/purpleray-sbom-analyzer-v$version-windows-x64.zip"
+          )
+          $releaseNotesUrl = (
+            'https://github.com/aidamian/PurpleRay_SBOM_Analyzer/releases/' +
+            "tag/v$version"
+          )
+          $tool = Join-Path $env:RUNNER_TEMP 'wingetcreate.exe'
+          & $tool update $identifier --urls $installerUrl --version $version `
+            --release-notes-url $releaseNotesUrl --submit --no-open `
+            --prtitle "PurpleRay SBOM Analyzer $version"
+          if ($LASTEXITCODE -ne 0) {
+            throw "WingetCreate submission failed with exit code $LASTEXITCODE"
+          }
+          'Submitted the portable manifest update to `microsoft/winget-pkgs`.' |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

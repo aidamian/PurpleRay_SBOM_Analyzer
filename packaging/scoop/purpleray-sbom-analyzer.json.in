@@ -1,0 +1,34 @@
+{
+    "version": "@VERSION@",
+    "description": "Generate, inspect, and compare local CycloneDX software bills of materials.",
+    "homepage": "https://github.com/aidamian/PurpleRay_SBOM_Analyzer",
+    "license": {
+        "identifier": "Apache-2.0",
+        "url": "https://github.com/aidamian/PurpleRay_SBOM_Analyzer/blob/main/LICENSE"
+    },
+    "architecture": {
+        "64bit": {
+            "url": "@WINDOWS_URL@",
+            "hash": "@WINDOWS_SHA256@"
+        }
+    },
+    "bin": "purpleray-sbom-analyzer.exe",
+    "shortcuts": [
+        [
+            "purpleray-sbom-analyzer.exe",
+            "PurpleRay SBOM Analyzer"
+        ]
+    ],
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/aidamian/PurpleRay_SBOM_Analyzer/releases/download/v$version/purpleray-sbom-analyzer-v$version-windows-x64.zip"
+            }
+        },
+        "hash": {
+            "url": "https://github.com/aidamian/PurpleRay_SBOM_Analyzer/releases/download/v$version/SHA256SUMS.txt"
+        }
+    }
+}
+

@@ -6,7 +6,8 @@
 
   Description
   -----------
-  Initializes the LCL application, loads the embedded icon and form resources,
+  Dispatches informational or headless scan commands before the LCL widgetset
+  initializes. With no arguments, loads the embedded icon and form resources,
   creates the main window, and enters the native event loop.
 
   Citation request
@@ -26,7 +27,7 @@ program purpleray_sbom_analyzer;
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
-  Interfaces, Forms, Graphics, uMainForm, uVersionInfo;
+  uCommandLine, Interfaces, Forms, Graphics, uMainForm, uVersionInfo;
 
 {$R *.res}
 {$R app_icon.res}

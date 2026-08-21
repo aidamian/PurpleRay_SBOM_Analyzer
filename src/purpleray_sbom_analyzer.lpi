@@ -20,12 +20,12 @@
     <VersionInfo>
       <UseVersionInfo Value="True"/>
       <MajorVersionNr Value="0"/>
-      <MinorVersionNr Value="5"/>
+      <MinorVersionNr Value="6"/>
       <RevisionNr Value="0"/>
       <BuildNr Value="0"/>
       <Language Value="0409"/>
       <CharSet Value="04E4"/>
-      <StringTable Comments="Native static SBOM inventory and CycloneDX export" CompanyName="Andrei Ionut Damian" FileDescription="PurpleRay SBOM Analyzer" FileVersion="0.5.0.0" InternalName="purpleray-sbom-analyzer" LegalCopyright="Copyright (c) 2026 Andrei Ionut Damian" LegalTrademarks="" OriginalFilename="purpleray-sbom-analyzer.exe" ProductName="PurpleRay SBOM Analyzer" ProductVersion="0.5.0"/>
+      <StringTable Comments="Native static SBOM inventory and CycloneDX export" CompanyName="Andrei Ionut Damian" FileDescription="PurpleRay SBOM Analyzer" FileVersion="0.6.0.0" InternalName="purpleray-sbom-analyzer" LegalCopyright="Copyright (c) 2026 Andrei Ionut Damian" LegalTrademarks="" OriginalFilename="purpleray-sbom-analyzer.exe" ProductName="PurpleRay SBOM Analyzer" ProductVersion="0.6.0"/>
     </VersionInfo>
     <BuildModes Count="2">
       <Item1 Name="Debug" Default="True"/>
@@ -71,7 +71,7 @@
         <PackageName Value="LCL"/>
       </Item1>
     </RequiredPackages>
-    <Units Count="5">
+    <Units Count="7">
       <Unit0>
         <Filename Value="purpleray_sbom_analyzer.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -106,6 +106,16 @@
         <ResourceBaseClass Value="Frame"/>
         <UnitName Value="uCompareScansFrame"/>
       </Unit4>
+      <Unit5>
+        <Filename Value="uCommandLine.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="uCommandLine"/>
+      </Unit5>
+      <Unit6>
+        <Filename Value="uScanService.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="uScanService"/>
+      </Unit6>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

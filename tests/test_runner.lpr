@@ -32,7 +32,7 @@ uses
   uTaskHistory, uJSONUtils, uComponentNormalizer, uCycloneDX, uIgnoreMatcher,
   uScanEngine, uPlatform, uSystemInspector, uNativeDependencyInspector,
   uExportUtils, uVersionInfo, uScanWorker, uPresentation, uSPDXExpressions,
-  uComponentComparison;
+  uComponentComparison, uCommandLine, uScanService, uAtomicFiles;
 
 type
   TTestMethod = procedure;
@@ -77,6 +77,21 @@ type
   end;
 
   {$IFDEF UNIX}
+  { Rebinds an output parent when the scanner first polls cancellation. }
+  TOutputParentRebindController = class
+  private
+    FLinkBackToPinnedDirectory: Boolean;
+    FOriginalDirectory: string;
+    FMovedDirectory: string;
+  public
+    ErrorText: string;
+    Succeeded: Boolean;
+    Triggered: Boolean;
+    constructor Create(const AOriginalDirectory, AMovedDirectory: string;
+      ALinkBackToPinnedDirectory: Boolean);
+    function Check: Boolean;
+  end;
+
   { Supplies one byte to a FIFO if a regressed scanner attempts to open it. }
   TFIFOWriter = class(TThread)
   private
@@ -107,6 +122,84 @@ begin
   Inc(FChecks);
   Result := FChecks >= FLimit;
 end;
+
+{$IFDEF UNIX}
+{**
+  Configures one deterministic output-parent rebind during a scan.
+
+  Parameters
+  ----------
+  AOriginalDirectory
+    Directory path pinned by the scan service before scanning starts.
+  AMovedDirectory
+    Test-owned sibling name to which the original directory will be moved.
+  ALinkBackToPinnedDirectory
+    When True, replaces the old path with a symlink back to the moved pinned
+    object; when False, replaces it with a different directory object.
+
+  Returns
+  -------
+  TOutputParentRebindController
+    New controller owned by the test.
+
+  Raises
+  ------
+  EOutOfMemory
+    May propagate while allocating strings or the controller.
+}
+constructor TOutputParentRebindController.Create(const AOriginalDirectory,
+  AMovedDirectory: string; ALinkBackToPinnedDirectory: Boolean);
+begin
+  inherited Create;
+  FOriginalDirectory := AOriginalDirectory;
+  FMovedDirectory := AMovedDirectory;
+  FLinkBackToPinnedDirectory := ALinkBackToPinnedDirectory;
+end;
+
+{**
+  Replaces the validated parent path on the first cancellation poll.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  Boolean
+    Always False so the scan continues to its protected output activation.
+
+  Raises
+  ------
+  None
+    Fixture setup failures are retained in ErrorText for explicit assertions.
+}
+function TOutputParentRebindController.Check: Boolean;
+begin
+  Result := False;
+  if Triggered then
+    Exit;
+  Triggered := True;
+  if not RenameFile(FOriginalDirectory, FMovedDirectory) then
+  begin
+    ErrorText := 'unable to move the pinned output parent';
+    Exit;
+  end;
+  if FLinkBackToPinnedDirectory then
+  begin
+    if fpSymlink(PChar(FMovedDirectory), PChar(FOriginalDirectory)) <> 0 then
+    begin
+      ErrorText := 'unable to link the old path back to the pinned directory';
+      Exit;
+    end;
+  end
+  else if not ForceDirectories(FOriginalDirectory) then
+  begin
+    ErrorText := 'unable to recreate the output-parent pathname';
+    Exit;
+  end;
+  Succeeded := True;
+end;
+{$ENDIF}
 
 {**
   Records one worker completion without retaining the worker-owned task.
@@ -1106,8 +1199,8 @@ begin
     WorkflowText := WorkflowLines.Text;
     CheckPosition := Pos('scripts/check-version.sh', WorkflowText);
     WritePosition := Pos('scripts/write-version.sh', WorkflowText);
-    AssertTrue((CheckPosition = 0) or (CheckPosition > WritePosition),
-      'CI must not require synchronized fallbacks before generation');
+    AssertTrue((CheckPosition > 0) and (CheckPosition < WritePosition),
+      'CI must verify tracked fallbacks before generated metadata can mask them');
     AssertTrue(WritePosition > 0,
       'CI version generation step is missing');
     AssertTrue(WritePosition < Pos('scripts/run-tests.sh', WorkflowText),
@@ -1117,6 +1210,598 @@ begin
     ProjectLines.Free;
     VersionParts.Free;
     VersionLines.Free;
+  end;
+end;
+
+{**
+  Verifies Sprint 6 command parsing, explicit settings, output containment,
+  shared scan/export behavior, and the pre-widgetset application boundary.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when CLI argument policy, safe settings loading, output-path
+    validation, shared CycloneDX generation, or early LCL dispatch regresses.
+}
+procedure TestHeadlessCommandLine;
+var
+  Arguments: TCommandArgumentArray;
+  CommandSourceLines, ProgramLines, WorkerLines: TStringList;
+  CommandSource, ProgramText, WorkerText: string;
+  Data: TJSONData;
+  Digest, ErrorText, ManagedOutputDirectory, ManagedOutputFileName,
+    OutputDirectory, OutputFileName, SettingsFileName, TargetDirectory,
+    WrappedSettingsFileName: string;
+  InvalidRaised: Boolean;
+  Options: TCommandLineOptions;
+  OutputStream: TFileStream;
+  Settings: TScanSettings;
+  Task: TScanTask;
+  {$IFDEF UNIX}
+  LegacyTemporaryLink, VictimFileName: string;
+  {$ENDIF}
+begin
+  SetLength(Arguments, 0);
+  AssertTrue(ParseCommandLineArguments(Arguments, Options, ErrorText),
+    'empty arguments should select the desktop application');
+  AssertTrue(Options.Mode = clmGUI,
+    'empty arguments selected a non-GUI mode');
+  AssertEqual('', ErrorText,
+    'empty arguments returned an unexpected diagnostic');
+
+  AssertTrue(ParseCommandLineArguments(['--help'], Options, ErrorText),
+    '--help was rejected');
+  AssertTrue(Options.Mode = clmHelp, '--help selected the wrong mode');
+  AssertTrue(ParseCommandLineArguments(['-h'], Options, ErrorText),
+    '-h was rejected');
+  AssertTrue(Options.Mode = clmHelp, '-h selected the wrong mode');
+  AssertTrue(ParseCommandLineArguments(['--version'], Options, ErrorText),
+    '--version was rejected');
+  AssertTrue(Options.Mode = clmVersion,
+    '--version selected the wrong mode');
+
+  AssertTrue(ParseCommandLineArguments([
+    '--output', 'outside.cdx.json', '--settings', 'settings.json',
+    '--scan', 'target'], Options, ErrorText),
+    'complete headless arguments were rejected');
+  AssertTrue(Options.Mode = clmScan,
+    'complete headless arguments selected the wrong mode');
+  AssertEqual('target', Options.ScanDirectory,
+    'headless target argument differs');
+  AssertEqual('outside.cdx.json', Options.OutputFileName,
+    'headless output argument differs');
+  AssertEqual('settings.json', Options.SettingsFileName,
+    'headless settings argument differs');
+
+  AssertTrue(not ParseCommandLineArguments(['--scan', 'target'], Options,
+    ErrorText), 'missing --output was accepted');
+  AssertTrue(Pos('--output', ErrorText) > 0,
+    'missing-output diagnostic is not actionable');
+  AssertTrue(not ParseCommandLineArguments(['--help', '--version'], Options,
+    ErrorText), 'combined informational modes were accepted');
+  AssertTrue(not ParseCommandLineArguments([
+    '--scan', 'one', '--scan', 'two', '--output', 'outside.json'], Options,
+    ErrorText), 'duplicate --scan was accepted');
+  AssertTrue(not ParseCommandLineArguments(['--unknown'], Options,
+    ErrorText), 'an unknown CLI option was accepted');
+
+  SettingsFileName := IncludeTrailingPathDelimiter(TemporaryRoot) +
+    'cli-direct-settings.json';
+  WriteText(SettingsFileName,
+    '{"include_absolute_paths":true,"follow_symbolic_links":true,' +
+    '"allow_outside_root":true,"calculate_sha256":false,' +
+    '"remember_privacy_choices":false,' +
+    '"sbom_author_organization":"CLI Fixture",' +
+    '"sbom_author_email":"cli@example.invalid",' +
+    '"ignore_patterns":["cache","*.tmp"]}');
+  Settings := LoadCommandLineSettings(SettingsFileName);
+  try
+    AssertTrue(Settings.IncludeAbsolutePaths,
+      'direct CLI settings lost include-absolute-paths');
+    AssertTrue(Settings.FollowSymbolicLinks,
+      'direct CLI settings lost follow-links');
+    AssertTrue(Settings.AllowOutsideRoot,
+      'direct CLI settings lost allow-outside-root');
+    AssertTrue(not Settings.CalculateSHA256,
+      'direct CLI settings lost calculate-SHA choice');
+    AssertEqual('CLI Fixture', Settings.SBOMAuthorOrganization,
+      'direct CLI author organization differs');
+    AssertEqual('cli@example.invalid', Settings.SBOMAuthorEmail,
+      'direct CLI author email differs');
+    AssertEqual(2, Settings.IgnorePatterns.Count,
+      'direct CLI ignore patterns differ');
+  finally
+    Settings.Free;
+  end;
+
+  WrappedSettingsFileName := IncludeTrailingPathDelimiter(TemporaryRoot) +
+    'cli-wrapped-settings.json';
+  WriteText(WrappedSettingsFileName,
+    '{"format_version":1,"scan_settings":{' +
+    '"include_absolute_paths":false,"follow_symbolic_links":false,' +
+    '"allow_outside_root":false,"calculate_sha256":true,' +
+    '"ignore_patterns":["vendor"]}}');
+  Settings := LoadCommandLineSettings(WrappedSettingsFileName);
+  try
+    AssertTrue(Settings.CalculateSHA256,
+      'wrapped CLI settings lost calculate-SHA choice');
+    AssertEqual(1, Settings.IgnorePatterns.Count,
+      'wrapped CLI ignore patterns differ');
+    AssertEqual('vendor', Settings.IgnorePatterns[0],
+      'wrapped CLI ignore pattern differs');
+  finally
+    Settings.Free;
+  end;
+
+  WriteText(SettingsFileName, '{"calculate_sha256":"yes"}');
+  InvalidRaised := False;
+  try
+    Settings := LoadCommandLineSettings(SettingsFileName);
+    Settings.Free;
+  except
+    on E: Exception do
+      InvalidRaised := True;
+  end;
+  AssertTrue(InvalidRaised,
+    'CLI settings accepted a string in a Boolean field');
+
+  TargetDirectory := NewTemporaryDirectory('headless-target');
+  OutputDirectory := NewTemporaryDirectory('headless-output');
+  OutputFileName := IncludeTrailingPathDelimiter(OutputDirectory) +
+    'fixture.cdx.json';
+  WriteText(IncludeTrailingPathDelimiter(TargetDirectory) + 'package.json',
+    '{"name":"headless-fixture","version":"1.2.3",' +
+    '"dependencies":{"left-pad":"1.3.0"}}');
+  AssertEqual(ExpandFileName(OutputFileName),
+    ResolveScanOutputFileName(TargetDirectory, OutputFileName),
+    'safe headless output resolution differs');
+
+  InvalidRaised := False;
+  try
+    ResolveScanOutputFileName(TargetDirectory,
+      IncludeTrailingPathDelimiter(TargetDirectory) + 'inside.cdx.json');
+  except
+    on E: Exception do
+      InvalidRaised := True;
+  end;
+  AssertTrue(InvalidRaised,
+    'headless output inside the scan target was accepted');
+
+  InvalidRaised := False;
+  try
+    ResolveScanOutputFileName(TargetDirectory,
+      IncludeTrailingPathDelimiter(OutputDirectory) + 'missing' +
+      DirectorySeparator + 'result.cdx.json');
+  except
+    on E: Exception do
+      InvalidRaised := True;
+  end;
+  AssertTrue(InvalidRaised,
+    'headless output with a missing parent was accepted');
+
+  WriteText(OutputFileName, 'stale output that must be atomically replaced');
+  Task := TScanTask.Create;
+  try
+    Task.TargetDirectory := TargetDirectory;
+    Task.TargetRootName := 'headless-target';
+    Task.Settings.CalculateSHA256 := False;
+    AssertTrue(ExecuteScanToFile(Task, OutputFileName, nil, nil),
+      'shared headless scan/export service failed');
+    AssertTrue(Task.Status = tsCompleted,
+      'shared headless scan did not complete');
+    AssertEqual(ExpandFileName(OutputFileName), Task.GeneratedSBOMPath,
+      'shared headless output path differs');
+    AssertTrue(FileExists(OutputFileName),
+      'shared headless output was not created');
+    AssertTrue(SHA256File(OutputFileName, Digest, nil, nil),
+      'shared headless output could not be hashed');
+    AssertEqual(Digest, Task.GeneratedSBOMSHA256,
+      'shared headless output digest differs');
+    AssertTrue(FindComponent(Task.Components, 'left-pad') <> nil,
+      'shared headless scan omitted a manifest component');
+    OutputStream := TFileStream.Create(OutputFileName,
+      fmOpenRead or fmShareDenyNone);
+    try
+      Data := GetJSON(OutputStream);
+      try
+        AssertTrue(Data.JSONType = jtObject,
+          'shared headless output is not a JSON object');
+        AssertEqual('CycloneDX', JSONString(TJSONObject(Data), 'bomFormat'),
+          'shared headless output is not CycloneDX');
+      finally
+        Data.Free;
+      end;
+    finally
+      OutputStream.Free;
+    end;
+  finally
+    Task.Free;
+  end;
+
+  {$IFDEF UNIX}
+  LegacyTemporaryLink := OutputFileName + '.tmp';
+  VictimFileName := IncludeTrailingPathDelimiter(OutputDirectory) +
+    'atomic-symlink-victim.cdx.json';
+  AssertTrue(fpSymlink(PChar(VictimFileName),
+    PChar(LegacyTemporaryLink)) = 0,
+    'unable to create the dangling atomic-output symlink fixture');
+  Task := TScanTask.Create;
+  try
+    Task.TargetDirectory := TargetDirectory;
+    Task.TargetRootName := 'headless-target';
+    Task.Settings.CalculateSHA256 := False;
+    AssertTrue(ExecuteScanToFile(Task, OutputFileName, nil, nil),
+      'atomic output failed in the presence of an unrelated stale temp link');
+    AssertTrue(not FileExists(VictimFileName),
+      'atomic output followed a dangling temporary-file symlink');
+    AssertTrue(not CleanupEntryIsLink(OutputFileName),
+      'atomic output activated a temporary-file symlink as its destination');
+    AssertTrue(CleanupEntryIsLink(LegacyTemporaryLink),
+      'atomic output unexpectedly consumed the pre-planted stale symlink');
+  finally
+    Task.Free;
+  end;
+
+  {$ENDIF}
+
+  ManagedOutputDirectory := IncludeTrailingPathDelimiter(TargetDirectory) +
+    'managed-data' + DirectorySeparator + 'sboms';
+  AssertTrue(ForceDirectories(ManagedOutputDirectory),
+    'unable to create the managed-output regression directory');
+  ManagedOutputFileName := IncludeTrailingPathDelimiter(
+    ManagedOutputDirectory) + 'managed.cdx.json';
+  Task := TScanTask.Create;
+  try
+    Task.TargetDirectory := TargetDirectory;
+    Task.TargetRootName := 'headless-target';
+    Task.Settings.CalculateSHA256 := False;
+    AssertTrue(ExecuteScanToFile(Task, ManagedOutputFileName, nil, nil,
+      sopManagedApplicationData),
+      'GUI-managed SBOM output below the selected target was rejected');
+    AssertTrue(FileExists(ManagedOutputFileName),
+      'GUI-managed SBOM output was not created below the selected target');
+  finally
+    Task.Free;
+  end;
+
+  CommandSourceLines := TStringList.Create;
+  ProgramLines := TStringList.Create;
+  WorkerLines := TStringList.Create;
+  try
+    CommandSourceLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'uCommandLine.pas');
+    ProgramLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'purpleray_sbom_analyzer.lpr');
+    WorkerLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'uScanWorker.pas');
+    CommandSource := CommandSourceLines.Text;
+    ProgramText := ProgramLines.Text;
+    WorkerText := WorkerLines.Text;
+    AssertTrue(Pos('uCommandLine, Interfaces', ProgramText) > 0,
+      'the CLI unit no longer initializes before the widgetset');
+    AssertTrue(Pos('initialization' + LineEnding +
+      '  DispatchEarlyCommandLine;', CommandSource) > 0,
+      'CLI dispatch no longer occurs during early unit initialization');
+    AssertTrue(Pos('CommandLineToArgvW', CommandSource) > 0,
+      'native Windows Unicode argument collection is missing');
+    AssertTrue(Pos('Bytes := UTF8String(AText)', CommandSource) > 0,
+      'Unix command-line output can again double-encode UTF-8 text');
+    AssertTrue(Pos('ExecuteScanToFile(FTask', WorkerText) > 0,
+      'the GUI worker no longer shares the headless scan/export service');
+    AssertTrue(Pos('sopManagedApplicationData', WorkerText) > 0,
+      'the GUI worker regained the CLI output-containment restriction');
+    AssertTrue((Pos('GenerateCycloneDX(', WorkerText) = 0) and
+      (Pos('WriteAtomicUTF8(', WorkerText) = 0),
+      'the GUI worker regained a duplicate SBOM implementation');
+  finally
+    WorkerLines.Free;
+    ProgramLines.Free;
+    CommandSourceLines.Free;
+  end;
+end;
+
+{**
+  Verifies that strict CLI output activation cannot follow a rebound parent.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when a replacement directory or a symlink back to a moved pinned
+    directory receives output after the scan has started, or when Windows
+    permits a pinned directory or one of its ancestors to be renamed.
+  ETestSkipped
+    Raised on hosts other than Unix and Windows.
+}
+procedure TestStrictOutputParentPinning;
+{$IFDEF UNIX}
+var
+  TargetDirectory: string;
+
+  {**
+    Runs one output-parent rebind shape against the shared scan service.
+
+    Parameters
+    ----------
+    ALabel
+      Unique fixture suffix and diagnostic label.
+    ALinkBackToPinnedDirectory
+      Selects a different replacement directory or a symlink back to the
+      original pinned object after that object is moved.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    Exception
+      Raised when fixture setup fails or output reaches either path.
+  }
+  procedure RunRebindAttack(const ALabel: string;
+    ALinkBackToPinnedDirectory: Boolean);
+  var
+    Controller: TOutputParentRebindController;
+    MovedDirectory, OutputDirectory, OutputFileName, MovedOutputFileName:
+      string;
+    Task: TScanTask;
+  begin
+    OutputDirectory := NewTemporaryDirectory('strict-output-rebind-' + ALabel);
+    MovedDirectory := OutputDirectory + '-moved';
+    OutputFileName := IncludeTrailingPathDelimiter(OutputDirectory) +
+      'must-not-exist.cdx.json';
+    MovedOutputFileName := IncludeTrailingPathDelimiter(MovedDirectory) +
+      ExtractFileName(OutputFileName);
+    Controller := TOutputParentRebindController.Create(OutputDirectory,
+      MovedDirectory, ALinkBackToPinnedDirectory);
+    Task := TScanTask.Create;
+    try
+      Task.TargetDirectory := TargetDirectory;
+      Task.TargetRootName := 'strict-output-parent-pin';
+      Task.Settings.CalculateSHA256 := False;
+      AssertTrue(not ExecuteScanToFile(Task, OutputFileName,
+        @Controller.Check, nil),
+        ALabel + ': strict output accepted a rebound parent during scanning');
+      AssertTrue(Controller.Triggered,
+        ALabel + ': output-parent rebind fixture was not triggered');
+      AssertTrue(Controller.Succeeded,
+        ALabel + ': output-parent rebind fixture failed: ' +
+        Controller.ErrorText);
+      AssertTrue(Task.Status = tsFailed,
+        ALabel + ': output-parent rebind did not fail the task');
+      AssertTrue(Pos('rebound', Task.Errors.Text) > 0,
+        ALabel + ': failure did not explain the rejected directory identity');
+      AssertEqual('', Task.GeneratedSBOMPath,
+        ALabel + ': failed task retained a generated output path');
+      AssertTrue(not FileExists(OutputFileName),
+        ALabel + ': output was diverted through the replacement pathname');
+      AssertTrue(not FileExists(MovedOutputFileName),
+        ALabel + ': failed output remained in the pinned directory');
+    finally
+      Task.Free;
+      Controller.Free;
+    end;
+  end;
+{$ENDIF}
+{$IFDEF Windows}
+var
+  GuardChildDirectory, GuardMovedDirectory, GuardOutputFileName,
+    GuardParentDirectory: string;
+  DirectoryPin: TPinnedDirectory;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  TargetDirectory := NewTemporaryDirectory('strict-output-pin-target');
+  WriteText(IncludeTrailingPathDelimiter(TargetDirectory) + 'package.json',
+    '{"name":"strict-output-pin","version":"1.0.0"}');
+  RunRebindAttack('replacement', False);
+  RunRebindAttack('moved-link-back', True);
+  {$ELSE}
+  {$IFDEF Windows}
+  GuardParentDirectory := NewTemporaryDirectory('strict-output-win-guard');
+  GuardChildDirectory := IncludeTrailingPathDelimiter(GuardParentDirectory) +
+    'child';
+  GuardMovedDirectory := GuardParentDirectory + '-moved';
+  GuardOutputFileName := IncludeTrailingPathDelimiter(GuardChildDirectory) +
+    'guarded-output.cdx.json';
+  AssertTrue(ForceDirectories(GuardChildDirectory),
+    'unable to create the Windows pin-guard fixture');
+  DirectoryPin := PinExistingDirectory(GuardChildDirectory);
+  try
+    AssertTrue(not RenameFile(GuardParentDirectory, GuardMovedDirectory),
+      'Windows allowed a guarded output ancestor to be rebound');
+    WriteAtomicUTF8ToPinnedDirectory(DirectoryPin,
+      ExtractFileName(GuardOutputFileName), UTF8String('{"guarded":true}'));
+    AssertTrue(FileExists(GuardOutputFileName),
+      'Windows pin could not activate output in the guarded directory');
+  finally
+    DirectoryPin.Free;
+  end;
+  AssertTrue(RenameFile(GuardParentDirectory, GuardMovedDirectory),
+    'Windows ancestor guard was not released with the directory pin');
+  AssertTrue(FileExists(IncludeTrailingPathDelimiter(GuardMovedDirectory) +
+    'child' + DirectorySeparator + ExtractFileName(GuardOutputFileName)),
+    'Windows guarded output did not remain in the pinned directory object');
+  {$ELSE}
+  raise ETestSkipped.Create('requires Unix or Windows directory-pin support');
+  {$ENDIF}
+  {$ENDIF}
+end;
+
+{**
+  Verifies the Sprint 6 release, launcher, packaging, and onboarding contracts.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when active release assets lose notices, native CLI gates disappear,
+    launchers regress to unpinned/unverified downloads, package-manager
+    metadata becomes incomplete, or documentation revives an unshipped target.
+}
+procedure TestSprint6DistributionContracts;
+var
+  Lines: TStringList;
+  WorkflowText, ReadmeText, LinuxLauncherText, WSLLauncherText,
+    WindowsLauncherText, LinuxPackageText, WindowsPackageText, ScoopText,
+    WingetInstallerText, PackageValidatorText: string;
+  InstallPosition, LauncherPosition, DevelopmentPosition: SizeInt;
+begin
+  Lines := TStringList.Create;
+  try
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + '.github' +
+      DirectorySeparator + 'workflows' + DirectorySeparator +
+      'build-release.yml');
+    WorkflowText := Lines.Text;
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'README.md');
+    ReadmeText := Lines.Text;
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'start-linux.sh');
+    LinuxLauncherText := Lines.Text;
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'start-wsl2.sh');
+    WSLLauncherText := Lines.Text;
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'start-windows.ps1');
+    WindowsLauncherText := Lines.Text;
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'scripts' +
+      DirectorySeparator + 'package-linux.sh');
+    LinuxPackageText := Lines.Text;
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'scripts' +
+      DirectorySeparator + 'package-windows.ps1');
+    WindowsPackageText := Lines.Text;
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'packaging' +
+      DirectorySeparator + 'scoop' + DirectorySeparator +
+      'purpleray-sbom-analyzer.json.in');
+    ScoopText := Lines.Text;
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'packaging' +
+      DirectorySeparator + 'winget' + DirectorySeparator +
+      'AndreiIonutDamian.PurpleRaySBOMAnalyzer.installer.yaml.in');
+    WingetInstallerText := Lines.Text;
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'scripts' +
+      DirectorySeparator + 'validate-package-manifests.py');
+    PackageValidatorText := Lines.Text;
+
+    AssertTrue(Pos('cancel-in-progress: ${{ github.event_name == ' +
+      '''pull_request'' }}', WorkflowText) > 0,
+      'release workflow can again cancel main or manual release runs');
+    AssertTrue(Pos('Verify native Linux command line without a display',
+      WorkflowText) > 0,
+      'release workflow lacks a native displayless Linux CLI gate');
+    AssertTrue(Pos('Verify native Windows command line with redirected streams',
+      WorkflowText) > 0,
+      'release workflow lacks a native redirected Windows CLI gate');
+    AssertTrue(Pos('required=("$windows" "$linux" "$debian" "$scoop" ' +
+      '"$winget")', WorkflowText) > 0,
+      'release workflow does not require the complete active asset set');
+    AssertTrue(Pos('expected_windows=(LICENSE NOTICE ' +
+      'purpleray-sbom-analyzer.exe)', WorkflowText) > 0,
+      'release workflow no longer enforces Windows notices');
+    AssertTrue((Pos('$linux_root/LICENSE', WorkflowText) > 0) and
+      (Pos('$linux_root/NOTICE', WorkflowText) > 0),
+      'release workflow no longer enforces Linux notices');
+    AssertTrue(Pos('& $tool update $identifier --urls $installerUrl',
+      WorkflowText) > 0,
+      'credential-gated WinGet automation does not update the accepted package');
+    AssertTrue(Pos('& $tool submit', WorkflowText) = 0,
+      'workflow uses WingetCreate submit as though it accepted manifest files');
+    AssertTrue((Pos('Validate package manifests against pinned official schemas',
+      WorkflowText) > 0) and
+      (Pos('scripts/validate-package-manifests.py --self-test', WorkflowText) > 0) and
+      (Pos('python3-jsonschema python3-yaml', WorkflowText) > 0),
+      'release workflow no longer applies the official package schemas');
+    AssertTrue((Pos('SCOOP_COMMIT =', PackageValidatorText) > 0) and
+      (Pos('WINGET_COMMIT =', PackageValidatorText) > 0) and
+      (Pos('download_verified_schema', PackageValidatorText) > 0),
+      'package validator no longer pins and verifies official schemas');
+
+    AssertTrue((Pos('tar.gz', LinuxPackageText) > 0) and
+      (Pos('dpkg-deb', LinuxPackageText) > 0),
+      'Linux packaging no longer builds both portable and Debian outputs');
+    AssertTrue((Pos('readelf --version-info', LinuxPackageText) > 0) and
+      (Pos('GLIBC_2.34', LinuxPackageText) > 0),
+      'Linux packaging no longer verifies its published GLIBC compatibility floor');
+    AssertTrue((Pos('LICENSE', LinuxPackageText) > 0) and
+      (Pos('NOTICE', LinuxPackageText) > 0),
+      'Linux packaging omitted required notices');
+    AssertTrue((Pos('LICENSE', WindowsPackageText) > 0) and
+      (Pos('NOTICE', WindowsPackageText) > 0),
+      'Windows packaging omitted required notices');
+    AssertTrue((Pos('"checkver": "github"', ScoopText) > 0) and
+      (Pos('SHA256SUMS.txt', ScoopText) > 0) and
+      (Pos('$version', ScoopText) > 0),
+      'Scoop metadata lacks GitHub autoupdate or checksum discovery');
+    AssertTrue((Pos('NestedInstallerType: portable', WingetInstallerText) > 0)
+      and (Pos('PortableCommandAlias: purpleray-sbom-analyzer',
+      WingetInstallerText) > 0),
+      'WinGet metadata is no longer a portable command package');
+
+    AssertTrue((Pos('--release-version', LinuxLauncherText) > 0) and
+      (Pos('PURPLERAY_VERSION', LinuxLauncherText) > 0) and
+      (Pos('gh attestation verify', LinuxLauncherText) > 0) and
+      (Pos('glibc 2.34', LinuxLauncherText) > 0) and
+      (Pos('install_desktop_files', LinuxLauncherText) > 0),
+      'native Linux launcher lost pinning, provenance, preflight, or desktop integration');
+    AssertTrue((Pos('--release-version', WSLLauncherText) > 0) and
+      (Pos('PURPLERAY_VERSION', WSLLauncherText) > 0) and
+      (Pos('gh attestation verify', WSLLauncherText) > 0) and
+      (Pos('WSLg is unavailable', WSLLauncherText) > 0),
+      'WSL2 launcher lost pinning, provenance, or UI preflight');
+    AssertTrue((Pos('$ProgressPreference = ''SilentlyContinue''',
+      WindowsLauncherText) > 0) and
+      (Pos('PURPLERAY_VERSION', WindowsLauncherText) > 0) and
+      (Pos('gh attestation verify', WindowsLauncherText) > 0) and
+      (Pos('/releases/latest', WindowsLauncherText) > 0) and
+      (Pos('api.github.com', WindowsLauncherText) = 0) and
+      (Pos('Smart App Control', WindowsLauncherText) > 0),
+      'Windows launcher lost lifecycle, provenance, endpoint, or SAC safeguards');
+
+    InstallPosition := Pos('## Install / quick start', ReadmeText);
+    LauncherPosition := Pos('### One-line launchers', ReadmeText);
+    DevelopmentPosition := Pos('## Development', ReadmeText);
+    AssertTrue((InstallPosition > 0) and (LauncherPosition > InstallPosition)
+      and (DevelopmentPosition > LauncherPosition),
+      'README no longer leads users from manual install to launchers before development');
+    AssertTrue(Pos('### First SBOM in 60 seconds', ReadmeText) > 0,
+      'README lost the three-step first-SBOM walkthrough');
+    AssertTrue(Pos('macOS has no current release, launcher, or support claim',
+      ReadmeText) > 0,
+      'README revived a shipped macOS support claim');
+    AssertTrue(Pos('### Headless command line', ReadmeText) > 0,
+      'README does not document the headless CLI');
+    AssertTrue(Pos('scoop install .\purpleray-sbom-analyzer.json',
+      ReadmeText) > 0,
+      'README does not explain how to consume the shipped Scoop manifest');
+    AssertTrue((Pos('WINGET_SUBMISSION_ENABLED', ReadmeText) > 0) and
+      (Pos('WINGET_CREATE_GITHUB_TOKEN', ReadmeText) > 0),
+      'README does not document the credential-gated WinGet setup');
+    AssertTrue(FileExists(IncludeTrailingPathDelimiter(ProjectRoot) + 'docs' +
+      DirectorySeparator + 'purpleray-sbom-analyzer.png'),
+      'privacy-safe main-window screenshot is missing');
+  finally
+    Lines.Free;
   end;
 end;
 
@@ -1357,8 +2042,8 @@ begin
       (Pos('Position =', CompareResource) = 0),
       'Compare Scans retained form-only resource properties');
 
-    AssertTrue(Pos('<Units Count="5">', ProjectText) > 0,
-      'the Lazarus project unit count does not include both feature frames');
+    AssertTrue(Pos('<Units Count="7">', ProjectText) > 0,
+      'the Lazarus project unit count does not include both feature frames and CLI units');
     AssertTrue(Pos('<Filename Value="uSBOMAnalyzerFrame.pas"/>',
       ProjectText) > 0, 'the Lazarus project does not list the feature frame');
     AssertTrue(Pos('<ComponentName Value="SBOMAnalyzerFrame"/>',
@@ -3594,7 +4279,7 @@ end;
 procedure TestTaskHistoryService;
 var
   DirectoryName, RollbackDirectory, RootDirectory, CanonicalSBOM,
-    ExternalExport, WarningText, BlockingTemporary: string;
+    ExternalExport, WarningText, BlockingPersistencePath: string;
   Service, RollbackService, RootService: TTaskHistoryService;
   Observer: THistoryChangeObserver;
   Summaries, NonOwningSummaries: TObjectList;
@@ -3861,9 +4546,9 @@ begin
     CanonicalSBOM := IncludeTrailingPathDelimiter(RollbackDirectory) +
       'sboms' + DirectorySeparator + 'rollback-task.cdx.json';
     WriteText(CanonicalSBOM, '{"owned":true}');
-    BlockingTemporary := IncludeTrailingPathDelimiter(RollbackDirectory) +
-      'history.json.tmp';
-    AssertTrue(ForceDirectories(BlockingTemporary),
+    BlockingPersistencePath := IncludeTrailingPathDelimiter(RollbackDirectory) +
+      'history.json.bak';
+    AssertTrue(ForceDirectories(BlockingPersistencePath),
       'could not create rollback failure fixture');
     RevisionBefore := RollbackService.Revision;
     AssertTrue(not RollbackService.DeleteTask('rollback-task', WarningText),
@@ -3876,7 +4561,7 @@ begin
       'failed deletion removed the application-owned SBOM');
     AssertEqual(Int64(RevisionBefore), Int64(RollbackService.Revision),
       'rolled-back deletion changed the history revision');
-    RemoveDir(BlockingTemporary);
+    RemoveDir(BlockingPersistencePath);
   finally
     NewTask.Free;
     RollbackService.Free;
@@ -5906,6 +6591,10 @@ begin
   ForceDirectories(TemporaryRoot);
   RunTest('SHA-256 vectors', @TestSHA256);
   RunTest('displayed product version', @TestDisplayedVersion);
+  RunTest('headless command line', @TestHeadlessCommandLine);
+  RunTest('strict output-parent pinning', @TestStrictOutputParentPinning);
+  RunTest('Sprint 6 distribution contracts',
+    @TestSprint6DistributionContracts);
   RunTest('application shell structure', @TestApplicationShellStructure);
   RunTest('settings dialog DPI-stable layout',
     @TestScanSettingsDialogDPIStableLayout);

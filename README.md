@@ -8,14 +8,146 @@ are supplemented, when applicable, by bounded static-inspection facilities
 already present on the operating system; it never downloads or requires a
 separate scanner.
 
-The application uses one Object Pascal/Lazarus LCL codebase for Windows x64
-(Win32), Linux x64 (GTK3), and macOS x64 (Cocoa).
+Published builds support Windows x64 and Linux x64 (GTK3), including Linux
+under WSL2 with WSLg. The Cocoa code and packaging are experimental and
+unshipped: macOS has no current release, launcher, or support claim.
 
 Its main window is a lightweight native feature shell with a compact selector
 and tabless workspace. Each completed feature is compiled into the executable
 as an LFM-backed `TFrame`; this is not a plugin system. The selector exposes
 `SBOM Analyzer` and `Compare Scans`, and both features remain alive when the
 user switches between them.
+
+## Install / quick start
+
+The simplest auditable installation is a manual download from the
+[latest GitHub release](https://github.com/aidamian/PurpleRay_SBOM_Analyzer/releases/latest).
+Download `SHA256SUMS.txt` with the package for your platform, verify the
+package, then install it:
+
+- **Windows x64:** download
+  `purpleray-sbom-analyzer-vX.Y.Z-windows-x64.zip`, verify it with
+  `Get-FileHash -Algorithm SHA256`, extract it, and run
+  `purpleray-sbom-analyzer.exe`. If you already use Scoop, download the
+  release's `purpleray-sbom-analyzer.json` manifest and run
+  `scoop install .\purpleray-sbom-analyzer.json` from that directory instead.
+- **Linux x64:** download either
+  `purpleray-sbom-analyzer_X.Y.Z_amd64.deb` and install it with
+  `sudo apt install ./purpleray-sbom-analyzer_X.Y.Z_amd64.deb`, or download
+  `purpleray-sbom-analyzer-vX.Y.Z-linux-x64.tar.gz`, verify it with
+  `sha256sum`, extract it, and run the executable from the extracted directory.
+- **WSL2:** use the Linux tar package from a WSL2 distribution with WSLg.
+
+The Linux build requires x86-64, glibc 2.34 or newer, GTK3, and a working
+Wayland or X11 display. WSL2 additionally requires WSLg. macOS builds are not
+currently shipped.
+
+### One-line launchers
+
+The launchers check the platform and UI prerequisites, resolve the latest
+release, verify `SHA256SUMS.txt`, reuse a checksum-valid cached package, and
+start the application. Run the command in the directory where you want the
+versioned application directory to be created.
+
+Native Linux:
+
+```bash
+curl --fail --show-error --silent --location \
+  https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-linux.sh \
+  | bash
+```
+
+WSL2 with WSLg:
+
+```bash
+curl --fail --show-error --silent --location \
+  https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-wsl2.sh \
+  | bash
+```
+
+Windows PowerShell:
+
+```powershell
+irm 'https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-windows.ps1' | iex
+```
+
+To pin a release, pass a canonical version without the `v` prefix. A command
+line argument takes precedence over `PURPLERAY_VERSION`:
+
+```bash
+./start-linux.sh --release-version 0.6.0
+PURPLERAY_VERSION=0.6.0 ./start-wsl2.sh
+```
+
+```powershell
+.\start-windows.ps1 -ReleaseVersion 0.6.0
+$env:PURPLERAY_VERSION = '0.6.0'
+irm 'https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-windows.ps1' | iex
+```
+
+Arguments after the launcher options are forwarded to the application. For
+example, `./start-linux.sh --release-version 0.6.0 -- --version` checks the
+installed application version without opening the desktop UI.
+
+On Linux and WSL2, current tar packages also install a per-user desktop entry,
+icon, and AppStream metadata under `~/.local/share/`; no root access is used.
+The v0.6-era bare Linux executable remains supported by the launchers during
+the package transition, but it has no desktop metadata.
+
+Windows releases are not yet Authenticode-signed, so Smart App Control may
+block them even after checksum and provenance verification. Windows has no
+per-app Smart App Control exception. Disabling Smart App Control reduces
+protection and, depending on the Windows build and system state, may be
+irreversible without resetting or reinstalling Windows. Check the current
+[Microsoft Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)
+and prefer a disposable VM for testing an unsigned build.
+
+Release verification has three distinct layers:
+
+- The published SHA-256 checksum detects a damaged or substituted download.
+- A GitHub artifact attestation binds that exact package digest to this
+  repository and its GitHub Actions workflow. If `gh` is installed, each
+  launcher verifies the attestation and treats a failure as fatal; otherwise
+  it prints the exact optional verification command.
+- An Authenticode signature identifies a trusted Windows publisher and can
+  satisfy Windows application-control policy. Checksums and attestations do
+  not replace it, which is why an unsigned package can still be blocked.
+
+### First SBOM in 60 seconds
+
+For a small application folder:
+
+1. Launch PurpleRay, leave **SBOM Analyzer** selected, choose **New Scan**, and
+   select the folder.
+2. Review the safe offline defaults and choose **Start Scan**.
+3. When the task completes, choose **Export SBOM** to save the CycloneDX JSON.
+
+![PurpleRay SBOM Analyzer main window](docs/purpleray-sbom-analyzer.png)
+
+### Uninstalling
+
+A launcher installation is self-contained in its
+`PurpleRay_SBOM_Analyzer_vX.Y.Z` directory. Remove that versioned directory to
+remove the application. On Linux or WSL2, also remove these per-user desktop
+integration files if no installed version remains:
+
+```bash
+rm -f -- \
+  ~/.local/share/applications/io.github.aidamian.PurpleRaySBOMAnalyzer.desktop \
+  ~/.local/share/icons/hicolor/256x256/apps/io.github.aidamian.PurpleRaySBOMAnalyzer.png \
+  ~/.local/share/metainfo/io.github.aidamian.PurpleRaySBOMAnalyzer.metainfo.xml
+```
+
+Remove a Debian-package installation with
+`sudo apt remove purpleray-sbom-analyzer`. On Windows, delete only the desired
+versioned directory (for example with
+`Remove-Item -LiteralPath .\PurpleRay_SBOM_Analyzer_vX.Y.Z -Recurse`).
+
+Uninstalling does **not** remove task history, settings, or saved SBOMs. User
+data stays in `~/.purpleray/sbom-analyzer/` on Linux/WSL2 and
+`%USERPROFILE%\.purpleray\sbom-analyzer\` on Windows so another version can use
+it. Delete that directory only when you explicitly intend to erase all
+PurpleRay-managed data; export a backup from the application first if needed.
 
 ## What it does
 
@@ -112,19 +244,42 @@ removed.
 
 Keyboard shortcuts:
 
-- `Ctrl+N` (`Cmd+N` on macOS): new scan
-- `Ctrl+1` (`Cmd+1` on macOS): switch to SBOM Analyzer
-- `Ctrl+2` (`Cmd+2` on macOS): switch to Compare Scans
-- `Ctrl+E` (`Cmd+E` on macOS): export the selected SBOM
-- `Ctrl+C` (`Cmd+C` on macOS): copy the selected summary, component, or
+- `Ctrl+N`: new scan
+- `Ctrl+1`: switch to SBOM Analyzer
+- `Ctrl+2`: switch to Compare Scans
+- `Ctrl+E`: export the selected SBOM
+- `Ctrl+C`: copy the selected summary, component, or
   artifact row, or selected comparison rows (including full values hidden by
   compact table cells)
-- `Ctrl+F` (`Cmd+F` on macOS): focus the search box in Compare Scans
+- `Ctrl+F`: focus the search box in Compare Scans
 - `F5`: refresh the active feature from shared history
 - `Escape`: cancel the active scan only while SBOM Analyzer is active; Compare
   Scans never cancels a hidden scan
 
-## Ubuntu/WSL2 development
+### Headless command line
+
+The same executable can produce one SBOM without opening a window:
+
+```bash
+mkdir -p output
+purpleray-sbom-analyzer --scan ./application --output ./output/application.cdx.json
+```
+
+`--scan`, `--output`, and optional `--settings` may appear in any order and may
+not be repeated. The output directory must already exist, and the canonical
+output path must be outside the scan target. Settings can be either a direct
+scan-settings object or the desktop wrapper
+`{"format_version":1,"scan_settings":{...}}`. Without a settings file, the
+command uses safe offline defaults.
+
+Headless scans never read, write, or migrate desktop history and settings.
+They atomically replace the requested output, print warnings on standard
+error, and print `SBOM written: <absolute path>` on success. Exit status `0`
+means success, `1` means a scan/settings/output failure, and `2` means invalid
+command syntax. Use `--help` (or `-h`) and `--version` for concise command
+information.
+
+## Development
 
 The reproducible CI toolchain is Free Pascal 3.2.2 and Lazarus 4.2. On a clean
 Ubuntu x64 WSL2 installation, install the same official Lazarus release and the
@@ -175,78 +330,6 @@ build/release/purpleray-sbom-analyzer
 WSLg normally sets `WAYLAND_DISPLAY` and `DISPLAY` automatically. If neither is
 present, update WSL from Windows with `wsl --update`, restart it with
 `wsl --shutdown`, and open the WSL workspace again.
-
-### One-command release launchers
-
-To check WSL2/WSLg support, download the latest checksum-verified Linux release,
-and launch it in one command, run:
-
-```bash
-./start-wsl2.sh
-```
-
-To download that launcher directly from GitHub and run it in the current WSL2
-directory:
-
-```bash
-curl --fail --show-error --silent --location \
-  https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-wsl2.sh \
-  | bash
-```
-
-The script creates a versioned directory such as
-`./PurpleRay_SBOM_Analyzer_v0.3.0/` in
-the current working directory. Every version uses the shared
-`~/.purpleray/sbom-analyzer/` data directory, so releases can be switched
-without losing task history or settings. The script never requires root
-access.
-
-Native Linux users can use the equivalent launcher:
-
-```bash
-./start-linux.sh
-```
-
-Or download and run it directly in the current directory:
-
-```bash
-curl --fail --show-error --silent --location \
-  https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-linux.sh \
-  | bash
-```
-
-The launcher stops before downloading anything unless `DISPLAY` or
-`WAYLAND_DISPLAY` identifies a graphical session. If it reports that no Linux
-UI is available, run it from a UI-enabled Linux desktop session with Wayland or
-X11.
-
-From Windows PowerShell, use:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\start-windows.ps1
-```
-
-Or download and run it directly in the current PowerShell directory:
-
-```powershell
-irm 'https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-windows.ps1' | iex
-```
-
-All three launchers use the same versioned-directory layout and shared per-user
-`.purpleray/sbom-analyzer` data directory.
-
-The macOS release build is currently paused and there is no macOS root launcher
-yet. Do not pipe `start-linux.sh` into Bash on macOS: it deliberately accepts
-Linux only. A macOS one-line command will be added when that release target is
-re-enabled.
-
-The current Windows release is not Authenticode-signed. Windows 11 Smart App
-Control can therefore block it, and Windows does not provide a per-application
-exception. For an immediate local test, open **Windows Security > App & browser
-control > Smart App Control settings**, turn Smart App Control off, and run the
-launcher again. The permanent distribution fix is to sign each Windows release
-with a publicly trusted Authenticode certificate; checksum verification alone
-does not establish a trusted Windows publisher.
 
 To use the Lazarus IDE, open the repository through VS Code's **WSL: Open Folder
 in WSL** command, then run:
@@ -300,7 +383,7 @@ tests/bin/test_runner
 
 The application stores all persistent data under the user's home directory:
 
-- Linux, WSL, and macOS: `~/.purpleray/sbom-analyzer/`
+- Linux and WSL2: `~/.purpleray/sbom-analyzer/`
 - Windows: `%USERPROFILE%\.purpleray\sbom-analyzer\`
 
 On first run after upgrading, the application moves files from
@@ -379,11 +462,14 @@ to exist.
 
 ```text
 assets/                    application icon sources
-packaging/macos/           minimal application-bundle metadata template
+packaging/linux/           desktop, icon, AppStream, and Debian inputs
+packaging/scoop/           generated Scoop-manifest template
+packaging/winget/          generated WinGet multi-file templates
+packaging/macos/           experimental, unshipped bundle metadata template
 scripts/                   local build, test, version, and packaging helpers
 src/                       Lazarus project, UI, scanner, parsers, and persistence
 tests/                     deterministic non-UI test runner and fixtures
-.github/workflows/         native three-platform CI and release automation
+.github/workflows/         native Windows/Linux CI and release automation
 ```
 
 The tracked root `VERSION` file is the sole operator-managed version authority.
@@ -421,20 +507,20 @@ scripts/regenerate-icon-resource.sh
 ## CI and releases
 
 `.github/workflows/build-release.yml` currently tests and builds the Windows and
-Linux targets on `windows-latest` and pinned `ubuntu-24.04`. The macOS matrix entry is
-retained as a commented block in the workflow and is temporarily paused to
-conserve GitHub Actions minutes. Builds use FPC 3.2.2 and Lazarus 4.2 from the
+Linux targets on `windows-latest` and pinned `ubuntu-24.04`. The macOS matrix
+entry is retained only as commented experimental scaffolding; no macOS job,
+artifact, or release is currently produced. Builds use FPC 3.2.2 and Lazarus 4.2 from the
 official SourceForge release files. The maintained
 [`ollydev/setup-lazarus`](https://github.com/ollydev/setup-lazarus) setup action
 is pinned to an immutable commit and currently provisions Windows only; it
 introduces no runtime dependency. Linux restores checksum-verified official
 installers from the GitHub Actions cache and uses one bounded APT setup with a
 signed fallback mirror. Official GitHub cache, artifact, and checkout actions
-are pinned as well. When re-enabled, the macOS job uses GitHub's Intel runner and
-explicitly compiles and verifies an x86_64 application. Newer runs cancel
-obsolete runs, and preparation, dependency installation, builds, and publishing
-have bounded timeouts so a stalled hosted runner cannot consume minutes
-indefinitely. Markdown-only changes do not start the native build matrix.
+are pinned as well. A newer run cancels only a superseded pull-request run;
+main, manual, and release runs are never cancelled by concurrency. Preparation,
+dependency installation, builds, and publishing have bounded timeouts so a
+stalled hosted runner cannot consume minutes indefinitely. Markdown-only
+changes do not start the native build matrix.
 
 Pull requests and branch builds use the exact version recorded in `VERSION`, run
 all tests, and upload temporary packages without changing it. GitHub Actions no
@@ -452,6 +538,24 @@ and publishes the complete platform set together with `SHA256SUMS.txt`. Any
 failed platform keeps the workflow marked as failed and prevents a partial
 release. An existing tag on the same commit can be rebuilt idempotently.
 
+Each release includes the Windows ZIP, Linux tar archive, Debian package,
+validated Scoop manifest, and a validated WinGet manifest archive. The
+candidate permanent WinGet identifier is
+`AndreiIonutDamian.PurpleRaySBOMAnalyzer`; it is not an advertised install path
+until the initial manifest is accepted by `microsoft/winget-pkgs`. External
+WinGet submission is disabled by default and runs only when the operator opts
+in after the initial manifest has been accepted upstream. To enable later
+updates, set the repository variable `WINGET_SUBMISSION_ENABLED` to `true` and
+store a classic GitHub personal access token as the repository secret
+`WINGET_CREATE_GITHUB_TOKEN`. The official WingetCreate guidance currently
+requires the classic token's `repo` permission and recommends keeping it in a
+repository secret rather than embedding it in the workflow. The token owner
+must be able to fork and submit a pull request to `microsoft/winget-pkgs`.
+Review the current
+[WingetCreate token guidance](https://github.com/microsoft/winget-create#github-personal-access-token-classic-permissions)
+before enabling the job, and rotate or remove the secret when automation is no
+longer needed.
+
 ### Verifying release provenance
 
 Every newly published release artifact receives a free GitHub build-provenance
@@ -459,7 +563,7 @@ attestation. After downloading an artifact, verify that GitHub associates its
 exact SHA-256 digest with a build from this repository:
 
 ```bash
-gh attestation verify purpleray-sbom-analyzer-vX.Y.Z-linux-x64 \
+gh attestation verify purpleray-sbom-analyzer-vX.Y.Z-linux-x64.tar.gz \
   --repo aidamian/PurpleRay_SBOM_Analyzer
 ```
 
@@ -529,10 +633,11 @@ appropriately using the citation above.
 
 ## Platform limitations
 
-- Windows and macOS outputs are not code-signed. Unsigned Windows releases can
-  be blocked by Smart App Control. A production distribution must add Windows
-  Authenticode signing plus Apple Developer ID signing and notarization.
-- The macOS release targets x86_64 and may require Rosetta on Apple Silicon.
+- Windows outputs are not yet Authenticode-signed and can be blocked by Smart
+  App Control. Checksums and GitHub attestations verify integrity and build
+  provenance, but they do not establish a trusted Windows publisher.
+- The Cocoa target remains experimental source scaffolding. There is no current
+  macOS build, release, launcher, signing/notarization, or support commitment.
 - Lazarus's GTK3 backend can emit non-fatal layout diagnostics with some GTK
   themes or WSLg versions; these do not indicate that scanning has failed.
 - Shared-library analysis is static. Direct declarations are read from ELF,

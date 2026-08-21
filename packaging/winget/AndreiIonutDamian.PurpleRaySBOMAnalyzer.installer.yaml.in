@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+
+PackageIdentifier: AndreiIonutDamian.PurpleRaySBOMAnalyzer
+PackageVersion: @VERSION@
+InstallerType: zip
+NestedInstallerType: portable
+UpgradeBehavior: uninstallPrevious
+Installers:
+  - Architecture: x64
+    InstallerUrl: @WINDOWS_URL@
+    InstallerSha256: @WINDOWS_SHA256_UPPER@
+    NestedInstallerFiles:
+      - RelativeFilePath: purpleray-sbom-analyzer.exe
+        PortableCommandAlias: purpleray-sbom-analyzer
+ManifestType: installer
+ManifestVersion: 1.10.0
+
