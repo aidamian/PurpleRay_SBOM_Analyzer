@@ -13,8 +13,9 @@ The application uses one Object Pascal/Lazarus LCL codebase for Windows x64
 
 Its main window is a lightweight native feature shell with a compact selector
 and tabless workspace. Each completed feature is compiled into the executable
-as an LFM-backed `TFrame`; this is not a plugin system. `SBOM Analyzer` is the
-only feature currently exposed, so no unfinished placeholder is shown.
+as an LFM-backed `TFrame`; this is not a plugin system. The selector exposes
+`SBOM Analyzer` and `Compare Scans`, and both features remain alive when the
+user switches between them.
 
 ## What it does
 
@@ -43,6 +44,7 @@ only feature currently exposed, so no unfinished placeholder is shown.
 - Marks each generated document as a post-build, incomplete best-effort
   inventory using standard CycloneDX lifecycle and composition fields.
 - Persists scan history and settings as recoverable atomic JSON files.
+- Compares any two completed retained scans without reading the targets again.
 - Excludes absolute filesystem paths from the SBOM unless the user explicitly
   enables them for that scan.
 
@@ -59,6 +61,25 @@ then start the scan.
 The history pane keeps old tasks and has its own search box. Drag the vertical
 splitter to resize it. The detail tabs expose the summary, components,
 artifacts, generated JSON, warnings, and parser messages.
+
+Select **Compare Scans** to compare the retained component inventories from
+two completed tasks. The comparison is directional: the first task is the
+baseline and the second is the comparison. By default, the newest completed
+scan is compared with the newest older scan of the same target when one is
+available. **Swap** reverses that direction. The report shows added, removed,
+and unambiguous version-changed components and can be searched, filtered,
+sorted, or copied without rescanning either folder.
+
+Package URLs provide the strongest comparison identity after removing only
+their version. Records without a usable Package URL use a conservative
+ecosystem/name/type fallback. Known namespace ambiguity is never guessed, and
+field-only matches are reported as cautions because no coordinate evidence is
+available. Exact duplicates are collapsed; multi-version matches cancel
+identical versions first and retain the remaining entries as additions/removals
+instead of inventing version changes. Scope, license, publisher, parser, hash,
+and evidence-path differences alone are not reported as component changes in
+this release. Target, diagnostic, and scanner-version differences are shown as
+cautions.
 
 **Export SBOM** suggests a filename beginning with the scan timestamp and
 folder name, for example
@@ -83,14 +104,25 @@ selected, and asks for confirmation. `Escape` does not cancel while focus is in
 an edit, memo, or combo box. Closing during a scan offers to cancel and then
 finishes shutdown asynchronously so the UI thread remains responsive.
 
+A completed, failed, or cancelled task can be removed from history with the
+task-list context menu or the `Delete` key. Deletion asks for confirmation and
+removes only the application-managed `sboms/<task-id>.cdx.json` file. SBOMs
+exported elsewhere are never deleted. Pending and running tasks cannot be
+removed.
+
 Keyboard shortcuts:
 
 - `Ctrl+N` (`Cmd+N` on macOS): new scan
+- `Ctrl+1` (`Cmd+1` on macOS): switch to SBOM Analyzer
+- `Ctrl+2` (`Cmd+2` on macOS): switch to Compare Scans
 - `Ctrl+E` (`Cmd+E` on macOS): export the selected SBOM
 - `Ctrl+C` (`Cmd+C` on macOS): copy the selected summary, component, or
-  artifact row (including the full SHA-256 when its table cell is shortened)
-- `F5`: reload persisted history
-- `Escape`: cancel the active scan
+  artifact row, or selected comparison rows (including full values hidden by
+  compact table cells)
+- `Ctrl+F` (`Cmd+F` on macOS): focus the search box in Compare Scans
+- `F5`: refresh the active feature from shared history
+- `Escape`: cancel the active scan only while SBOM Analyzer is active; Compare
+  Scans never cancels a hidden scan
 
 ## Ubuntu/WSL2 development
 
@@ -224,10 +256,11 @@ lazarus src/purpleray_sbom_analyzer.lpi
 ```
 
 Select the GTK3 widgetset for a Linux build. The lightweight application shell,
-SBOM Analyzer workspace, and scan-settings dialog are stored as the
-human-readable `src/uMainForm.lfm`, `src/uSBOMAnalyzerFrame.lfm`, and
-`src/uScanSettingsDialog.lfm` resources. All three can be edited in the
-Lazarus form designer.
+SBOM Analyzer workspace, Compare Scans workspace, and scan-settings dialog are
+stored as the human-readable `src/uMainForm.lfm`,
+`src/uSBOMAnalyzerFrame.lfm`, `src/uCompareScansFrame.lfm`, and
+`src/uScanSettingsDialog.lfm` resources. All four can be edited in the Lazarus
+form designer.
 
 ## Tests
 
@@ -241,6 +274,8 @@ metadata,
 worker exception containment, bounded manifest parsing, case-preserving and
 glob-safe enumeration, special-file and permission handling,
 application-shell/frame ownership and Lazarus resource registration,
+shared-history ownership and safe task deletion, deterministic component
+identity reconciliation and directional scan comparison,
 deterministic/path-safe CycloneDX 1.6/1.7 generation, root-component promotion,
 observed dependency edges, honest version/scope fields, Package URL
 normalization, ignore matching, symbolic-link loops, and cancellation.
@@ -287,7 +322,9 @@ Files in that directory are user data:
 
 History and settings are written through a flushed temporary file, with one
 backup retained. A malformed active history is preserved and the backup is
-loaded when valid.
+loaded when valid. Both compiled features use one shared in-memory history
+service, so completed scans and deletions become visible without maintaining
+divergent copies of the task database.
 
 ## Supported evidence
 

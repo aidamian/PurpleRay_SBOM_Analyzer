@@ -6,10 +6,11 @@
 
   Description
   -----------
-  Owns the complete SBOM Analyzer workspace: task history, scan lifecycle,
-  filtering, result presentation, exports, drag-and-drop delegation, keyboard
-  commands, persistent state, and worker-thread notifications. The application
-  shell embeds this frame and communicates only through its public API.
+  Presents the complete SBOM Analyzer workspace over shared task history and
+  owns scan lifecycle, filtering, result presentation, exports, drag-and-drop
+  delegation, keyboard commands, settings, and worker notifications. The
+  application shell embeds this frame and communicates only through its public
+  API.
 
   Citation request
   ----------------
@@ -30,7 +31,7 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, StdCtrls, ExtCtrls, ComCtrls, Dialogs,
-  Menus, Contnrs, uModels, uTaskHistory, uSettingsStore, uScanWorker,
+  Menus, uModels, uTaskHistory, uSettingsStore, uScanWorker,
   uScanEngine;
 
 type
@@ -110,6 +111,8 @@ type
     ClosePollTimer: TTimer;
     FCopyMenu: TPopupMenu;
     CopySelectedMenuItem: TMenuItem;
+    FTaskMenu: TPopupMenu;
+    DeleteTaskMenuItem: TMenuItem;
 
     {**
       Opens the directory chooser and configures a new scan when idle.
@@ -264,6 +267,66 @@ type
       None
     }
     procedure TaskSearchChanged(Sender: TObject);
+
+    {**
+      Updates task-history context actions for the selected terminal task.
+
+      Parameters
+      ----------
+      Sender
+        Task-history popup menu; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure TaskMenuPopup(Sender: TObject);
+
+    {**
+      Confirms and removes the selected terminal task from shared history.
+
+      Parameters
+      ----------
+      Sender
+        Menu or keyboard action source; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+        Persistence failures and deletion cautions are presented in the UI.
+    }
+    procedure DeleteTaskClicked(Sender: TObject);
+
+    {**
+      Handles the Delete key for the task-history list.
+
+      Parameters
+      ----------
+      Sender
+        Task-history list; not otherwise used.
+      Key
+        LCL virtual key code, cleared when deletion is invoked.
+      Shift
+        Modifier-key state; deletion requires no modifiers.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure TaskListKeyPressed(Sender: TObject; var Key: Word;
+      Shift: TShiftState);
 
     {**
       Rebuilds the affected component or artifact list after filter changes.
@@ -426,8 +489,8 @@ type
     }
     procedure ClosePollTimerTick(Sender: TObject);
   private
-    FTasks: TObjectList;
-    FHistoryStore: TTaskHistoryStore;
+    FHistoryService: TTaskHistoryService;
+    FOwnsHistoryService: Boolean;
     FSettingsStore: TSettingsStore;
     FSettings: TScanSettings;
     FWorker: TScanWorker;
@@ -436,8 +499,8 @@ type
     FClosing: Boolean;
     FClosePending: Boolean;
     FClosePrepared: Boolean;
-    FUsesDefaultDataDirectory: Boolean;
     FStartupWarning: string;
+    FSelectedTaskID: string;
     FUpdatingDetails: Boolean;
     FComponentSortColumn: Integer;
     FComponentSortAscending: Boolean;
@@ -446,6 +509,32 @@ type
     FLastExportPath: string;
     FOnActivityChanged: TAnalyzerActivityEvent;
     FOnCloseReady: TNotifyEvent;
+
+    {**
+      Adapts owned-service notifications to the shell-facing history API.
+
+      Parameters
+      ----------
+      Sender
+        Owned history service that emitted the notification.
+      AKind
+        Reset, addition, update, or removal operation that completed.
+      ATaskID
+        Affected task identifier, or blank for a reset.
+      ARevision
+        Shared history revision after the mutation.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure ServiceHistoryChanged(Sender: TObject;
+      AKind: TTaskHistoryChangeKind; const ATaskID: string;
+      ARevision: QWord);
 
     {**
       Reports whether a worker-backed scan currently owns the workspace.
@@ -620,8 +709,10 @@ type
       Parameters
       ----------
       ADataDirectory
-        Optional explicit persistence directory used by isolated UI probes;
-        blank selects the standard per-user application directory.
+        Optional explicit persistence directory used when the frame creates
+        its own history service; blank selects the standard user directory.
+      AHistoryService
+        Shared history service to borrow, or nil to create and own one.
 
       Returns
       -------
@@ -632,7 +723,8 @@ type
       EOutOfMemory, EInOutError
         May propagate while creating stores or loading persisted state.
     }
-    procedure InitializeFrame(const ADataDirectory: string);
+    procedure InitializeFrame(const ADataDirectory: string;
+      AHistoryService: TTaskHistoryService);
 
     {**
       Loads settings and history, combines startup warnings, and selects a task.
@@ -653,7 +745,7 @@ type
     procedure LoadState;
 
     {**
-      Persists the current task collection and converts errors to UI messages.
+      Persists the shared task collection and converts errors to UI messages.
 
       Parameters
       ----------
@@ -670,7 +762,7 @@ type
     procedure SaveHistory;
 
     {**
-      Recreates visible history rows while preserving model ownership.
+      Recreates visible history rows without taking model ownership.
 
       Parameters
       ----------
@@ -693,7 +785,8 @@ type
       Parameters
       ----------
       ATask
-        Task whose counters, status, target, and timestamps should be rendered.
+        Borrowed service task whose counters, status, target, and timestamps
+        should be rendered.
 
       Returns
       -------
@@ -712,7 +805,7 @@ type
       Parameters
       ----------
       ATask
-        Frame-owned task to select when it is present in the filtered history.
+        Borrowed shared-history task to select when it is visible.
 
       Returns
       -------
@@ -734,7 +827,7 @@ type
       Returns
       -------
       TScanTask
-        Borrowed frame-owned task, or nil when no row is selected.
+        Borrowed shared-history task, or nil when no row is selected.
 
       Raises
       ------
@@ -743,7 +836,7 @@ type
     function SelectedTask: TScanTask;
 
     {**
-      Finds a frame-owned task by its stable identifier.
+      Finds a shared-history task by its stable identifier.
 
       Parameters
       ----------
@@ -767,7 +860,7 @@ type
       Parameters
       ----------
       ATask
-        Frame-owned task whose visible row is requested.
+        Borrowed shared-history task whose visible row is requested.
 
       Returns
       -------
@@ -1154,6 +1247,32 @@ type
       const ADataDirectory: string);
 
     {**
+      Creates the feature frame over the application's shared history service.
+
+      Parameters
+      ----------
+      TheOwner
+        Optional LCL component owner.
+      AHistoryService
+        Non-nil service borrowed for the lifetime of this frame.
+
+      Returns
+      -------
+      TSBOMAnalyzerFrame
+        Initialized analyzer workspace sharing live history with other
+        compiled features.
+
+      Raises
+      ------
+      EArgumentNilException
+        Raised when AHistoryService is nil.
+      EResNotFound, EReadError
+        May propagate when the embedded LFM resource cannot be loaded.
+    }
+    constructor CreateWithHistoryService(TheOwner: Classes.TComponent;
+      AHistoryService: TTaskHistoryService);
+
+    {**
       Stops worker activity and releases analyzer models and persistent stores.
 
       Parameters
@@ -1287,6 +1406,47 @@ type
     }
     procedure Activate;
 
+    {**
+      Releases analyzer focus when another compiled feature becomes active.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure Deactivate;
+
+    {**
+      Reconciles analyzer rows with a committed shared-history mutation.
+
+      Parameters
+      ----------
+      AKind
+        Reset, addition, update, or removal operation that completed.
+      ATaskID
+        Affected stable task identifier, or blank for a reset.
+      ARevision
+        Shared service revision associated with the notification.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+        Invalid or stale notifications are ignored safely.
+    }
+    procedure HistoryChanged(AKind: TTaskHistoryChangeKind;
+      const ATaskID: string; ARevision: QWord);
+
     property ScanActive: Boolean read GetScanActive;
     property OnActivityChanged: TAnalyzerActivityEvent
       read FOnActivityChanged write FOnActivityChanged;
@@ -1417,19 +1577,28 @@ end;
 constructor TSBOMAnalyzerFrame.Create(TheOwner: Classes.TComponent);
 begin
   inherited Create(TheOwner);
-  InitializeFrame('');
+  InitializeFrame('', nil);
 end;
 
 constructor TSBOMAnalyzerFrame.CreateForDataDirectory(
   TheOwner: Classes.TComponent; const ADataDirectory: string);
 begin
   inherited Create(TheOwner);
-  InitializeFrame(ADataDirectory);
+  InitializeFrame(ADataDirectory, nil);
 end;
 
-procedure TSBOMAnalyzerFrame.InitializeFrame(const ADataDirectory: string);
+constructor TSBOMAnalyzerFrame.CreateWithHistoryService(
+  TheOwner: Classes.TComponent; AHistoryService: TTaskHistoryService);
 begin
-  FUsesDefaultDataDirectory := ADataDirectory = '';
+  if AHistoryService = nil then
+    raise EArgumentNilException.Create('AHistoryService must not be nil');
+  inherited Create(TheOwner);
+  InitializeFrame('', AHistoryService);
+end;
+
+procedure TSBOMAnalyzerFrame.InitializeFrame(const ADataDirectory: string;
+  AHistoryService: TTaskHistoryService);
+begin
   FSBOMMemo.Font.Pitch := fpFixed;
   {$IFDEF Windows}
   FSBOMMemo.Font.Name := 'Consolas';
@@ -1441,9 +1610,18 @@ begin
   {$ENDIF}
   {$ENDIF}
   SetCompactFooter('Ready — drop a folder here or choose New Scan.');
-  FTasks := TObjectList.Create(True);
-  FHistoryStore := TTaskHistoryStore.Create(ADataDirectory);
-  FSettingsStore := TSettingsStore.Create(ADataDirectory);
+  if AHistoryService = nil then
+  begin
+    FHistoryService := TTaskHistoryService.Create(ADataDirectory);
+    FOwnsHistoryService := True;
+    FHistoryService.OnChanged := @ServiceHistoryChanged;
+  end
+  else
+  begin
+    FHistoryService := AHistoryService;
+    FOwnsHistoryService := False;
+  end;
+  FSettingsStore := TSettingsStore.Create(FHistoryService.DataDirectory);
   FComponentSortColumn := 0;
   FComponentSortAscending := True;
   FArtifactSortColumn := 0;
@@ -1458,11 +1636,22 @@ begin
   ClosePollTimer.Enabled := False;
   if not FClosePrepared then
     ForceShutdown;
+  if FOwnsHistoryService and (FHistoryService <> nil) then
+    FHistoryService.OnChanged := nil;
   FreeAndNil(FSettings);
   FreeAndNil(FSettingsStore);
-  FreeAndNil(FHistoryStore);
-  FreeAndNil(FTasks);
+  if FOwnsHistoryService then
+    FreeAndNil(FHistoryService)
+  else
+    FHistoryService := nil;
   inherited Destroy;
+end;
+
+procedure TSBOMAnalyzerFrame.ServiceHistoryChanged(Sender: TObject;
+  AKind: TTaskHistoryChangeKind; const ATaskID: string; ARevision: QWord);
+begin
+  if Sender = FHistoryService then
+    HistoryChanged(AKind, ATaskID, ARevision);
 end;
 
 function TSBOMAnalyzerFrame.RequestActiveCancellation(
@@ -1513,6 +1702,14 @@ begin
   SetActiveTaskID('');
   FCancelRequested := False;
   SaveHistory;
+  if (FWorker.ResultTask <> nil) and
+    (FindTask(FWorker.ResultTask.ID) <> nil) then
+    try
+      FHistoryService.NotifyTaskUpdated(FWorker.ResultTask.ID, False);
+    except
+      on E: Exception do
+        ShowError('The completed scan could not be published: ' + E.Message);
+    end;
   FreeAndNil(FWorker);
   Result := True;
 end;
@@ -1531,7 +1728,7 @@ begin
       AdoptWorkerResult;
     end;
     SetActiveTaskID('');
-    if (FHistoryStore <> nil) and (FTasks <> nil) then
+    if FHistoryService <> nil then
       SaveHistory;
     FreeAndNil(FWorker);
     FClosePrepared := True;
@@ -1591,20 +1788,10 @@ end;
 
 procedure TSBOMAnalyzerFrame.LoadState;
 var
-  HistoryWarning, SettingsWarning, MigrationWarning: string;
+  SettingsWarning: string;
 begin
-  MigrationWarning := '';
-  if FUsesDefaultDataDirectory then
-    MigrationWarning := ApplicationDataMigrationWarning;
   FSettings := FSettingsStore.Load(SettingsWarning);
-  FHistoryStore.Load(FTasks, HistoryWarning);
-  FStartupWarning := MigrationWarning;
-  if HistoryWarning <> '' then
-  begin
-    if FStartupWarning <> '' then
-      FStartupWarning := FStartupWarning + LineEnding + LineEnding;
-    FStartupWarning := FStartupWarning + HistoryWarning;
-  end;
+  FStartupWarning := FHistoryService.StartupWarning;
   if SettingsWarning <> '' then
   begin
     if FStartupWarning <> '' then
@@ -1613,10 +1800,7 @@ begin
   end;
   RefreshTaskRows;
   if FTaskList.Items.Count > 0 then
-  begin
-    FTaskList.Selected := FTaskList.Items[0];
-    FTaskList.ItemFocused := FTaskList.Items[0];
-  end;
+    SelectTask(TScanTask(FTaskList.Items[0].Data));
   UpdateDetails;
   UpdateButtons;
 end;
@@ -1624,7 +1808,7 @@ end;
 procedure TSBOMAnalyzerFrame.SaveHistory;
 begin
   try
-    FHistoryStore.Save(FTasks);
+    FHistoryService.Save;
   except
     on E: Exception do
       ShowError('Task history could not be saved: ' + E.Message);
@@ -1639,19 +1823,19 @@ begin
   FTaskList.Items.BeginUpdate;
   try
     FTaskList.Items.Clear;
-    for I := 0 to FTasks.Count - 1 do
+    for I := 0 to FHistoryService.TaskCount - 1 do
     begin
-      if not TaskMatchesSearch(TScanTask(FTasks[I])) then
+      if not TaskMatchesSearch(FHistoryService.TaskAt(I)) then
         Continue;
       Item := FTaskList.Items.Add;
-      Item.Data := FTasks[I];
-      UpdateTaskRow(TScanTask(FTasks[I]));
+      Item.Data := FHistoryService.TaskAt(I);
+      UpdateTaskRow(FHistoryService.TaskAt(I));
     end;
   finally
     FTaskList.Items.EndUpdate;
   end;
   FEmptyLabel.Visible := FTaskList.Items.Count = 0;
-  if FTasks.Count = 0 then
+  if FHistoryService.TaskCount = 0 then
     FEmptyLabel.Caption := 'No scans yet. Choose New Scan or drop a local ' +
       'folder onto this window.'
   else
@@ -1689,9 +1873,18 @@ procedure TSBOMAnalyzerFrame.SelectTask(ATask: TScanTask);
 var
   Item: TListItem;
 begin
+  if ATask = nil then
+  begin
+    FSelectedTaskID := '';
+    FTaskList.Selected := nil;
+    FTaskList.ItemFocused := nil;
+    UpdateDetails;
+    Exit;
+  end;
   Item := FindTaskItem(ATask);
   if Item <> nil then
   begin
+    FSelectedTaskID := ATask.ID;
     FTaskList.Selected := Item;
     FTaskList.ItemFocused := Item;
     Item.MakeVisible(False);
@@ -1701,20 +1894,15 @@ end;
 
 function TSBOMAnalyzerFrame.SelectedTask: TScanTask;
 begin
-  if (FTaskList.Selected <> nil) and (FTaskList.Selected.Data <> nil) then
-    Result := TScanTask(FTaskList.Selected.Data)
-  else
-    Result := nil;
+  Result := FindTask(FSelectedTaskID);
 end;
 
 function TSBOMAnalyzerFrame.FindTask(const AID: string): TScanTask;
-var
-  I: Integer;
 begin
-  for I := 0 to FTasks.Count - 1 do
-    if TScanTask(FTasks[I]).ID = AID then
-      Exit(TScanTask(FTasks[I]));
-  Result := nil;
+  if (AID = '') or (FHistoryService = nil) then
+    Result := nil
+  else
+    Result := FHistoryService.FindTaskByID(AID);
 end;
 
 function TSBOMAnalyzerFrame.TaskMatchesSearch(ATask: TScanTask): Boolean;
@@ -2223,8 +2411,9 @@ begin
     (ActiveTask.Status in [tsPending, tsRunning]) and not FCancelRequested;
   FExportButton.Enabled := (Task <> nil) and
     (Task.Status = tsCompleted) and FileExists(Task.GeneratedSBOMPath);
-  FExportDatabaseButton.Enabled := (not IsScanActive) and (FTasks.Count > 0) and
-    DirectoryExists(FHistoryStore.DataDirectory);
+  FExportDatabaseButton.Enabled := (not IsScanActive) and
+    (FHistoryService.TaskCount > 0) and
+    DirectoryExists(FHistoryService.DataDirectory);
 end;
 
 procedure TSBOMAnalyzerFrame.FreeFinishedWorker;
@@ -2255,8 +2444,7 @@ begin
   Task.Settings.Assign(ASettings);
   Task.Status := tsPending;
   FTaskSearch.Clear;
-  FTasks.Insert(0, Task);
-  RefreshTaskRows;
+  FHistoryService.AddTask(Task, 0);
   SelectTask(Task);
   SaveHistory;
   Task.Status := tsRunning;
@@ -2266,11 +2454,17 @@ begin
   SetActiveFooter;
   FProgressPath.Caption := 'Starting scan of ' + Task.TargetRootName + '...';
   FProgressStats.Caption := 'Preparing worker thread';
-  FWorker := TScanWorker.Create(Task, FHistoryStore.DataDirectory);
+  FWorker := TScanWorker.Create(Task, FHistoryService.DataDirectory);
   FWorker.OnProgress := @WorkerProgress;
   FWorker.OnComplete := @WorkerComplete;
   FWorker.Start;
   SaveHistory;
+  try
+    FHistoryService.NotifyTaskUpdated(Task.ID, False);
+  except
+    on E: Exception do
+      ShowError('The running scan could not be published: ' + E.Message);
+  end;
   UpdateButtons;
 end;
 
@@ -2338,7 +2532,7 @@ begin
   try
     ClosePollTimer.Enabled := False;
     SetActiveTaskID('');
-    if (FHistoryStore <> nil) and (FTasks <> nil) then
+    if FHistoryService <> nil then
       SaveHistory;
     FClosePrepared := True;
     Result := True;
@@ -2456,6 +2650,31 @@ begin
     FTaskList.SetFocus;
 end;
 
+procedure TSBOMAnalyzerFrame.Deactivate;
+begin
+  { Feature state intentionally remains live while another page is active. }
+end;
+
+procedure TSBOMAnalyzerFrame.HistoryChanged(AKind: TTaskHistoryChangeKind;
+  const ATaskID: string; ARevision: QWord);
+var
+  Task: TScanTask;
+  WantedID: string;
+begin
+  if (FHistoryService = nil) or (ARevision > FHistoryService.Revision) then
+    Exit;
+  WantedID := FSelectedTaskID;
+  if (AKind = thcRemoved) and (WantedID = ATaskID) then
+    WantedID := '';
+  RefreshTaskRows;
+  Task := FindTask(WantedID);
+  if (Task <> nil) and (FindTaskItem(Task) <> nil) then
+    SelectTask(Task)
+  else
+    SelectTask(nil);
+  UpdateButtons;
+end;
+
 procedure TSBOMAnalyzerFrame.NewScanClicked(Sender: TObject);
 var
   Dialog: TSelectDirectoryDialog;
@@ -2492,20 +2711,24 @@ end;
 
 procedure TSBOMAnalyzerFrame.RefreshClicked(Sender: TObject);
 var
+  SelectedID: string;
+  Task: TScanTask;
   WarningText: string;
 begin
   if FActiveTaskID <> '' then
     Exit;
-  if not FHistoryStore.Load(FTasks, WarningText) then
+  SelectedID := FSelectedTaskID;
+  if not FHistoryService.Reload(WarningText) then
     ShowError(WarningText)
   else if WarningText <> '' then
     MessageDlg(AppName, WarningText, mtWarning, [mbOK], 0);
-  RefreshTaskRows;
-  if FTaskList.Items.Count > 0 then
-  begin
-    FTaskList.Selected := FTaskList.Items[0];
-    FTaskList.ItemFocused := FTaskList.Items[0];
-  end;
+  Task := FindTask(SelectedID);
+  if (Task <> nil) and (FindTaskItem(Task) <> nil) then
+    SelectTask(Task)
+  else if FTaskList.Items.Count > 0 then
+    SelectTask(TScanTask(FTaskList.Items[0].Data))
+  else
+    SelectTask(nil);
   UpdateDetails;
 end;
 
@@ -2545,7 +2768,7 @@ procedure TSBOMAnalyzerFrame.ExportDatabaseClicked(Sender: TObject);
 var
   Dialog: TSaveDialog;
 begin
-  if (FActiveTaskID <> '') or (FTasks.Count = 0) then
+  if (FActiveTaskID <> '') or (FHistoryService.TaskCount = 0) then
     Exit;
   Dialog := TSaveDialog.Create(Self);
   try
@@ -2557,7 +2780,7 @@ begin
     if Dialog.Execute then
     begin
       try
-        ExportDatabaseArchive(FHistoryStore.DataDirectory, Dialog.FileName);
+        ExportDatabaseArchive(FHistoryService.DataDirectory, Dialog.FileName);
         ShowExportFeedback(Dialog.FileName, 'Data backup created');
       except
         on E: Exception do
@@ -2573,25 +2796,100 @@ procedure TSBOMAnalyzerFrame.TaskSelected(Sender: TObject; Item: TListItem;
   Selected: Boolean);
 begin
   if Selected then
+  begin
+    if (Item <> nil) and (Item.Data <> nil) then
+      FSelectedTaskID := TScanTask(Item.Data).ID;
     UpdateDetails;
+  end
+  else if FTaskList.Selected = nil then
+  begin
+    FSelectedTaskID := '';
+    UpdateDetails;
+  end;
 end;
 
 procedure TSBOMAnalyzerFrame.TaskSearchChanged(Sender: TObject);
 var
+  SelectedID: string;
   Task: TScanTask;
 begin
-  Task := SelectedTask;
+  SelectedID := FSelectedTaskID;
   RefreshTaskRows;
+  Task := FindTask(SelectedID);
   if (Task <> nil) and (FindTaskItem(Task) <> nil) then
     SelectTask(Task)
   else if FTaskList.Items.Count > 0 then
+    SelectTask(TScanTask(FTaskList.Items[0].Data))
+  else
+    SelectTask(nil);
+end;
+
+procedure TSBOMAnalyzerFrame.TaskMenuPopup(Sender: TObject);
+var
+  Task: TScanTask;
+begin
+  Task := SelectedTask;
+  DeleteTaskMenuItem.Enabled := (Task <> nil) and
+    not (Task.Status in [tsPending, tsRunning]);
+end;
+
+procedure TSBOMAnalyzerFrame.DeleteTaskClicked(Sender: TObject);
+var
+  PreferredIndex: Integer;
+  Task: TScanTask;
+  TaskID, TargetName, WarningText: string;
+begin
+  Task := SelectedTask;
+  if (Task = nil) or (Task.Status in [tsPending, tsRunning]) then
+    Exit;
+  TaskID := Task.ID;
+  TargetName := Task.TargetRootName;
+  PreferredIndex := -1;
+  if FTaskList.Selected <> nil then
+    PreferredIndex := FTaskList.Selected.Index;
+  if MessageDlg(AppName, 'Delete the scan of "' + TargetName + '" [' +
+    Copy(TaskID, 1, 8) + '] from task history?' + LineEnding + LineEnding +
+    'Its application-managed SBOM will also be deleted. Files exported to ' +
+    'other locations will be kept.', mtConfirmation, [mbYes, mbNo], 0) <>
+    mrYes then
+    Exit;
+
+  FSelectedTaskID := '';
+  FTaskList.Selected := nil;
+  FTaskList.ItemFocused := nil;
+  UpdateDetails;
+  if not FHistoryService.DeleteTask(TaskID, WarningText) then
   begin
-    FTaskList.Selected := FTaskList.Items[0];
-    FTaskList.ItemFocused := FTaskList.Items[0];
-    UpdateDetails;
+    Task := FindTask(TaskID);
+    if Task <> nil then
+      SelectTask(Task);
+    if WarningText <> '' then
+      ShowError(WarningText);
+    Exit;
+  end;
+
+  if FTaskList.Items.Count > 0 then
+  begin
+    if PreferredIndex < 0 then
+      PreferredIndex := 0;
+    if PreferredIndex >= FTaskList.Items.Count then
+      PreferredIndex := FTaskList.Items.Count - 1;
+    SelectTask(TScanTask(FTaskList.Items[PreferredIndex].Data));
   end
   else
-    UpdateDetails;
+    SelectTask(nil);
+  if WarningText <> '' then
+    MessageDlg(AppName, WarningText, mtWarning, [mbOK], 0);
+end;
+
+procedure TSBOMAnalyzerFrame.TaskListKeyPressed(Sender: TObject;
+  var Key: Word; Shift: TShiftState);
+begin
+  if (Key = VK_DELETE) and (Shift = []) then
+  begin
+    DeleteTaskClicked(Sender);
+    Key := 0;
+  end;
 end;
 
 procedure TSBOMAnalyzerFrame.FiltersChanged(Sender: TObject);
@@ -2752,10 +3050,12 @@ procedure TSBOMAnalyzerFrame.WorkerComplete(Sender: TObject; AResult: TScanTask)
 var
   FooterText: string;
   Task: TScanTask;
+  WasSelected: Boolean;
 begin
   if FClosing then
     Exit;
   Task := FindTask(AResult.ID);
+  WasSelected := FSelectedTaskID = AResult.ID;
   if Task <> nil then
   begin
     Task.Assign(AResult);
@@ -2776,7 +3076,16 @@ begin
   SetCompactFooter(FooterText);
   SaveHistory;
   if Task <> nil then
-    SelectTask(Task)
+  begin
+    try
+      FHistoryService.NotifyTaskUpdated(Task.ID, False);
+    except
+      on E: Exception do
+        ShowError('The completed scan could not be published: ' + E.Message);
+    end;
+    if WasSelected and (SelectedTask <> Task) then
+      SelectTask(Task);
+  end
   else
     UpdateDetails;
   UpdateButtons;

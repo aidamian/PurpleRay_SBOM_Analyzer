@@ -1,0 +1,343 @@
+object CompareScansFrame: TCompareScansFrame
+  Left = 0
+  Height = 626
+  Top = 0
+  Width = 1080
+  ClientHeight = 626
+  ClientWidth = 1080
+  TabOrder = 0
+  LCLVersion = '3.0.0.3'
+  object PickerPanel: TPanel
+    Left = 0
+    Height = 112
+    Top = 0
+    Width = 1080
+    Align = alTop
+    BevelOuter = bvNone
+    ClientHeight = 112
+    ClientWidth = 1080
+    TabOrder = 0
+    object BaselineRowPanel: TPanel
+      Left = 0
+      Height = 38
+      Top = 0
+      Width = 1080
+      Align = alTop
+      BevelOuter = bvNone
+      ClientHeight = 38
+      ClientWidth = 1080
+      TabOrder = 0
+      object BaselineLabel: TLabel
+        Left = 10
+        Height = 38
+        Top = 0
+        Width = 100
+        Align = alLeft
+        AutoSize = False
+        BorderSpacing.Left = 10
+        Caption = '&Baseline scan'
+        Layout = tlCenter
+      end
+      object FSwapButton: TButton
+        Left = 988
+        Height = 30
+        Top = 4
+        Width = 82
+        Align = alRight
+        BorderSpacing.Top = 4
+        BorderSpacing.Right = 10
+        BorderSpacing.Bottom = 4
+        Caption = '&Swap'
+        Enabled = False
+        OnClick = SwapClicked
+        ShowHint = True
+        TabOrder = 1
+      end
+      object FBaselinePicker: TComboBox
+        Left = 116
+        Height = 30
+        Top = 4
+        Width = 866
+        Align = alClient
+        BorderSpacing.Left = 6
+        BorderSpacing.Top = 4
+        BorderSpacing.Right = 6
+        BorderSpacing.Bottom = 4
+        ItemHeight = 0
+        OnChange = PickerChanged
+        ShowHint = True
+        Style = csDropDownList
+        TabOrder = 0
+      end
+    end
+    object ComparisonRowPanel: TPanel
+      Left = 0
+      Height = 38
+      Top = 38
+      Width = 1080
+      Align = alTop
+      BevelOuter = bvNone
+      ClientHeight = 38
+      ClientWidth = 1080
+      TabOrder = 1
+      object ComparisonLabel: TLabel
+        Left = 10
+        Height = 38
+        Top = 0
+        Width = 100
+        Align = alLeft
+        AutoSize = False
+        BorderSpacing.Left = 10
+        Caption = '&Comparison scan'
+        Layout = tlCenter
+      end
+      object FRefreshButton: TButton
+        Left = 988
+        Height = 30
+        Top = 4
+        Width = 82
+        Align = alRight
+        BorderSpacing.Top = 4
+        BorderSpacing.Right = 10
+        BorderSpacing.Bottom = 4
+        Caption = '&Refresh'
+        OnClick = RefreshClicked
+        ShowHint = True
+        TabOrder = 1
+      end
+      object FComparisonPicker: TComboBox
+        Left = 116
+        Height = 30
+        Top = 4
+        Width = 866
+        Align = alClient
+        BorderSpacing.Left = 6
+        BorderSpacing.Top = 4
+        BorderSpacing.Right = 6
+        BorderSpacing.Bottom = 4
+        ItemHeight = 0
+        OnChange = PickerChanged
+        ShowHint = True
+        Style = csDropDownList
+        TabOrder = 0
+      end
+    end
+    object FSelectionMessage: TLabel
+      Left = 10
+      Height = 36
+      Top = 76
+      Width = 1060
+      Align = alClient
+      AutoSize = False
+      BorderSpacing.Left = 10
+      BorderSpacing.Right = 10
+      Caption = 'Choose two completed scans to compare.'
+      Layout = tlCenter
+      ShowHint = True
+      WordWrap = True
+    end
+  end
+  object SummaryPanel: TPanel
+    Left = 0
+    Height = 52
+    Top = 112
+    Width = 1080
+    Align = alTop
+    BevelOuter = bvNone
+    ClientHeight = 52
+    ClientWidth = 1080
+    TabOrder = 1
+    object FDirectionLabel: TLabel
+      Left = 10
+      Height = 24
+      Top = 0
+      Width = 1060
+      Align = alTop
+      AutoSize = False
+      BorderSpacing.Left = 10
+      BorderSpacing.Right = 10
+      Caption = 'Select a baseline and comparison scan.'
+      Layout = tlCenter
+    end
+    object FCountSummary: TLabel
+      Left = 10
+      Height = 28
+      Top = 24
+      Width = 1060
+      Align = alClient
+      AutoSize = False
+      BorderSpacing.Left = 10
+      BorderSpacing.Right = 10
+      Caption = 'Added —   •   Removed —   •   Changed —   •   Unchanged —'
+      Font.Height = -14
+      Font.Style = [fsBold]
+      Layout = tlCenter
+      ParentFont = False
+    end
+  end
+  object FilterPanel: TPanel
+    Left = 0
+    Height = 40
+    Top = 164
+    Width = 1080
+    Align = alTop
+    BevelOuter = bvNone
+    ClientHeight = 40
+    ClientWidth = 1080
+    TabOrder = 2
+    object SearchLabel: TLabel
+      Left = 10
+      Height = 40
+      Top = 0
+      Width = 46
+      Align = alLeft
+      AutoSize = False
+      BorderSpacing.Left = 10
+      Caption = '&Search'
+      Layout = tlCenter
+    end
+    object FChangeFilter: TComboBox
+      Left = 918
+      Height = 29
+      Top = 5
+      Width = 152
+      Align = alRight
+      BorderSpacing.Left = 10
+      BorderSpacing.Top = 5
+      BorderSpacing.Right = 10
+      BorderSpacing.Bottom = 6
+      ItemHeight = 0
+      ItemIndex = 0
+      Items.Strings = (
+        'All changes'
+        'Added'
+        'Removed'
+        'Changed'
+      )
+      OnChange = FiltersChanged
+      Style = csDropDownList
+      TabOrder = 1
+      Text = 'All changes'
+    end
+    object FSearchEdit: TEdit
+      Left = 62
+      Height = 29
+      Top = 5
+      Width = 846
+      Align = alClient
+      BorderSpacing.Left = 6
+      BorderSpacing.Top = 5
+      BorderSpacing.Right = 10
+      BorderSpacing.Bottom = 6
+      OnChange = FiltersChanged
+      TabOrder = 0
+      TextHint = 'Names, versions, ecosystems, identities...'
+    end
+  end
+  object FooterPanel: TPanel
+    Left = 0
+    Height = 28
+    Top = 598
+    Width = 1080
+    Align = alBottom
+    BevelOuter = bvNone
+    ClientHeight = 28
+    ClientWidth = 1080
+    TabOrder = 4
+    object FFooterLabel: TLabel
+      Left = 10
+      Height = 28
+      Top = 0
+      Width = 1060
+      Align = alClient
+      AutoSize = False
+      BorderSpacing.Left = 10
+      BorderSpacing.Right = 10
+      Caption = 'Comparison uses saved component inventories; files are not rescanned.'
+      Layout = tlCenter
+    end
+  end
+  object ResultPanel: TPanel
+    Left = 0
+    Height = 394
+    Top = 204
+    Width = 1080
+    Align = alClient
+    BevelOuter = bvNone
+    ClientHeight = 394
+    ClientWidth = 1080
+    TabOrder = 3
+    object FResultEmptyLabel: TLabel
+      Left = 18
+      Height = 358
+      Top = 18
+      Width = 1044
+      Align = alClient
+      Alignment = taCenter
+      AutoSize = False
+      BorderSpacing.Around = 18
+      Caption = 'Choose two completed scans to compare.'
+      Layout = tlCenter
+      WordWrap = True
+    end
+    object FResultList: TListView
+      Left = 6
+      Height = 382
+      Top = 6
+      Width = 1068
+      Align = alClient
+      BorderSpacing.Around = 6
+      Columns = <
+        item
+          Caption = 'Change'
+          Width = 92
+        end
+        item
+          Caption = 'Component'
+          Width = 220
+        end
+        item
+          Caption = 'Before'
+          Width = 112
+        end
+        item
+          Caption = 'After'
+          Width = 112
+        end
+        item
+          Caption = 'Ecosystem'
+          Width = 112
+        end
+        item
+          Caption = 'Type'
+          Width = 108
+        end
+        item
+          Caption = 'Identity'
+          Width = 290
+        end>
+      GridLines = True
+      HideSelection = False
+      MultiSelect = True
+      OnColumnClick = ResultColumnClicked
+      OnKeyDown = ResultListKeyPressed
+      PopupMenu = FCopyMenu
+      ReadOnly = True
+      RowSelect = True
+      TabOrder = 0
+      ViewStyle = vsReport
+      Visible = False
+    end
+  end
+  object FCopyMenu: TPopupMenu
+    OnPopup = CopyMenuPopup
+    object CopySelectedMenuItem: TMenuItem
+      Caption = 'Copy selected change(s)'
+      OnClick = CopySelectedClicked
+    end
+    object CopyIdentityMenuItem: TMenuItem
+      Caption = 'Copy component identity'
+      OnClick = CopyIdentityClicked
+    end
+  end
+end

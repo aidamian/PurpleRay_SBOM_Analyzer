@@ -303,10 +303,12 @@ object SBOMAnalyzerFrame: TSBOMAnalyzerFrame
           end>
         GridLines = True
         HideSelection = False
+        PopupMenu = FTaskMenu
         ReadOnly = True
         RowSelect = True
         TabOrder = 1
         ViewStyle = vsReport
+        OnKeyDown = TaskListKeyPressed
         OnSelectItem = TaskSelected
       end
     end
@@ -648,6 +650,15 @@ object SBOMAnalyzerFrame: TSBOMAnalyzerFrame
     object CopySelectedMenuItem: TMenuItem
       Caption = 'Copy selected row (full values)'
       OnClick = CopySelectedClicked
+    end
+  end
+  object FTaskMenu: TPopupMenu
+    OnPopup = TaskMenuPopup
+    Left = 872
+    Top = 104
+    object DeleteTaskMenuItem: TMenuItem
+      Caption = 'Delete task...'
+      OnClick = DeleteTaskClicked
     end
   end
   object ClosePollTimer: TTimer

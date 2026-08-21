@@ -31,7 +31,8 @@ uses
   uModels, uSHA256, uBinaryInspector, uManifestParsers, uArtifactIdentifier,
   uTaskHistory, uJSONUtils, uComponentNormalizer, uCycloneDX, uIgnoreMatcher,
   uScanEngine, uPlatform, uSystemInspector, uNativeDependencyInspector,
-  uExportUtils, uVersionInfo, uScanWorker, uPresentation, uSPDXExpressions;
+  uExportUtils, uVersionInfo, uScanWorker, uPresentation, uSPDXExpressions,
+  uComponentComparison;
 
 type
   TTestMethod = procedure;
@@ -56,6 +57,17 @@ type
     ErrorText: string;
     CompletedUTC: string;
     procedure Complete(Sender: TObject; AResult: TScanTask);
+  end;
+
+  { Captures the latest revisioned mutation published by task history. }
+  THistoryChangeObserver = class
+  public
+    Count: Integer;
+    LastKind: TTaskHistoryChangeKind;
+    LastTaskID: string;
+    LastRevision: QWord;
+    procedure Changed(Sender: TObject; AKind: TTaskHistoryChangeKind;
+      const ATaskID: string; ARevision: QWord);
   end;
 
   { Injects a deterministic failure through the worker's protected test seam. }
@@ -120,6 +132,37 @@ begin
   Status := AResult.Status;
   ErrorText := AResult.Errors.Text;
   CompletedUTC := AResult.CompletedUTC;
+end;
+
+{**
+  Records the scalar identity of one shared-history mutation.
+
+  Parameters
+  ----------
+  Sender
+    History service publishing the change; unused by this observer.
+  AKind
+    Reset, addition, update, or removal classification.
+  ATaskID
+    Stable affected identifier, or blank for a reset.
+  ARevision
+    Monotonically increasing service revision.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  None
+}
+procedure THistoryChangeObserver.Changed(Sender: TObject;
+  AKind: TTaskHistoryChangeKind; const ATaskID: string; ARevision: QWord);
+begin
+  Inc(Count);
+  LastKind := AKind;
+  LastTaskID := ATaskID;
+  LastRevision := ARevision;
 end;
 
 {**
@@ -560,6 +603,179 @@ begin
 end;
 
 {**
+  Appends one deterministic component fixture to a task inventory.
+
+  Parameters
+  ----------
+  ATask
+    Task that receives ownership of the new component.
+  AName, AVersion, AEcosystem, AComponentType
+    Scalar fallback identity and version fields.
+  APackageURL
+    Optional strong Package URL identity.
+  AScope
+    Optional dependency scope copied into comparison rows.
+
+  Returns
+  -------
+  TComponent
+    Borrowed component owned by ATask.
+
+  Raises
+  ------
+  EArgumentNilException
+    Raised when ATask is nil.
+  EOutOfMemory
+    Propagated while allocating the component.
+}
+function AddComparisonComponent(ATask: TScanTask; const AName, AVersion,
+  AEcosystem, AComponentType, APackageURL, AScope: string):
+  uModels.TComponent;
+begin
+  if ATask = nil then
+    raise EArgumentNilException.Create('ATask must not be nil');
+  Result := uModels.TComponent.Create;
+  try
+    Result.Name := AName;
+    Result.Version := AVersion;
+    Result.Ecosystem := AEcosystem;
+    Result.ComponentType := AComponentType;
+    Result.PackageURL := APackageURL;
+    Result.DependencyScope := AScope;
+    Result.SourceArtifact := AName + '.fixture';
+    Result.SourceParser := 'regression fixture';
+    ATask.Components.Add(Result);
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+{**
+  Locates one directional comparison row by kind, name, and versions.
+
+  Parameters
+  ----------
+  AComparison
+    Comparison result whose owned rows are searched.
+  AKind
+    Required change classification.
+  AName
+    Required component display name.
+  ABeforeVersion, AAfterVersion
+    Required directional version values.
+
+  Returns
+  -------
+  TComponentChange
+    Borrowed matching row, or nil when no row matches exactly.
+
+  Raises
+  ------
+  None
+}
+function FindComparisonChange(AComparison: TComponentComparison;
+  AKind: TComponentChangeKind; const AName, ABeforeVersion,
+  AAfterVersion: string): TComponentChange;
+var
+  I: Integer;
+  Change: TComponentChange;
+begin
+  Result := nil;
+  if AComparison = nil then
+    Exit;
+  for I := 0 to AComparison.Changes.Count - 1 do
+  begin
+    Change := TComponentChange(AComparison.Changes[I]);
+    if (Change.Kind = AKind) and (Change.Name = AName) and
+      (Change.BeforeVersion = ABeforeVersion) and
+      (Change.AfterVersion = AAfterVersion) then
+      Exit(Change);
+  end;
+end;
+
+{**
+  Serializes comparison rows and warnings for deterministic-order assertions.
+
+  Parameters
+  ----------
+  AComparison
+    Comparison result to represent without modifying it.
+
+  Returns
+  -------
+  string
+    Stable scalar signature preserving result and warning order.
+
+  Raises
+  ------
+  EArgumentNilException
+    Raised when AComparison is nil.
+  EOutOfMemory
+    Propagated while constructing the signature.
+}
+function ComparisonSignature(AComparison: TComponentComparison): string;
+var
+  I: Integer;
+  Change: TComponentChange;
+begin
+  if AComparison = nil then
+    raise EArgumentNilException.Create('AComparison must not be nil');
+  Result := Format('%d/%d/%d/%d', [AComparison.AddedCount,
+    AComparison.RemovedCount, AComparison.VersionChangedCount,
+    AComparison.UnchangedCount]);
+  for I := 0 to AComparison.Changes.Count - 1 do
+  begin
+    Change := TComponentChange(AComparison.Changes[I]);
+    Result := Result + LineEnding + Format('%d|%s|%s|%s|%s|%s|%s|%s',
+      [Ord(Change.Kind), Change.RowKey, Change.IdentityKey, Change.Name,
+      Change.Ecosystem, Change.ComponentType, Change.BeforeVersion,
+      Change.AfterVersion]);
+  end;
+  for I := 0 to AComparison.Warnings.Count - 1 do
+    Result := Result + LineEnding + 'warning|' + AComparison.Warnings[I];
+end;
+
+{**
+  Creates one task with stable history fields for service regressions.
+
+  Parameters
+  ----------
+  AID
+    Explicit safe task identifier.
+  ACreatedUTC
+    Sortable UTC creation timestamp.
+  AStatus
+    Initial lifecycle state.
+  ARootName
+    Target-folder display name.
+
+  Returns
+  -------
+  TScanTask
+    Newly allocated caller-owned task.
+
+  Raises
+  ------
+  EOutOfMemory
+    Propagated while allocating the task and child collections.
+}
+function NewHistoryTask(const AID, ACreatedUTC: string;
+  AStatus: TTaskStatus; const ARootName: string): TScanTask;
+begin
+  Result := TScanTask.Create;
+  Result.ID := AID;
+  Result.CreatedUTC := ACreatedUTC;
+  Result.CompletedUTC := '2026-08-20T12:00:00.000Z';
+  Result.TargetDirectory := IncludeTrailingPathDelimiter(TemporaryRoot) +
+    ARootName;
+  Result.TargetRootName := ARootName;
+  Result.Status := AStatus;
+  Result.ScannerVersion := '0.5.0';
+  Result.ScannerCommit := 'fixture-commit';
+end;
+
+{**
   Finds one artifact by its exact root-relative evidence path.
 
   Parameters
@@ -905,7 +1121,7 @@ begin
 end;
 
 {**
-  Verifies the compile-time feature shell and Analyzer frame ownership split.
+  Verifies the two-feature shell and shared-history ownership boundary.
 
   Parameters
   ----------
@@ -918,22 +1134,27 @@ end;
   Raises
   ------
   Exception
-    Raised when the shell regains scan-domain responsibilities, the frame is
-    auto-created, a placeholder feature is exposed, or either LFM/LPI resource
-    declaration diverges from the intended ownership model.
+    Raised when the shell regains scan-domain responsibilities, either feature
+    is auto-created, shared history gains a second owner, shortcut routing
+    diverges, or an LFM/LPI declaration no longer matches the compiled shell.
 }
 procedure TestApplicationShellStructure;
 var
   ShellSourceLines, ShellResourceLines, AnalyzerSourceLines,
-    AnalyzerResourceLines, ProjectLines, ProgramLines: TStringList;
-  ShellSource, ShellResource, AnalyzerSource, AnalyzerResource, ProjectText,
-    ProgramText: string;
+    AnalyzerResourceLines, CompareSourceLines, CompareResourceLines,
+    ProjectLines, ProgramLines: TStringList;
+  ShellSource, ShellResource, AnalyzerSource, AnalyzerResource, CompareSource,
+    CompareResource, ProjectText, ProgramText, InitializeBlock,
+    CreateFeaturesBlock,
+    HistoryChangedBlock, KeyBlock, DestroyBlock: string;
   LineIndex, PageCount: Integer;
 begin
   ShellSourceLines := TStringList.Create;
   ShellResourceLines := TStringList.Create;
   AnalyzerSourceLines := TStringList.Create;
   AnalyzerResourceLines := TStringList.Create;
+  CompareSourceLines := TStringList.Create;
+  CompareResourceLines := TStringList.Create;
   ProjectLines := TStringList.Create;
   ProgramLines := TStringList.Create;
   try
@@ -947,6 +1168,12 @@ begin
     AnalyzerResourceLines.LoadFromFile(
       IncludeTrailingPathDelimiter(ProjectRoot) + 'src' + DirectorySeparator +
       'uSBOMAnalyzerFrame.lfm');
+    CompareSourceLines.LoadFromFile(
+      IncludeTrailingPathDelimiter(ProjectRoot) + 'src' + DirectorySeparator +
+      'uCompareScansFrame.pas');
+    CompareResourceLines.LoadFromFile(
+      IncludeTrailingPathDelimiter(ProjectRoot) + 'src' + DirectorySeparator +
+      'uCompareScansFrame.lfm');
     ProjectLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
       'src' + DirectorySeparator + 'purpleray_sbom_analyzer.lpi');
     ProgramLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
@@ -955,21 +1182,56 @@ begin
     ShellResource := ShellResourceLines.Text;
     AnalyzerSource := AnalyzerSourceLines.Text;
     AnalyzerResource := AnalyzerResourceLines.Text;
+    CompareSource := CompareSourceLines.Text;
+    CompareResource := CompareResourceLines.Text;
     ProjectText := ProjectLines.Text;
     ProgramText := ProgramLines.Text;
+    InitializeBlock := ExtractTextSection(ShellSource,
+      'procedure TMainForm.InitializeShell',
+      'destructor TMainForm.Destroy;');
+    CreateFeaturesBlock := ExtractTextSection(ShellSource,
+      'procedure TMainForm.CreateFeatureFrames;',
+      'procedure TMainForm.SelectFeature');
+    HistoryChangedBlock := ExtractTextSection(ShellSource,
+      'procedure TMainForm.HistoryChanged',
+      'function TMainForm.PrimaryShortcut');
+    KeyBlock := ExtractTextSection(ShellSource,
+      'procedure TMainForm.FormKeyPressed',
+      'procedure TMainForm.FeatureSelectionChanged');
+    DestroyBlock := ExtractTextSection(ShellSource,
+      'destructor TMainForm.Destroy;',
+      'procedure TMainForm.CreateFeatureFrames;');
 
     AssertTrue(Pos('TMainForm = class(TForm)', ShellSource) > 0,
       'the application shell is not the main form');
     AssertTrue(Pos('uSBOMAnalyzerFrame', ShellSource) > 0,
       'the shell does not import the Analyzer feature frame');
-    AssertTrue(Pos('TSBOMAnalyzerFrame.Create(AnalyzerPage)', ShellSource) > 0,
-      'the shell does not create the Analyzer frame inside its page');
+    AssertTrue(Pos('uCompareScansFrame', ShellSource) > 0,
+      'the shell does not import the Compare Scans feature frame');
+    AssertTrue(Pos('uTaskHistory', ShellSource) > 0,
+      'the shell does not own shared task history');
+    AssertEqual(1, CountTextOccurrences(ShellSource,
+      'TTaskHistoryService.Create(ADataDirectory)'),
+      'the shell must create exactly one shared task-history service');
+    AssertTrue(Pos('FHistoryService.OnChanged := @HistoryChanged',
+      ShellSource) > 0, 'the shell does not subscribe to shared history');
+    AssertTrue((InitializeBlock <> '') and
+      (Pos('SelectFeature(', InitializeBlock) = 0) and
+      (Pos('procedure TMainForm.FormShown', ShellSource) <
+      Pos('SelectFeature(FeatureSelector.ItemIndex)', ShellSource)),
+      'feature activation can move focus before the shell is shown');
+    AssertTrue(Pos('TSBOMAnalyzerFrame.CreateWithHistoryService(AnalyzerPage,',
+      CreateFeaturesBlock) > 0,
+      'the shell does not inject shared history into Analyzer');
+    AssertTrue(Pos('TCompareScansFrame.CreateWithHistoryService(ComparePage,',
+      CreateFeaturesBlock) > 0,
+      'the shell does not inject shared history into Compare Scans');
     AssertTrue(Pos('FAnalyzerFrame.Parent := AnalyzerPage', ShellSource) > 0,
       'the Analyzer frame is not parented to its notebook page');
+    AssertTrue(Pos('FCompareFrame.Parent := ComparePage', ShellSource) > 0,
+      'the Compare Scans frame is not parented to its notebook page');
     AssertTrue(Pos('uModels', ShellSource) = 0,
       'the shell imports task-model responsibilities');
-    AssertTrue(Pos('uTaskHistory', ShellSource) = 0,
-      'the shell imports task-history responsibilities');
     AssertTrue(Pos('uSettingsStore', ShellSource) = 0,
       'the shell imports settings-store responsibilities');
     AssertTrue(Pos('uScanWorker', ShellSource) = 0,
@@ -978,6 +1240,24 @@ begin
       'the shell imports scan-engine responsibilities');
     AssertTrue(Pos('uExportUtils', ShellSource) = 0,
       'the shell imports export responsibilities');
+    AssertTrue((Pos('FAnalyzerFrame.HistoryChanged(', HistoryChangedBlock) > 0)
+      and (Pos('FCompareFrame.HistoryChanged(', HistoryChangedBlock) > 0),
+      'the shell does not fan shared-history changes to both features');
+    AssertTrue((Pos('VK_1', KeyBlock) > 0) and
+      (Pos('SelectFeature(0)', KeyBlock) > 0) and
+      (Pos('VK_2', KeyBlock) > 0) and
+      (Pos('SelectFeature(1)', KeyBlock) > 0),
+      'feature keyboard navigation is incomplete');
+    AssertTrue((Pos('FActiveFeatureIndex = 0', KeyBlock) > 0) and
+      (Pos('FAnalyzerFrame.HandleShortcut', KeyBlock) > 0) and
+      (Pos('FActiveFeatureIndex = 1', KeyBlock) > 0) and
+      (Pos('FCompareFrame.HandleShortcut', KeyBlock) > 0),
+      'active-feature shortcut routing is incomplete');
+    AssertTrue((Pos('FreeAndNil(FCompareFrame)', DestroyBlock) > 0) and
+      (Pos('FreeAndNil(FAnalyzerFrame)', DestroyBlock) > 0) and
+      (Pos('FreeAndNil(FHistoryService)', DestroyBlock) >
+      Pos('FreeAndNil(FAnalyzerFrame)', DestroyBlock)),
+      'shared history is not destroyed after both borrowing frames');
 
     AssertTrue(Pos('object MainForm: TMainForm', ShellResource) > 0,
       'the main-form resource root differs');
@@ -993,14 +1273,17 @@ begin
       'the tabless workspace notebook is missing');
     AssertTrue(Pos('object AnalyzerPage: TPage', ShellResource) > 0,
       'the Analyzer workspace page is missing');
-    AssertTrue(Pos('Compare', ShellResource) = 0,
-      'an unfinished comparison placeholder is exposed');
+    AssertTrue(Pos('object ComparePage: TPage', ShellResource) > 0,
+      'the Compare Scans workspace page is missing');
+    AssertTrue((Pos('''SBOM Analyzer''', ShellResource) > 0) and
+      (Pos('''Compare Scans''', ShellResource) > 0),
+      'the feature selector does not expose both compiled features');
     PageCount := 0;
     for LineIndex := 0 to ShellResourceLines.Count - 1 do
       if Pos(': TPage', ShellResourceLines[LineIndex]) > 0 then
         Inc(PageCount);
-    AssertEqual(1, PageCount,
-      'the shell should expose exactly one completed feature page');
+    AssertEqual(2, PageCount,
+      'the shell should expose exactly two completed feature pages');
 
     AssertTrue(Pos('TSBOMAnalyzerFrame = class(TFrame)', AnalyzerSource) > 0,
       'the Analyzer workspace is not an LCL frame');
@@ -1014,6 +1297,12 @@ begin
       'the Analyzer shell API is missing safe shutdown');
     AssertTrue(Pos('procedure Activate;', AnalyzerSource) > 0,
       'the Analyzer shell API is missing feature activation');
+    AssertTrue(Pos('procedure Deactivate;', AnalyzerSource) > 0,
+      'the Analyzer shell API is missing feature deactivation');
+    AssertTrue(Pos('procedure HistoryChanged(AKind:', AnalyzerSource) > 0,
+      'the Analyzer shell API is missing shared-history changes');
+    AssertTrue(Pos('constructor CreateWithHistoryService(', AnalyzerSource) > 0,
+      'the Analyzer shell API lacks history injection');
     AssertTrue(Pos('property ScanActive: Boolean', AnalyzerSource) > 0,
       'the Analyzer shell API is missing activity state');
     AssertTrue(Pos('property OnActivityChanged:', AnalyzerSource) > 0,
@@ -1046,23 +1335,54 @@ begin
     AssertTrue(Pos('Position =', AnalyzerResource) = 0,
       'the frame retained a form-only position property');
 
-    AssertTrue(Pos('<Units Count="4">', ProjectText) > 0,
-      'the Lazarus project unit count does not include the feature frame');
+    AssertTrue(Pos('TCompareScansFrame = class(TFrame)', CompareSource) > 0,
+      'Compare Scans is not an LCL frame');
+    AssertTrue(Pos('constructor CreateWithHistoryService(', CompareSource) > 0,
+      'Compare Scans lacks shared-history injection');
+    AssertTrue(Pos('procedure Activate;', CompareSource) > 0,
+      'Compare Scans shell API is missing activation');
+    AssertTrue(Pos('procedure Deactivate;', CompareSource) > 0,
+      'Compare Scans shell API is missing deactivation');
+    AssertTrue(Pos('procedure HistoryChanged(AKind:', CompareSource) > 0,
+      'Compare Scans shell API is missing shared-history changes');
+    AssertTrue(Pos('function HandleShortcut(var AKey:', CompareSource) > 0,
+      'Compare Scans shell API is missing shortcut routing');
+    AssertTrue(Pos('function PrepareForClose: Boolean;', CompareSource) > 0,
+      'Compare Scans shell API is missing safe shutdown');
+    AssertTrue(Pos('object CompareScansFrame: TCompareScansFrame',
+      CompareResource) > 0, 'Compare Scans frame resource root differs');
+    AssertTrue((Pos('AllowDropFiles =', CompareResource) = 0) and
+      (Pos('OnCloseQuery =', CompareResource) = 0) and
+      (Pos('OnDropFiles =', CompareResource) = 0) and
+      (Pos('Position =', CompareResource) = 0),
+      'Compare Scans retained form-only resource properties');
+
+    AssertTrue(Pos('<Units Count="5">', ProjectText) > 0,
+      'the Lazarus project unit count does not include both feature frames');
     AssertTrue(Pos('<Filename Value="uSBOMAnalyzerFrame.pas"/>',
       ProjectText) > 0, 'the Lazarus project does not list the feature frame');
     AssertTrue(Pos('<ComponentName Value="SBOMAnalyzerFrame"/>',
       ProjectText) > 0, 'the Lazarus frame component name differs');
-    AssertTrue(Pos('<HasResources Value="True"/>', ProjectText) > 0,
-      'the Lazarus project does not register the frame resource');
-    AssertTrue(Pos('<ResourceBaseClass Value="Frame"/>', ProjectText) > 0,
-      'the Lazarus project does not register a Frame resource');
+    AssertTrue(Pos('<Filename Value="uCompareScansFrame.pas"/>',
+      ProjectText) > 0,
+      'the Lazarus project does not list Compare Scans');
+    AssertTrue(Pos('<ComponentName Value="CompareScansFrame"/>',
+      ProjectText) > 0,
+      'the Lazarus Compare Scans component name differs');
+    AssertEqual(2, CountTextOccurrences(ProjectText,
+      '<ResourceBaseClass Value="Frame"/>'),
+      'the Lazarus project does not register both Frame resources');
     AssertTrue(Pos('Application.CreateForm(TMainForm, MainForm);',
       ProgramText) > 0, 'the application no longer auto-creates its shell');
     AssertTrue(Pos('CreateForm(TSBOMAnalyzerFrame', ProgramText) = 0,
       'the feature frame must be created by the shell, not the program');
+    AssertTrue(Pos('CreateForm(TCompareScansFrame', ProgramText) = 0,
+      'Compare Scans must be created by the shell, not the program');
   finally
     ProgramLines.Free;
     ProjectLines.Free;
+    CompareResourceLines.Free;
+    CompareSourceLines.Free;
     AnalyzerResourceLines.Free;
     AnalyzerSourceLines.Free;
     ShellResourceLines.Free;
@@ -1366,7 +1686,7 @@ begin
 end;
 
 {**
-  Locks the non-visual source/resource contracts behind Sprint 4 UI behavior.
+  Locks the Analyzer source/resource contracts retained after shell expansion.
 
   Parameters
   ----------
@@ -1380,7 +1700,8 @@ end;
   ------
   Exception
     Raised when target disclosure, restoration, overwrite protection, local
-    time, tab counts, full-hash copy, or asynchronous close wiring regresses.
+    time, selection stability, safe deletion, full-hash copy, or asynchronous
+    close wiring regresses.
 }
 procedure TestSprint4UIContracts;
 var
@@ -1388,7 +1709,7 @@ var
     SettingsResourceLines, ShellSourceLines: TStringList;
   AnalyzerSource, AnalyzerResource, SettingsSource, SettingsResource,
     ShellSource, TargetBlock, RequestCloseBlock, PrepareCloseBlock,
-    CopyBlock: string;
+    CopyBlock, WorkerCompleteBlock, DeleteBlock: string;
 begin
   AnalyzerSourceLines := TStringList.Create;
   AnalyzerResourceLines := TStringList.Create;
@@ -1470,6 +1791,12 @@ begin
     PrepareCloseBlock := ExtractTextSection(AnalyzerSource,
       'function TSBOMAnalyzerFrame.PrepareForClose',
       'function TSBOMAnalyzerFrame.RequestClose');
+    WorkerCompleteBlock := ExtractTextSection(AnalyzerSource,
+      'procedure TSBOMAnalyzerFrame.WorkerComplete',
+      LineEnding + 'end.' + LineEnding);
+    DeleteBlock := ExtractTextSection(AnalyzerSource,
+      'procedure TSBOMAnalyzerFrame.DeleteTaskClicked',
+      'procedure TSBOMAnalyzerFrame.TaskListKeyPressed');
     AssertTrue((RequestCloseBlock <> '') and (PrepareCloseBlock <> ''),
       'asynchronous close methods are missing');
     AssertTrue((Pos('WaitFor', RequestCloseBlock) = 0) and
@@ -1491,16 +1818,210 @@ begin
       AnalyzerSource) > 0) and
       (Pos('PersistedSettings.AllowOutsideRoot := False', AnalyzerSource) > 0),
       'per-scan privacy choices are not reset when they are not remembered');
-    AssertTrue((Pos('FUsesDefaultDataDirectory := ADataDirectory = ''''',
+    AssertTrue((Pos('TTaskHistoryService.Create(ADataDirectory)',
       AnalyzerSource) > 0) and
-      (Pos('if FUsesDefaultDataDirectory then', AnalyzerSource) > 0),
-      'an isolated analyzer data directory can still trigger profile migration');
+      (Pos('FHistoryService := AHistoryService', AnalyzerSource) > 0) and
+      (Pos('FSettingsStore := TSettingsStore.Create(' +
+      'FHistoryService.DataDirectory)', AnalyzerSource) > 0),
+      'Analyzer does not honor owned and borrowed history data roots');
+
+    AssertTrue((WorkerCompleteBlock <> '') and
+      (Pos('WasSelected := FSelectedTaskID = AResult.ID',
+      WorkerCompleteBlock) > 0) and
+      (Pos('if WasSelected and', WorkerCompleteBlock) > 0),
+      'completed background scans can steal a historical selection');
+    AssertTrue((Pos('object FTaskMenu: TPopupMenu', AnalyzerResource) > 0) and
+      (Pos('object DeleteTaskMenuItem: TMenuItem', AnalyzerResource) > 0) and
+      (Pos('PopupMenu = FTaskMenu', AnalyzerResource) > 0) and
+      (Pos('OnKeyDown = TaskListKeyPressed', AnalyzerResource) > 0),
+      'task deletion is not exposed through menu and keyboard contracts');
+    AssertTrue((DeleteBlock <> '') and
+      (Pos('Task.Status in [tsPending, tsRunning]', DeleteBlock) > 0) and
+      (Pos('FHistoryService.DeleteTask(TaskID, WarningText)',
+      DeleteBlock) > 0) and
+      (Pos('FSelectedTaskID := ''''', DeleteBlock) > 0) and
+      (Pos('PreferredIndex', DeleteBlock) > 0),
+      'safe task deletion or post-delete selection preservation regressed');
   finally
     ShellSourceLines.Free;
     SettingsResourceLines.Free;
     SettingsSourceLines.Free;
     AnalyzerResourceLines.Free;
     AnalyzerSourceLines.Free;
+  end;
+end;
+
+{**
+  Locks the source and LFM contracts for the Compare Scans feature.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when completed-task selection, clone-based comparison, directional
+    disclosure, live-history refresh, filtering, sorting, copying, or empty
+    states diverge from the Sprint 5 interaction contract.
+}
+procedure TestSprint5CompareUIContracts;
+var
+  CompareSourceLines, CompareResourceLines, HistorySourceLines: TStringList;
+  CompareSource, CompareResource, HistorySource, RefreshBlock, DefaultsBlock,
+    RebuildBlock, SummaryBlock, FilterBlock, PopulateBlock, ShortcutBlock: string;
+begin
+  CompareSourceLines := TStringList.Create;
+  CompareResourceLines := TStringList.Create;
+  HistorySourceLines := TStringList.Create;
+  try
+    CompareSourceLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'uCompareScansFrame.pas');
+    CompareResourceLines.LoadFromFile(
+      IncludeTrailingPathDelimiter(ProjectRoot) + 'src' + DirectorySeparator +
+      'uCompareScansFrame.lfm');
+    HistorySourceLines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'src' + DirectorySeparator + 'uTaskHistory.pas');
+    CompareSource := CompareSourceLines.Text;
+    CompareResource := CompareResourceLines.Text;
+    HistorySource := HistorySourceLines.Text;
+    RefreshBlock := ExtractTextSection(CompareSource,
+      'procedure TCompareScansFrame.RefreshTaskChoices;',
+      'procedure TCompareScansFrame.ApplyInitialSelection;');
+    DefaultsBlock := ExtractTextSection(CompareSource,
+      'procedure TCompareScansFrame.ApplyInitialSelection;',
+      'procedure TCompareScansFrame.UpdatePickerHints;');
+    RebuildBlock := ExtractTextSection(CompareSource,
+      'procedure TCompareScansFrame.RebuildComparison;',
+      'procedure TCompareScansFrame.UpdateComparisonSummary');
+    SummaryBlock := ExtractTextSection(CompareSource,
+      'procedure TCompareScansFrame.UpdateComparisonSummary',
+      'function TCompareScansFrame.ChangeMatchesFilters');
+    FilterBlock := ExtractTextSection(CompareSource,
+      'function TCompareScansFrame.ChangeMatchesFilters',
+      'function TCompareScansFrame.CompareChangeRows');
+    PopulateBlock := ExtractTextSection(CompareSource,
+      'procedure TCompareScansFrame.PopulateRows;',
+      'procedure TCompareScansFrame.UpdateControlStates;');
+    ShortcutBlock := ExtractTextSection(CompareSource,
+      'function TCompareScansFrame.HandleShortcut',
+      'function TCompareScansFrame.PrepareForClose');
+
+    AssertTrue(Pos('Task.Status <> tsCompleted', HistorySource) > 0,
+      'comparison task summaries are not restricted to completed scans');
+    AssertTrue((RefreshBlock <> '') and
+      (Pos('FHistory.GetCompletedTaskSummaries(FSummaries)', RefreshBlock) > 0)
+      and (Pos('PickerIndexForTask(FBaselinePicker,', RefreshBlock) > 0) and
+      (Pos('PickerIndexForTask(FComparisonPicker,', RefreshBlock) > 0),
+      'task choice refresh does not preserve stable completed-task IDs');
+    AssertTrue((DefaultsBlock <> '') and
+      (Pos('Newest := SummaryAt(0)', DefaultsBlock) > 0) and
+      (Pos('if Newest = nil then', DefaultsBlock) > 0) and
+      (Pos('if Newest = nil then', DefaultsBlock) <
+      Pos('FDefaultsApplied := True', DefaultsBlock)) and
+      (Pos('FDefaultsApplied := True', DefaultsBlock) <
+      Pos('if FSummaries.Count < 2 then', DefaultsBlock)) and
+      (Pos('SameTaskTarget(Newest, Candidate)', DefaultsBlock) > 0) and
+      (Pos('BaselineIndex := 1', DefaultsBlock) > 0),
+      'initial scan pair or empty/one-task default latching differs');
+    AssertTrue(Pos('SameFileName(ALeft.TargetRootName, ' +
+      'ARight.TargetRootName)', CompareSource) > 0,
+      'legacy target-name comparison ignores platform filename semantics');
+    AssertTrue((RebuildBlock <> '') and
+      (CountTextOccurrences(RebuildBlock, 'CloneTaskByID(') = 2) and
+      (Pos('CompareComponentTasks(BaselineTask, ComparisonTask)',
+      RebuildBlock) > 0) and
+      (Pos('BaselineTask.Free', RebuildBlock) > 0) and
+      (Pos('ComparisonTask.Free', RebuildBlock) > 0),
+      'comparison does not clone both tasks before model analysis');
+    AssertTrue(Pos('FindTaskByID(', CompareSource) = 0,
+      'Compare Scans retains borrowed live task pointers');
+    AssertTrue((Pos('if FOwnsHistory then', CompareSource) > 0) and
+      (Pos('FHistory.OnChanged := @HistoryServiceChanged', CompareSource) > 0)
+      and (Pos('FOwnsHistory := False', CompareSource) > 0),
+      'owned and borrowed history subscriptions are not separated');
+
+    AssertTrue((SummaryBlock <> '') and
+      (Pos('Changes from %s [%s] to %s [%s]', SummaryBlock) > 0) and
+      (Pos('Added %d', SummaryBlock) > 0) and
+      (Pos('Removed %d', SummaryBlock) > 0) and
+      (Pos('Changed %d', SummaryBlock) > 0) and
+      (Pos('Unchanged %d', SummaryBlock) > 0),
+      'directional comparison summary or counts are incomplete');
+    AssertTrue((Pos('different folders', SummaryBlock) > 0) and
+      (Pos('completed with diagnostics', SummaryBlock) > 0) and
+      (Pos('different analyzer', SummaryBlock) > 0) and
+      (Pos('identity warning', SummaryBlock) > 0),
+      'comparison cautions do not disclose incompatible or weak evidence');
+    AssertTrue((FilterBlock <> '') and
+      (Pos('FChangeFilter.ItemIndex', FilterBlock) > 0) and
+      (Pos('FSearchEdit.Text', FilterBlock) > 0) and
+      (Pos('AChange.IdentityKey', FilterBlock) > 0) and
+      (Pos('AChange.BeforePackageURL', FilterBlock) > 0) and
+      (Pos('AChange.AfterPackageURL', FilterBlock) > 0),
+      'comparison search or change-kind filtering is incomplete');
+    AssertTrue((PopulateBlock <> '') and
+      (Pos('SortChangePointers', PopulateBlock) > 0) and
+      (Pos('SelectedKeys.Add', PopulateBlock) > 0) and
+      (Pos('No changes match the current search and filter',
+      PopulateBlock) > 0) and
+      (Pos('files are not rescanned', PopulateBlock) > 0),
+      'comparison rows do not preserve selection, sort, or disclose scope');
+    AssertTrue((ShortcutBlock <> '') and
+      (Pos('AKey = VK_F5', ShortcutBlock) > 0) and
+      (Pos('AKey = VK_F', ShortcutBlock) > 0) and
+      (Pos('AKey = VK_C', ShortcutBlock) > 0) and
+      (Pos('Escape is deliberately not consumed', ShortcutBlock) > 0),
+      'Compare Scans shortcut routing can affect a hidden Analyzer scan');
+
+    AssertTrue(Pos('object CompareScansFrame: TCompareScansFrame',
+      CompareResource) > 0, 'Compare Scans LFM root differs');
+    AssertTrue((Pos('Height = 626', CompareResource) > 0) and
+      (Pos('Width = 1080', CompareResource) > 0),
+      'Compare Scans does not fit the compact feature workspace');
+    AssertTrue((Pos('object BaselineRowPanel: TPanel', CompareResource) > 0) and
+      (Pos('object ComparisonRowPanel: TPanel', CompareResource) > 0) and
+      (CountTextOccurrences(CompareResource, '      Height = 38') >= 2),
+      'the two scan-picker rows do not use the compact fixed layout');
+    AssertTrue((Pos('object FBaselinePicker: TComboBox', CompareResource) > 0)
+      and (Pos('object FComparisonPicker: TComboBox', CompareResource) > 0) and
+      (Pos('object FSwapButton: TButton', CompareResource) > 0) and
+      (Pos('object FRefreshButton: TButton', CompareResource) > 0),
+      'baseline, comparison, swap, or refresh controls are missing');
+    AssertTrue((Pos('object FSearchEdit: TEdit', CompareResource) > 0) and
+      (Pos('object FChangeFilter: TComboBox', CompareResource) > 0) and
+      (Pos('''All changes''', CompareResource) > 0) and
+      (Pos('''Added''', CompareResource) > 0) and
+      (Pos('''Removed''', CompareResource) > 0) and
+      (Pos('''Changed''', CompareResource) > 0),
+      'comparison search or change filter controls are missing');
+    AssertEqual(7, CountTextOccurrences(CompareResource, '        item'),
+      'comparison report should expose exactly seven columns');
+    AssertTrue((Pos('Caption = ''Change''', CompareResource) > 0) and
+      (Pos('Caption = ''Component''', CompareResource) > 0) and
+      (Pos('Caption = ''Before''', CompareResource) > 0) and
+      (Pos('Caption = ''After''', CompareResource) > 0) and
+      (Pos('Caption = ''Ecosystem''', CompareResource) > 0) and
+      (Pos('Caption = ''Type''', CompareResource) > 0) and
+      (Pos('Caption = ''Identity''', CompareResource) > 0),
+      'comparison report columns differ from the directional result model');
+    AssertTrue((Pos('OnColumnClick = ResultColumnClicked', CompareResource) > 0)
+      and (Pos('MultiSelect = True', CompareResource) > 0) and
+      (Pos('PopupMenu = FCopyMenu', CompareResource) > 0) and
+      (Pos('Copy selected change(s)', CompareResource) > 0) and
+      (Pos('Copy component identity', CompareResource) > 0),
+      'sortable multi-row comparison copy controls are incomplete');
+    AssertTrue((Pos('object FResultEmptyLabel: TLabel', CompareResource) > 0)
+      and (Pos('files are not rescanned', CompareResource) > 0),
+      'comparison empty state or saved-inventory disclosure is missing');
+  finally
+    HistorySourceLines.Free;
+    CompareResourceLines.Free;
+    CompareSourceLines.Free;
   end;
 end;
 
@@ -2587,6 +3108,428 @@ begin
   end;
 end;
 
+{**
+  Exercises conservative, deterministic scan-to-scan component comparison.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when identity matching, version reconciliation, diagnostics,
+    directionality, determinism, or result ownership regresses.
+}
+procedure TestComponentComparison;
+var
+  Baseline, Current: TScanTask;
+  Comparison, ReverseComparison, PermutedComparison: TComponentComparison;
+  Change: TComponentChange;
+  Component: uModels.TComponent;
+  StableSignature, FirstBaselineName, FirstCurrentName: string;
+  RaisedForNil: Boolean;
+begin
+  Baseline := TScanTask.Create;
+  Current := TScanTask.Create;
+  Comparison := nil;
+  ReverseComparison := nil;
+  PermutedComparison := nil;
+  try
+    Comparison := CompareComponentTasks(Baseline, Current);
+    AssertEqual(0, Comparison.Changes.Count,
+      'empty scans produced comparison rows');
+    AssertEqual(0, Comparison.AddedCount,
+      'empty scans produced additions');
+    AssertEqual(0, Comparison.RemovedCount,
+      'empty scans produced removals');
+    AssertEqual(0, Comparison.VersionChangedCount,
+      'empty scans produced version changes');
+    AssertEqual(0, Comparison.UnchangedCount,
+      'empty scans produced unchanged components');
+    FreeAndNil(Comparison);
+
+    Component := AddComparisonComponent(Baseline, 'kept', '1.0.0', 'npm',
+      'library', 'pkg:npm/kept@1.0.0', 'runtime');
+    Component.DeclaredLicenses.Add('MIT');
+    Component.DeclaredPublishers.Add('Baseline Publisher');
+    Component.SourceParser := 'baseline-parser';
+    Component.SHA256 := StringOfChar('a', 64);
+    Component := AddComparisonComponent(Current, 'kept', '1.0.0', 'npm',
+      'library', 'pkg:npm/kept@1.0.0', 'development');
+    Component.EvidencePaths.Add('different/evidence.json');
+    Component.DeclaredLicenses.Add('Apache-2.0');
+    Component.DeclaredPublishers.Add('Current Publisher');
+    Component.SourceParser := 'current-parser';
+    Component.SHA256 := StringOfChar('b', 64);
+    AddComparisonComponent(Baseline, 'removed', '3.0.0', 'cargo', 'library',
+      'pkg:cargo/removed@3.0.0', 'runtime');
+    AddComparisonComponent(Current, 'added', '4.0.0', 'pypi', 'library',
+      'pkg:pypi/added@4.0.0', 'runtime');
+    AddComparisonComponent(Baseline, 'changed', '1.0.0', 'maven', 'library',
+      'pkg:maven/org.example/changed@1.0.0', 'runtime');
+    AddComparisonComponent(Current, 'changed', '2.0.0', 'maven', 'library',
+      'pkg:maven/org.example/changed@2.0.0', 'optional');
+    FirstBaselineName := uModels.TComponent(
+      Baseline.Components[0]).Name;
+    FirstCurrentName := uModels.TComponent(Current.Components[0]).Name;
+    Comparison := CompareComponentTasks(Baseline, Current);
+    AssertEqual(1, Comparison.AddedCount,
+      'one-sided current component was not added');
+    AssertEqual(1, Comparison.RemovedCount,
+      'one-sided baseline component was not removed');
+    AssertEqual(1, Comparison.VersionChangedCount,
+      'unique strong identity was not version-changed');
+    AssertEqual(1, Comparison.UnchangedCount,
+      'non-version metadata-only changes affected comparison equality');
+    AssertEqual(3, Comparison.Changes.Count,
+      'basic directional comparison row count differs');
+    Change := FindComparisonChange(Comparison, ccVersionChanged, 'changed',
+      '1.0.0', '2.0.0');
+    AssertTrue(Change <> nil, 'version-change row is missing');
+    AssertTrue((Change.IdentityKey <> '') and (Change.RowKey <> ''),
+      'version-change row lacks stable keys');
+    AssertEqual('pkg:maven/org.example/changed@1.0.0',
+      Change.BeforePackageURL, 'baseline Package URL was not copied');
+    AssertEqual('pkg:maven/org.example/changed@2.0.0',
+      Change.AfterPackageURL, 'current Package URL was not copied');
+    AssertEqual('runtime', Change.BeforeScope,
+      'baseline scope was not copied');
+    AssertEqual('optional', Change.AfterScope,
+      'current scope was not copied');
+    AssertEqual(FirstBaselineName,
+      uModels.TComponent(Baseline.Components[0]).Name,
+      'comparison modified baseline component order or fields');
+    AssertEqual(FirstCurrentName,
+      uModels.TComponent(Current.Components[0]).Name,
+      'comparison modified current component order or fields');
+    StableSignature := ComparisonSignature(Comparison);
+
+    ReverseComparison := CompareComponentTasks(Current, Baseline);
+    AssertEqual(1, ReverseComparison.AddedCount,
+      'reverse comparison addition count differs');
+    AssertEqual(1, ReverseComparison.RemovedCount,
+      'reverse comparison removal count differs');
+    AssertEqual(1, ReverseComparison.VersionChangedCount,
+      'reverse comparison version-change count differs');
+    AssertTrue(FindComparisonChange(ReverseComparison, ccVersionChanged,
+      'changed', '2.0.0', '1.0.0') <> nil,
+      'reverse comparison did not exchange before and after versions');
+    AssertTrue(FindComparisonChange(ReverseComparison, ccRemoved, 'added',
+      '4.0.0', '') <> nil,
+      'reverse comparison did not turn an addition into a removal');
+    FreeAndNil(ReverseComparison);
+
+    Baseline.Components.Exchange(0, Baseline.Components.Count - 1);
+    Current.Components.Exchange(0, Current.Components.Count - 1);
+    PermutedComparison := CompareComponentTasks(Baseline, Current);
+    AssertEqual(StableSignature, ComparisonSignature(PermutedComparison),
+      'component input order changed deterministic comparison output');
+    FreeAndNil(PermutedComparison);
+    FreeAndNil(Comparison);
+
+    Baseline.Components.Clear;
+    Current.Components.Clear;
+    AddComparisonComponent(Baseline, 'blank-version', '', 'generic',
+      'library', '', 'runtime');
+    AddComparisonComponent(Current, 'blank-version', '', 'generic',
+      'library', '', 'optional');
+    AddComparisonComponent(Baseline, 'range-version', '^1.0', 'npm',
+      'library', '', 'runtime');
+    AddComparisonComponent(Current, 'range-version', '^2.0', 'npm',
+      'library', '', 'runtime');
+    Comparison := CompareComponentTasks(Baseline, Current);
+    AssertEqual(1, Comparison.UnchangedCount,
+      'matching blank versions should remain unchanged');
+    AssertEqual(1, Comparison.VersionChangedCount,
+      'distinct declared version ranges should be reported as changed');
+    AssertTrue(FindComparisonChange(Comparison, ccVersionChanged,
+      'range-version', '^1.0', '^2.0') <> nil,
+      'version-range change row is missing');
+    FreeAndNil(Comparison);
+
+    Baseline.Components.Clear;
+    Current.Components.Clear;
+    AddComparisonComponent(Baseline, 'fallback', '1', 'npm', 'library',
+      'pkg:npm/fallback@1', 'runtime');
+    AddComparisonComponent(Current, 'fallback', '2', 'npm', 'library', '',
+      'runtime');
+    Comparison := CompareComponentTasks(Baseline, Current);
+    AssertEqual(1, Comparison.VersionChangedCount,
+      'unambiguous missing-purl fallback did not match strong identity');
+    AssertTrue(StringListContainsText(Comparison.Warnings,
+      'unambiguous field fallback'),
+      'unambiguous Package URL fallback was not disclosed');
+    Change := FindComparisonChange(Comparison, ccVersionChanged, 'fallback',
+      '1', '2');
+    AssertTrue((Change <> nil) and (Change.BeforePackageURL <> '') and
+      (Change.AfterPackageURL = ''),
+      'fallback comparison row did not preserve directional Package URLs');
+    FreeAndNil(Comparison);
+
+    Baseline.Components.Clear;
+    Current.Components.Clear;
+    AddComparisonComponent(Baseline, 'ambiguous', '1', 'npm', 'library',
+      'pkg:npm/namespace-one/ambiguous@1', 'runtime');
+    AddComparisonComponent(Baseline, 'ambiguous', '1', 'npm', 'library',
+      'pkg:npm/namespace-two/ambiguous@1', 'runtime');
+    AddComparisonComponent(Current, 'ambiguous', '1', 'npm', 'library', '',
+      'runtime');
+    Comparison := CompareComponentTasks(Baseline, Current);
+    AssertEqual(1, Comparison.AddedCount,
+      'ambiguous weak record should remain a separate addition');
+    AssertEqual(2, Comparison.RemovedCount,
+      'ambiguous strong coordinates should remain separate removals');
+    AssertEqual(0, Comparison.VersionChangedCount,
+      'ambiguous namespace records were paired speculatively');
+    AssertTrue(StringListContainsText(Comparison.Warnings,
+      'multiple Package URL coordinates'),
+      'ambiguous Package URL fallback was not disclosed');
+    FreeAndNil(Comparison);
+
+    Baseline.Components.Clear;
+    Current.Components.Clear;
+    AddComparisonComponent(Baseline, 'coordinate', '1', 'npm', 'library',
+      'pkg:npm/left/coordinate@1', 'runtime');
+    AddComparisonComponent(Current, 'coordinate', '2', 'npm', 'library',
+      'pkg:npm/right/coordinate@2', 'runtime');
+    Comparison := CompareComponentTasks(Baseline, Current);
+    AssertEqual(1, Comparison.AddedCount,
+      'different strong coordinate did not remain an addition');
+    AssertEqual(1, Comparison.RemovedCount,
+      'different strong coordinate did not remain a removal');
+    AssertEqual(0, Comparison.VersionChangedCount,
+      'different strong coordinates were paired as a version change');
+    FreeAndNil(Comparison);
+
+    Baseline.Components.Clear;
+    Current.Components.Clear;
+    AddComparisonComponent(Baseline, 'cross-ecosystem', '1', 'npm',
+      'library', '', 'runtime');
+    AddComparisonComponent(Current, 'cross-ecosystem', '2', 'maven',
+      'library', '', 'runtime');
+    AddComparisonComponent(Baseline, 'cross-type', '1', 'generic',
+      'application', '', 'runtime');
+    AddComparisonComponent(Current, 'cross-type', '2', 'generic',
+      'library', '', 'runtime');
+    Comparison := CompareComponentTasks(Baseline, Current);
+    AssertEqual(2, Comparison.AddedCount,
+      'ecosystem/type boundaries did not preserve additions');
+    AssertEqual(2, Comparison.RemovedCount,
+      'ecosystem/type boundaries did not preserve removals');
+    AssertEqual(0, Comparison.VersionChangedCount,
+      'cross-ecosystem or cross-type records were paired');
+    FreeAndNil(Comparison);
+
+    Baseline.Components.Clear;
+    Current.Components.Clear;
+    AddComparisonComponent(Baseline, 'CaseSensitive', '1', 'generic',
+      'library', '', 'runtime');
+    AddComparisonComponent(Current, 'casesensitive', '2', 'generic',
+      'library', '', 'runtime');
+    Comparison := CompareComponentTasks(Baseline, Current);
+    AssertEqual(1, Comparison.AddedCount,
+      'case-distinct weak component name did not remain an addition');
+    AssertEqual(1, Comparison.RemovedCount,
+      'case-distinct weak component name did not remain a removal');
+    AssertEqual(0, Comparison.VersionChangedCount,
+      'case-distinct weak component names were paired speculatively');
+    FreeAndNil(Comparison);
+
+    Baseline.Components.Clear;
+    Current.Components.Clear;
+    AddComparisonComponent(Baseline, 'multi', '1', 'npm', 'library',
+      'pkg:npm/multi@1', 'runtime');
+    AddComparisonComponent(Baseline, 'multi', '2', 'npm', 'library',
+      'pkg:npm/multi@2', 'runtime');
+    AddComparisonComponent(Current, 'multi', '2', 'npm', 'library',
+      'pkg:npm/multi@2', 'runtime');
+    AddComparisonComponent(Current, 'multi', '3', 'npm', 'library',
+      'pkg:npm/multi@3', 'runtime');
+    Comparison := CompareComponentTasks(Baseline, Current);
+    AssertEqual(1, Comparison.UnchangedCount,
+      'multi-version exact match did not cancel');
+    AssertEqual(1, Comparison.AddedCount,
+      'multi-version residual current version is missing');
+    AssertEqual(1, Comparison.RemovedCount,
+      'multi-version residual baseline version is missing');
+    AssertEqual(0, Comparison.VersionChangedCount,
+      'multi-version residuals were paired speculatively');
+    AssertTrue(FindComparisonChange(Comparison, ccRemoved, 'multi', '1', '') <>
+      nil, 'multi-version removed row differs');
+    AssertTrue(FindComparisonChange(Comparison, ccAdded, 'multi', '', '3') <>
+      nil, 'multi-version added row differs');
+    FreeAndNil(Comparison);
+
+    Baseline.Components.Clear;
+    Current.Components.Clear;
+    AddComparisonComponent(Baseline, 'duplicate', '1', 'cargo', 'library',
+      'pkg:cargo/duplicate@1', 'runtime');
+    AddComparisonComponent(Baseline, 'duplicate', '1', 'cargo', 'library',
+      'pkg:cargo/duplicate@1', 'optional');
+    AddComparisonComponent(Current, 'duplicate', '1', 'cargo', 'library',
+      'pkg:cargo/duplicate@1', 'runtime');
+    Comparison := CompareComponentTasks(Baseline, Current);
+    AssertEqual(1, Comparison.UnchangedCount,
+      'duplicate records did not collapse to one unchanged version');
+    AssertEqual(0, Comparison.Changes.Count,
+      'duplicate records produced a spurious change');
+    AssertTrue(StringListContainsText(Comparison.Warnings,
+      'duplicate records were collapsed'),
+      'duplicate collapse was not disclosed');
+    FreeAndNil(Comparison);
+
+    Baseline.Components.Clear;
+    Current.Components.Clear;
+    AddComparisonComponent(Baseline, 'canonical-purl', '1.0.0', 'npm',
+      'library', 'PKG://NPM//%40scope/%63anonical-purl/@1.0.0?' +
+      'b=two&a=%31#/src/%6Cib/', 'runtime');
+    AddComparisonComponent(Current, 'canonical-purl', '2.0.0', 'npm',
+      'library', 'pkg:npm/%40scope/canonical-purl@2.0.0?' +
+      'a=1&b=two#src/lib', 'runtime');
+    AddComparisonComponent(Baseline, 'slash-name', '1', 'generic', 'library',
+      'pkg:generic/foo%2fbar@1', 'runtime');
+    AddComparisonComponent(Current, 'slash-name', '2', 'generic', 'library',
+      'pkg:generic/foo%2Fbar@2', 'runtime');
+    AddComparisonComponent(Baseline, 'qualifier', '1', 'npm', 'library',
+      'pkg:npm/qualifier@1?arch=x86#src', 'runtime');
+    AddComparisonComponent(Current, 'qualifier', '2', 'npm', 'library',
+      'pkg:npm/qualifier@2?arch=arm64#src', 'runtime');
+    Comparison := CompareComponentTasks(Baseline, Current);
+    AssertEqual(2, Comparison.VersionChangedCount,
+      'canonical versionless Package URL identity did not match');
+    AssertTrue(FindComparisonChange(Comparison, ccVersionChanged,
+      'canonical-purl', '1.0.0', '2.0.0') <> nil,
+      'canonical Package URL change row is missing');
+    Change := FindComparisonChange(Comparison, ccVersionChanged,
+      'canonical-purl', '1.0.0', '2.0.0');
+    AssertEqual('purl:pkg:npm/%40scope/canonical-purl?' +
+      'a=1&b=two#src/lib', Change.IdentityKey,
+      'equivalent Package URL spelling did not canonicalize');
+    Change := FindComparisonChange(Comparison, ccVersionChanged,
+      'slash-name', '1', '2');
+    AssertTrue(Change <> nil,
+      'percent-encoded slash in a package name did not match');
+    AssertEqual('purl:pkg:generic/foo%2Fbar', Change.IdentityKey,
+      'package-name slash escape was not canonicalized');
+    AssertEqual(1, Comparison.AddedCount,
+      'identity-bearing qualifier difference lost its addition');
+    AssertEqual(1, Comparison.RemovedCount,
+      'identity-bearing qualifier difference lost its removal');
+    FreeAndNil(Comparison);
+
+    Baseline.Components.Clear;
+    Current.Components.Clear;
+    AddComparisonComponent(Baseline, 'bad-version-escape', '1', 'generic',
+      'library', 'pkg:generic/bad-version-escape@%ZZ', 'runtime');
+    AddComparisonComponent(Current, 'bad-version-escape', '1', 'generic',
+      'library', '', 'runtime');
+    AddComparisonComponent(Baseline, 'bad-qualifier', '1', 'generic',
+      'library', 'pkg:generic/bad-qualifier@1?arch', 'runtime');
+    AddComparisonComponent(Current, 'bad-qualifier', '1', 'generic',
+      'library', '', 'runtime');
+    AddComparisonComponent(Baseline, 'bad-subpath', '1', 'generic',
+      'library', 'pkg:generic/bad-subpath@1#../x', 'runtime');
+    AddComparisonComponent(Current, 'bad-subpath', '1', 'generic',
+      'library', '', 'runtime');
+    AddComparisonComponent(Baseline, 'bad-subpath-gap', '1', 'generic',
+      'library', 'pkg:generic/bad-subpath-gap@1#src//x', 'runtime');
+    AddComparisonComponent(Current, 'bad-subpath-gap', '1', 'generic',
+      'library', '', 'runtime');
+    AddComparisonComponent(Baseline, 'bad-type', '1', 'generic',
+      'library', 'pkg:gen+eric/bad-type@1', 'runtime');
+    AddComparisonComponent(Current, 'bad-type', '1', 'generic',
+      'library', '', 'runtime');
+    AddComparisonComponent(Baseline, 'raw-unicode', '1', 'generic',
+      'library', 'pkg:generic/raw-' + #$C3 + #$A9 + '@1', 'runtime');
+    AddComparisonComponent(Current, 'raw-unicode', '1', 'generic',
+      'library', '', 'runtime');
+    AddComparisonComponent(Baseline, 'bad-utf8', '1', 'generic',
+      'library', 'pkg:generic/bad-utf8@%FF', 'runtime');
+    AddComparisonComponent(Current, 'bad-utf8', '1', 'generic',
+      'library', '', 'runtime');
+    Comparison := CompareComponentTasks(Baseline, Current);
+    AssertEqual(7, Comparison.UnchangedCount,
+      'malformed Package URLs did not fall back conservatively');
+    AssertEqual(0, Comparison.Changes.Count,
+      'malformed Package URLs produced confident strong-identity changes');
+    AssertTrue((Comparison.Warnings.Count >= 6) and
+      StringListContainsText(Comparison.Warnings, '%ZZ') and
+      StringListContainsText(Comparison.Warnings, '?arch') and
+      StringListContainsText(Comparison.Warnings, '#../x') and
+      StringListContainsText(Comparison.Warnings, '#src//x') and
+      StringListContainsText(Comparison.Warnings, 'gen+eric') and
+      StringListContainsText(Comparison.Warnings, '%FF'),
+      'malformed Package URL diagnostics are incomplete');
+    FreeAndNil(Comparison);
+
+    Baseline.Components.Clear;
+    Current.Components.Clear;
+    AddComparisonComponent(Baseline, 'malformed', '1', 'generic', 'library',
+      'not a purl', 'runtime');
+    AddComparisonComponent(Current, 'malformed', '1', 'generic', 'library',
+      '', 'runtime');
+    Component := AddComparisonComponent(Baseline, '', '1', 'generic',
+      'library', '', 'runtime');
+    Component.SourceArtifact := 'baseline-empty.bin';
+    Component := AddComparisonComponent(Current, '', '1', 'generic',
+      'library', '', 'runtime');
+    Component.SourceArtifact := 'current-empty.bin';
+    AddComparisonComponent(Baseline, 'project-boundary', '1', 'generic',
+      'application', '', 'runtime');
+    AddComparisonComponent(Current, 'project-boundary', '1', 'generic',
+      'library', '', 'runtime');
+    Comparison := CompareComponentTasks(Baseline, Current);
+    AssertEqual(1, Comparison.UnchangedCount,
+      'malformed purl did not use conservative matching fields');
+    AssertEqual(2, Comparison.AddedCount,
+      'empty-name source or project boundary addition count differs');
+    AssertEqual(2, Comparison.RemovedCount,
+      'empty-name source or project boundary removal count differs');
+    AssertTrue(StringListContainsText(Comparison.Warnings, 'is malformed'),
+      'malformed Package URL was not disclosed');
+    AssertTrue(StringListContainsText(Comparison.Warnings,
+      'component without a name'),
+      'empty component name was not disclosed');
+    FreeAndNil(Comparison);
+
+    RaisedForNil := False;
+    try
+      Comparison := CompareComponentTasks(nil, Current);
+    except
+      on EArgumentNilException do
+        RaisedForNil := True;
+    end;
+    AssertTrue(RaisedForNil, 'nil baseline did not raise an argument error');
+
+    Baseline.Components.Clear;
+    Current.Components.Clear;
+    AddComparisonComponent(Baseline, 'owned-result', '1', 'pypi', 'library',
+      'pkg:pypi/owned-result@1', 'runtime');
+    AddComparisonComponent(Current, 'owned-result', '2', 'pypi', 'library',
+      'pkg:pypi/owned-result@2', 'optional');
+    Comparison := CompareComponentTasks(Baseline, Current);
+    FreeAndNil(Baseline);
+    FreeAndNil(Current);
+    Change := FindComparisonChange(Comparison, ccVersionChanged,
+      'owned-result', '1', '2');
+    AssertTrue(Change <> nil,
+      'comparison rows borrowed component lifetime from input tasks');
+    AssertEqual('optional', Change.AfterScope,
+      'comparison-owned row lost copied scalar state');
+  finally
+    PermutedComparison.Free;
+    ReverseComparison.Free;
+    Comparison.Free;
+    Current.Free;
+    Baseline.Free;
+  end;
+end;
+
 procedure TestHistoryRoundTrip;
 var
   DirectoryName, RelocatedSBOM: string;
@@ -2628,6 +3571,336 @@ begin
     Loaded.Free;
     Tasks.Free;
     Store.Free;
+  end;
+end;
+
+{**
+  Verifies shared task-history ownership, revisions, summaries, and deletion.
+
+  Parameters
+  ----------
+  None
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  Exception
+    Raised when service ownership, persistence, event ordering, terminal-state
+    protection, canonical SBOM cleanup, or transactional rollback regresses.
+}
+procedure TestTaskHistoryService;
+var
+  DirectoryName, RollbackDirectory, RootDirectory, CanonicalSBOM,
+    ExternalExport, WarningText, BlockingTemporary: string;
+  Service, RollbackService, RootService: TTaskHistoryService;
+  Observer: THistoryChangeObserver;
+  Summaries, NonOwningSummaries: TObjectList;
+  NewTask, BorrowedTask, Clone: TScanTask;
+  Summary: TTaskHistorySummary;
+  RevisionBefore: QWord;
+  EventCountBefore: Integer;
+  RaisedForNonOwningList, RaisedForUnsafeID: Boolean;
+begin
+  DirectoryName := NewTemporaryDirectory('shared-history-service');
+  Service := TTaskHistoryService.Create(DirectoryName);
+  Observer := THistoryChangeObserver.Create;
+  Summaries := TObjectList.Create(True);
+  NonOwningSummaries := TObjectList.Create(False);
+  Clone := nil;
+  NewTask := nil;
+  try
+    AssertTrue(not Service.UsesDefaultDataDirectory,
+      'explicit history service reports the operator profile directory');
+    AssertTrue(SameFileName(ExpandFileName(DirectoryName),
+      Service.DataDirectory), 'explicit history data directory differs');
+    AssertEqual(0, Service.TaskCount,
+      'new explicit history service is not empty');
+    AssertEqual(0, Int64(Service.Revision),
+      'new history service revision is not zero');
+    AssertEqual('', Service.StartupWarning,
+      'empty explicit history produced a startup warning');
+    Service.OnChanged := @Observer.Changed;
+
+    RaisedForUnsafeID := False;
+    NewTask := NewHistoryTask('UPPER-ID',
+      '2026-08-20T09:00:00.000Z', tsCompleted, 'unsafe-id-target');
+    try
+      Service.AddTask(NewTask);
+      NewTask := nil;
+    except
+      on EArgumentException do
+        RaisedForUnsafeID := True;
+    end;
+    AssertTrue(RaisedForUnsafeID,
+      'service accepted a non-lowercase filename-colliding task ID');
+    NewTask.Free;
+    NewTask := nil;
+    AssertEqual(0, Service.TaskCount,
+      'refused unsafe task ID changed service ownership');
+    AssertEqual(0, Observer.Count,
+      'refused unsafe task ID emitted a history event');
+
+    NewTask := NewHistoryTask('completed-new',
+      '2026-08-20T10:00:00.000Z', tsCompleted, 'new-target');
+    NewTask.Warnings.Add('review this scan');
+    AddComparisonComponent(NewTask, 'one', '1', 'npm', 'library',
+      'pkg:npm/one@1', 'runtime');
+    AddComparisonComponent(NewTask, 'two', '2', 'npm', 'library',
+      'pkg:npm/two@2', 'runtime');
+    Service.AddTask(NewTask);
+    NewTask := nil;
+    AssertTrue((Observer.LastKind = thcAdded) and
+      (Observer.LastTaskID = 'completed-new') and
+      (Observer.LastRevision = Service.Revision),
+      'addition event identity or revision differs');
+
+    NewTask := NewHistoryTask('completed-b',
+      '2025-01-01T00:00:00.000Z', tsCompleted, 'tie-b');
+    Service.AddTask(NewTask);
+    NewTask := nil;
+    NewTask := NewHistoryTask('completed-a',
+      '2025-01-01T00:00:00.000Z', tsCompleted, 'tie-a');
+    Service.AddTask(NewTask);
+    NewTask := nil;
+    NewTask := NewHistoryTask('running-task',
+      '2026-08-20T11:00:00.000Z', tsRunning, 'running-target');
+    Service.AddTask(NewTask);
+    NewTask := nil;
+    NewTask := NewHistoryTask('cancelled-task',
+      '2026-08-20T11:10:00.000Z', tsCancelled, 'cancelled-target');
+    Service.AddTask(NewTask);
+    NewTask := nil;
+    NewTask := NewHistoryTask('pending-task',
+      '2026-08-20T11:20:00.000Z', tsPending, 'pending-target');
+    Service.AddTask(NewTask);
+    NewTask := nil;
+
+    AssertEqual(6, Service.TaskCount,
+      'service did not retain sole ownership of every added task');
+    AssertEqual(6, Observer.Count,
+      'history addition event count differs');
+    AssertEqual(6, Int64(Service.Revision),
+      'history revision did not advance once per addition');
+    AssertTrue(not FileExists(IncludeTrailingPathDelimiter(DirectoryName) +
+      'history.json'), 'AddTask persisted history implicitly');
+
+    Service.GetCompletedTaskSummaries(Summaries);
+    AssertEqual(3, Summaries.Count,
+      'completed summaries included active or non-completed tasks');
+    Summary := TTaskHistorySummary(Summaries[0]);
+    AssertEqual('completed-new', Summary.ID,
+      'completed summaries are not ordered newest first');
+    AssertEqual(2, Summary.ComponentCount,
+      'completed summary component count differs');
+    AssertEqual(1, Summary.WarningCount,
+      'completed summary warning count differs');
+    AssertEqual('0.5.0', Summary.ScannerVersion,
+      'completed summary scanner version differs');
+    AssertEqual('completed-a',
+      TTaskHistorySummary(Summaries[1]).ID,
+      'equal-timestamp summaries are not ordered by ordinal identifier');
+    AssertEqual('completed-b',
+      TTaskHistorySummary(Summaries[2]).ID,
+      'equal-timestamp summary tie-break differs');
+
+    RaisedForNonOwningList := False;
+    try
+      Service.GetCompletedTaskSummaries(NonOwningSummaries);
+    except
+      on EArgumentException do
+        RaisedForNonOwningList := True;
+    end;
+    AssertTrue(RaisedForNonOwningList,
+      'summary service accepted a non-owning destination list');
+
+    RevisionBefore := Service.Revision;
+    AssertTrue(not Service.DeleteTask('running-task', WarningText),
+      'running task deletion was accepted');
+    AssertTrue(Pos('cannot be deleted', WarningText) > 0,
+      'running task deletion refusal is unclear');
+    AssertTrue(not Service.DeleteTask('pending-task', WarningText),
+      'pending task deletion was accepted');
+    AssertEqual(Int64(RevisionBefore), Int64(Service.Revision),
+      'refused active-task deletion changed the revision');
+    AssertEqual(6, Observer.Count,
+      'refused active-task deletion emitted a mutation');
+
+    Service.Save;
+    AssertTrue(FileExists(IncludeTrailingPathDelimiter(DirectoryName) +
+      'history.json'), 'explicit history save produced no file');
+    Clone := Service.CloneTaskByID('completed-new');
+    AssertTrue(Clone <> nil, 'completed task clone is missing');
+    AssertEqual(2, Clone.Components.Count,
+      'task clone did not deep-copy components');
+    BorrowedTask := Service.FindTaskByID('completed-new');
+    AssertTrue(BorrowedTask <> nil, 'borrowed task lookup failed');
+    BorrowedTask.TargetRootName := 'persisted-new-target';
+    uModels.TComponent(BorrowedTask.Components[0]).Name :=
+      'persisted-component';
+    AssertEqual('new-target', Clone.TargetRootName,
+      'task clone borrowed task scalar state');
+    AssertEqual('one', uModels.TComponent(Clone.Components[0]).Name,
+      'task clone borrowed component state');
+    RevisionBefore := Service.Revision;
+    Service.NotifyTaskUpdated('completed-new', True);
+    AssertEqual(Int64(RevisionBefore + 1), Int64(Service.Revision),
+      'persisted task update did not advance the revision once');
+    AssertTrue((Observer.LastKind = thcUpdated) and
+      (Observer.LastTaskID = 'completed-new'),
+      'task update event identity differs');
+
+    RevisionBefore := Service.Revision;
+    AssertTrue(Service.Reload(WarningText),
+      'valid shared task history did not reload');
+    AssertEqual('', WarningText, 'valid shared history reload warned');
+    AssertEqual(Int64(RevisionBefore + 1), Int64(Service.Revision),
+      'history reset did not advance the revision once');
+    AssertTrue((Observer.LastKind = thcReset) and
+      (Observer.LastTaskID = ''),
+      'history reload did not publish a reset');
+    BorrowedTask := Service.FindTaskByID('completed-new');
+    AssertTrue(BorrowedTask <> nil, 'persisted task disappeared after reload');
+    AssertEqual('persisted-new-target', BorrowedTask.TargetRootName,
+      'NotifyTaskUpdated did not persist changed task state');
+    AssertEqual('persisted-component',
+      uModels.TComponent(BorrowedTask.Components[0]).Name,
+      'NotifyTaskUpdated did not persist changed component state');
+    AssertEqual('new-target', Clone.TargetRootName,
+      'caller-owned clone changed when live history reloaded');
+    AssertEqual('one', uModels.TComponent(Clone.Components[0]).Name,
+      'clone component changed when live history reloaded');
+    Service.GetCompletedTaskSummaries(Summaries);
+    AssertEqual(3, Summaries.Count,
+      'reload exposed interrupted tasks as completed summaries');
+
+    CanonicalSBOM := IncludeTrailingPathDelimiter(DirectoryName) + 'sboms' +
+      DirectorySeparator + 'completed-new.cdx.json';
+    ExternalExport := IncludeTrailingPathDelimiter(TemporaryRoot) +
+      'external-completed-new.cdx.json';
+    WriteText(CanonicalSBOM, '{"owned":true}');
+    WriteText(ExternalExport, '{"exported":true}');
+    BorrowedTask := Service.FindTaskByID('completed-new');
+    BorrowedTask.GeneratedSBOMPath := ExternalExport;
+    Service.NotifyTaskUpdated(BorrowedTask.ID, True);
+    RevisionBefore := Service.Revision;
+    AssertTrue(Service.DeleteTask('completed-new', WarningText),
+      'completed task could not be deleted');
+    AssertEqual('', WarningText,
+      'safe completed-task deletion produced a warning');
+    AssertTrue(Service.FindTaskByID('completed-new') = nil,
+      'deleted task remains in live history');
+    AssertTrue(not FileExists(CanonicalSBOM),
+      'canonical application-owned SBOM was retained');
+    AssertTrue(FileExists(ExternalExport),
+      'arbitrary exported SBOM was deleted with task history');
+    AssertEqual(Int64(RevisionBefore + 1), Int64(Service.Revision),
+      'committed task deletion did not advance the revision once');
+    AssertTrue((Observer.LastKind = thcRemoved) and
+      (Observer.LastTaskID = 'completed-new'),
+      'task removal event identity differs');
+    AssertEqual('new-target', Clone.TargetRootName,
+      'caller-owned clone changed after service-owned task deletion');
+
+    RevisionBefore := Service.Revision;
+    AssertTrue(Service.Reload(WarningText),
+      'history did not reload after committed deletion');
+    AssertTrue(Service.FindTaskByID('completed-new') = nil,
+      'deleted task returned after persistence reload');
+    AssertEqual(Int64(RevisionBefore + 1), Int64(Service.Revision),
+      'post-deletion reload revision differs');
+    RevisionBefore := Service.Revision;
+    AssertTrue(not Service.DeleteTask('missing-task', WarningText),
+      'unknown task deletion was accepted');
+    AssertTrue(Pos('not found', WarningText) > 0,
+      'unknown task deletion refusal is unclear');
+    AssertEqual(Int64(RevisionBefore), Int64(Service.Revision),
+      'unknown task deletion changed the revision');
+
+    { A failed disk refresh must leave the valid in-memory repository and its
+      observable revision untouched. }
+    Service.Save;
+    Service.Save;
+    WriteText(IncludeTrailingPathDelimiter(DirectoryName) + 'history.json',
+      '{invalid primary');
+    WriteText(IncludeTrailingPathDelimiter(DirectoryName) +
+      'history.json.bak', '{invalid backup');
+    RevisionBefore := Service.Revision;
+    EventCountBefore := Observer.Count;
+    AssertTrue(not Service.Reload(WarningText),
+      'invalid primary and backup history unexpectedly reloaded');
+    AssertTrue(WarningText <> '',
+      'failed shared-history reload produced no diagnostic');
+    AssertTrue(Service.FindTaskByID('completed-a') <> nil,
+      'failed shared-history reload discarded the live task list');
+    AssertEqual(Int64(RevisionBefore), Int64(Service.Revision),
+      'failed shared-history reload changed the revision');
+    AssertEqual(EventCountBefore, Observer.Count,
+      'failed shared-history reload emitted a reset event');
+  finally
+    Service.OnChanged := nil;
+    NewTask.Free;
+    Clone.Free;
+    NonOwningSummaries.Free;
+    Summaries.Free;
+    Observer.Free;
+    Service.Free;
+  end;
+
+  RollbackDirectory := NewTemporaryDirectory('history-delete-rollback');
+  RollbackService := TTaskHistoryService.Create(RollbackDirectory);
+  NewTask := nil;
+  try
+    NewTask := NewHistoryTask('rollback-task',
+      '2026-08-20T12:00:00.000Z', tsCompleted, 'rollback-target');
+    RollbackService.AddTask(NewTask);
+    NewTask := nil;
+    RollbackService.Save;
+    CanonicalSBOM := IncludeTrailingPathDelimiter(RollbackDirectory) +
+      'sboms' + DirectorySeparator + 'rollback-task.cdx.json';
+    WriteText(CanonicalSBOM, '{"owned":true}');
+    BlockingTemporary := IncludeTrailingPathDelimiter(RollbackDirectory) +
+      'history.json.tmp';
+    AssertTrue(ForceDirectories(BlockingTemporary),
+      'could not create rollback failure fixture');
+    RevisionBefore := RollbackService.Revision;
+    AssertTrue(not RollbackService.DeleteTask('rollback-task', WarningText),
+      'task deletion committed despite persistence failure');
+    AssertTrue(Pos('rolled back', WarningText) > 0,
+      'persistence failure did not disclose deletion rollback');
+    AssertTrue(RollbackService.FindTaskByID('rollback-task') <> nil,
+      'failed deletion did not restore the live task');
+    AssertTrue(FileExists(CanonicalSBOM),
+      'failed deletion removed the application-owned SBOM');
+    AssertEqual(Int64(RevisionBefore), Int64(RollbackService.Revision),
+      'rolled-back deletion changed the history revision');
+    RemoveDir(BlockingTemporary);
+  finally
+    NewTask.Free;
+    RollbackService.Free;
+  end;
+
+  {$IFDEF Windows}
+  RootDirectory := ExtractFileDrive(ExpandFileName(TemporaryRoot)) +
+    DirectorySeparator;
+  {$ELSE}
+  RootDirectory := DirectorySeparator;
+  {$ENDIF}
+  RootService := TTaskHistoryService.Create(RootDirectory);
+  try
+    AssertTrue(RootService.DataDirectory <> '',
+      'explicit filesystem root collapsed to an empty data directory');
+    AssertTrue(SameFileName(RootDirectory, RootService.DataDirectory),
+      'explicit filesystem root was not preserved');
+    AssertTrue(SameFileName(RootDirectory, CanonicalPath(RootDirectory)),
+      'canonical filesystem root collapsed to an empty path');
+    AssertTrue(PathIsWithin(IncludeTrailingPathDelimiter(RootDirectory) +
+      'synthetic-child', RootDirectory),
+      'filesystem-root containment rejected a direct child');
+  finally
+    RootService.Free;
   end;
 end;
 
@@ -2919,10 +4192,10 @@ end;
 
 procedure TestAtomicHistoryRecovery;
 var
-  DirectoryName: string;
-  Store: TTaskHistoryStore;
+  DirectoryName, InvalidDirectory: string;
+  Store, InvalidStore: TTaskHistoryStore;
   Tasks, Loaded: TObjectList;
-  FirstTask, SecondTask: TScanTask;
+  FirstTask, SecondTask, SentinelTask: TScanTask;
   WarningText: string;
   SearchRecord: TSearchRec;
 begin
@@ -2952,10 +4225,63 @@ begin
       'history.corrupt-*.json', faAnyFile, SearchRecord) = 0,
       'malformed history was not preserved');
     FindClose(SearchRecord);
+
+    { Recover the backup when a process crash leaves the atomic-write window
+      after the active file moved aside but before the new file activated. }
+    AssertTrue(DeleteFile(Store.HistoryFileName),
+      'could not remove the active history recovery fixture');
+    Loaded.Clear;
+    AssertTrue(Store.Load(Loaded, WarningText),
+      'missing active history did not recover its valid backup');
+    AssertEqual(1, Loaded.Count,
+      'missing-primary recovery loaded the wrong task set');
+    AssertEqual('first', TScanTask(Loaded[0]).TargetRootName,
+      'missing-primary recovery loaded the wrong backup task');
+    AssertTrue((Pos('missing', LowerCase(WarningText)) > 0) and
+      (Pos('backup', LowerCase(WarningText)) > 0),
+      'missing-primary recovery warning is unclear');
   finally
     Loaded.Free;
     Tasks.Free;
     Store.Free;
+  end;
+
+  InvalidDirectory := NewTemporaryDirectory('history-identity-validation');
+  InvalidStore := TTaskHistoryStore.Create(InvalidDirectory);
+  Loaded := TObjectList.Create(True);
+  try
+    SentinelTask := TScanTask.Create;
+    SentinelTask.ID := 'sentinel-task';
+    Loaded.Add(SentinelTask);
+    WriteText(InvalidStore.HistoryFileName,
+      '{"format_version":1,"tasks":[{}]}');
+    AssertTrue(not InvalidStore.Load(Loaded, WarningText),
+      'history task without an identifier was accepted');
+    AssertTrue((Loaded.Count = 1) and
+      (TScanTask(Loaded[0]).ID = 'sentinel-task'),
+      'failed missing-ID load replaced the destination list');
+
+    WriteText(InvalidStore.HistoryFileName,
+      '{"format_version":1,"tasks":[{"id":"duplicate-task"},' +
+      '{"id":"duplicate-task"}]}');
+    AssertTrue(not InvalidStore.Load(Loaded, WarningText),
+      'history with duplicate task identifiers was accepted');
+    AssertTrue(Pos('duplicate', LowerCase(WarningText)) > 0,
+      'duplicate task identifier diagnostic is unclear');
+
+    WriteText(InvalidStore.HistoryFileName,
+      '{"format_version":1,"tasks":[{"id":"../escape",' +
+      '"generated_sbom_path":"/missing/export.cdx.json"}]}');
+    AssertTrue(not InvalidStore.Load(Loaded, WarningText),
+      'unsafe history task identifier was accepted');
+    AssertTrue(Pos('unsafe identifier', LowerCase(WarningText)) > 0,
+      'unsafe task identifier diagnostic is unclear');
+    AssertTrue((Loaded.Count = 1) and
+      (TScanTask(Loaded[0]).ID = 'sentinel-task'),
+      'failed identifier validation replaced the destination list');
+  finally
+    Loaded.Free;
+    InvalidStore.Free;
   end;
 end;
 
@@ -4586,6 +5912,8 @@ begin
   RunTest('presentation policy', @TestPresentationPolicy);
   RunTest('compliance model persistence', @TestComplianceModelPersistence);
   RunTest('Sprint 4 UI contracts', @TestSprint4UIContracts);
+  RunTest('Sprint 5 Compare UI contracts', @TestSprint5CompareUIContracts);
+  RunTest('component scan comparison', @TestComponentComparison);
   RunTest('SPDX expressions', @TestSPDXExpressions);
   RunTest('declared manifest metadata', @TestDeclaredMetadataParsers);
   RunTest('requirements parser', @TestRequirementsParser);
@@ -4600,6 +5928,7 @@ begin
   RunTest('manifest size limits', @TestManifestSizeLimits);
   RunTest('XML document type rejection', @TestXMLDocumentTypeRejection);
   RunTest('task-history round trip', @TestHistoryRoundTrip);
+  RunTest('shared task-history service', @TestTaskHistoryService);
   RunTest('atomic-history recovery', @TestAtomicHistoryRecovery);
   RunTest('application-data migration', @TestApplicationDataMigration);
   RunTest('SBOM export naming', @TestExportNaming);

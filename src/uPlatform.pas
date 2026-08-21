@@ -330,6 +330,37 @@ var
   CachedMigrationWarning: string = '';
 
 {**
+  Removes redundant trailing delimiters without collapsing a filesystem root.
+
+  Parameters
+  ----------
+  APath
+    Absolute or expanded path to normalize.
+
+  Returns
+  -------
+  string
+    Path without a redundant trailing delimiter; Unix, drive, and UNC roots
+    retain the delimiter required to identify the root.
+
+  Raises
+  ------
+  None
+}
+function ExcludeTrailingDelimiterUnlessRoot(const APath: string): string;
+var
+  RootValue: string;
+begin
+  Result := APath;
+  if Result = '' then
+    Exit;
+  RootValue := IncludeTrailingPathDelimiter(ExtractFileDrive(Result));
+  if (RootValue <> '') and SameFileName(Result, RootValue) then
+    Exit;
+  Result := ExcludeTrailingPathDelimiter(Result);
+end;
+
+{**
   Recursively moves application-data contents without overwriting collisions.
 
   Parameters
@@ -568,15 +599,15 @@ begin
     end;
   end;
   {$ENDIF}
-  Result := ExcludeTrailingPathDelimiter(Result);
+  Result := ExcludeTrailingDelimiterUnlessRoot(Result);
 end;
 
 function PathIsWithin(const APath, ARoot: string): Boolean;
 var
   PathValue, RootValue: string;
 begin
-  PathValue := ExcludeTrailingPathDelimiter(CanonicalPath(APath));
-  RootValue := ExcludeTrailingPathDelimiter(CanonicalPath(ARoot));
+  PathValue := ExcludeTrailingDelimiterUnlessRoot(CanonicalPath(APath));
+  RootValue := ExcludeTrailingDelimiterUnlessRoot(CanonicalPath(ARoot));
   {$IFDEF Windows}
   PathValue := LowerCase(PathValue);
   RootValue := LowerCase(RootValue);
