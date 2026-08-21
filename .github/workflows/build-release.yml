@@ -28,7 +28,8 @@ concurrency:
 
 env:
   FPC_VERSION: '3.2.2'
-  LAZARUS_VERSION: '4.2'
+  LAZARUS_VERSION: '4.8'
+  LAZARUS_WINDOWS_SHA256: 'ED25EE171D55E23CF14E0633159FDD2325EFBA56E186F8AB817AD3BF97D267D7'
 
 jobs:
   prepare:
@@ -129,17 +130,17 @@ jobs:
             os: windows-latest
             widgetset: win32
             use_cache: 'true'
-            laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus Windows 64 bits/Lazarus 4.2/lazarus-4.2-fpc-3.2.2-win64.exe
+            laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus%20Windows%2064%20bits/Lazarus%204.8/lazarus-4.8-fpc-3.2.2-win64.exe/download
             fpc_url: ''
           - name: Linux x64 / GTK3
             id: linux
             os: ubuntu-24.04
             widgetset: gtk3
             use_cache: 'true'
-            laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus Linux amd64 DEB/Lazarus 4.2/lazarus-project_4.2.0-0_amd64.deb
+            laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus Linux amd64 DEB/Lazarus 4.8/lazarus-project_4.8.0-0_amd64.deb
             fpc_url: |-
-              https://sourceforge.net/projects/lazarus/files/Lazarus Linux amd64 DEB/Lazarus 4.2/fpc-laz_3.2.2-210709_amd64.deb
-              https://sourceforge.net/projects/lazarus/files/Lazarus Linux amd64 DEB/Lazarus 4.2/fpc-src_3.2.2-210709_amd64.deb
+              https://sourceforge.net/projects/lazarus/files/Lazarus Linux amd64 DEB/Lazarus 4.8/fpc-laz_3.2.2-210709_amd64.deb
+              https://sourceforge.net/projects/lazarus/files/Lazarus Linux amd64 DEB/Lazarus 4.8/fpc-src_3.2.2-210709_amd64.deb
           # macOS builds are temporarily paused to conserve GitHub Actions
           # minutes. Re-enable by uncommenting this complete matrix entry.
           # - name: macOS x64 / Cocoa
@@ -147,8 +148,8 @@ jobs:
           #   os: macos-15-intel
           #   widgetset: cocoa
           #   use_cache: 'true'
-          #   laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus macOS x86-64/Lazarus 4.2/lazarus-darwin-x86_64-4.2.zip
-          #   fpc_url: https://sourceforge.net/projects/lazarus/files/Lazarus macOS x86-64/Lazarus 4.2/fpc-3.2.2.intelarm64-macosx.dmg
+          #   laz_url: https://sourceforge.net/projects/lazarus/files/Lazarus macOS x86-64/Lazarus 4.8/lazarus-darwin-x86_64-4.8.zip
+          #   fpc_url: https://sourceforge.net/projects/freepascal/files/Mac OS X/3.2.2/fpc-3.2.2.intelarm64-macosx.dmg
     runs-on: ${{ matrix.config.os }}
     defaults:
       run:
@@ -203,11 +204,14 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/installers
-          key: lazarus-linux-x64-${{ env.LAZARUS_VERSION }}-fpc-${{ env.FPC_VERSION }}-sourceforge-debs-v1
-          # Migrate the valid cache created by the former setup action instead
-          # of spending another run downloading the same 216 MB toolchain.
-          restore-keys: |
-            aHR0cHM6Ly9zb3VyY2Vmb3JnZS5uZXQvcHJvamVjdHMvbGF6YXJ1cy9maWxlcy9MYXphcnVzIExpbnV4IGFtZDY0IERFQi9MYXphcnVzIDQuMi9sYXphcnVzLXByb2plY3RfNC4yLjAtMF9hbWQ2NC5kZWItaHR0cHM6Ly9zb3VyY2Vmb3JnZS5uZXQvcHJvamVjdHMvbGF6YXJ1cy9maWxlcy9MYXphcnVzIExpbnV4IGFtZDY0IERFQi9MYXphcnVzIDQuMi9mcGMtbGF6XzMuMi4yLTIxMDcwOV9hbWQ2NC5kZWIKaHR0cHM6Ly9zb3VyY2Vmb3JnZS5uZXQvcHJvamVjdHMvbGF6YXJ1cy9maWxlcy9MYXphcnVzIExpbnV4IGFtZDY0IERFQi9MYXphcnVzIDQuMi9mcGMtc3JjXzMuMi4yLTIxMDcwOV9hbWQ2NC5kZWI=
+          key: lazarus-linux-x64-${{ env.LAZARUS_VERSION }}-fpc-${{ env.FPC_VERSION }}-sourceforge-debs-v2
+
+      - name: Cache pinned Windows toolchain installer
+        if: runner.os == 'Windows'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/installers
+          key: lazarus-windows-x64-${{ env.LAZARUS_VERSION }}-fpc-${{ env.FPC_VERSION }}-sourceforge-exe-v1
 
       # Digests: https://www.lazarus-ide.org/index.php?page=checksums
       - name: Download pinned Linux toolchain installers
@@ -238,18 +242,18 @@ jobs:
           download_pids=()
           download_installer \
             'fpc-laz_3.2.2-210709_amd64.deb' \
-            'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.2/fpc-laz_3.2.2-210709_amd64.deb/download' \
+            'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.8/fpc-laz_3.2.2-210709_amd64.deb/download' \
             '92000f2b831184e153aab0c910f8ae9240450e5c6d76dc189cf53116ee501d83' &
           download_pids+=("$!")
           download_installer \
             'fpc-src_3.2.2-210709_amd64.deb' \
-            'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.2/fpc-src_3.2.2-210709_amd64.deb/download' \
+            'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.8/fpc-src_3.2.2-210709_amd64.deb/download' \
             '8c9e145d8056754a9ca39ce3e52e982b8e4816124984c5f542f2a874e721ad53' &
           download_pids+=("$!")
           download_installer \
-            'lazarus-project_4.2.0-0_amd64.deb' \
-            'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.2/lazarus-project_4.2.0-0_amd64.deb/download' \
-            '3afe81579ef71a782f891e27ce51477b436f84213678d3f3c42c321054ce1285' &
+            'lazarus-project_4.8.0-0_amd64.deb' \
+            'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.8/lazarus-project_4.8.0-0_amd64.deb/download' \
+            '401742cefb01ad99a628188034bf728fb5360d641ed2be5f91fb0ee183a301cd' &
           download_pids+=("$!")
 
           download_status=0
@@ -268,22 +272,70 @@ jobs:
             printf '%s\n' \
               '92000f2b831184e153aab0c910f8ae9240450e5c6d76dc189cf53116ee501d83  fpc-laz_3.2.2-210709_amd64.deb' \
               '8c9e145d8056754a9ca39ce3e52e982b8e4816124984c5f542f2a874e721ad53  fpc-src_3.2.2-210709_amd64.deb' \
-              '3afe81579ef71a782f891e27ce51477b436f84213678d3f3c42c321054ce1285  lazarus-project_4.2.0-0_amd64.deb' \
+              '401742cefb01ad99a628188034bf728fb5360d641ed2be5f91fb0ee183a301cd  lazarus-project_4.8.0-0_amd64.deb' \
               | sha256sum --check --strict -
           )
           test "$(dpkg-deb --field "$installer_dir/fpc-laz_3.2.2-210709_amd64.deb" Package)" = 'fpc-laz'
           test "$(dpkg-deb --field "$installer_dir/fpc-laz_3.2.2-210709_amd64.deb" Version)" = "$FPC_VERSION"
           test "$(dpkg-deb --field "$installer_dir/fpc-src_3.2.2-210709_amd64.deb" Package)" = 'fpc-src'
           test "$(dpkg-deb --field "$installer_dir/fpc-src_3.2.2-210709_amd64.deb" Version)" = "$FPC_VERSION"
-          test "$(dpkg-deb --field "$installer_dir/lazarus-project_4.2.0-0_amd64.deb" Package)" = 'lazarus-project'
-          test "$(dpkg-deb --field "$installer_dir/lazarus-project_4.2.0-0_amd64.deb" Version)" = '4.2.0'
+          test "$(dpkg-deb --field "$installer_dir/lazarus-project_4.8.0-0_amd64.deb" Package)" = 'lazarus-project'
+          test "$(dpkg-deb --field "$installer_dir/lazarus-project_4.8.0-0_amd64.deb" Version)" = '4.8.0'
           sudo dpkg --install \
             "$installer_dir/fpc-laz_3.2.2-210709_amd64.deb" \
             "$installer_dir/fpc-src_3.2.2-210709_amd64.deb" \
-            "$installer_dir/lazarus-project_4.2.0-0_amd64.deb"
+            "$installer_dir/lazarus-project_4.8.0-0_amd64.deb"
 
-      - name: Install pinned Lazarus and Free Pascal
-        if: runner.os != 'Linux'
+      - name: Download and verify pinned Windows toolchain installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 5
+        env:
+          INSTALLER_URL: ${{ matrix.config.laz_url }}
+        run: |
+          $installerDirectory = Join-Path $env:RUNNER_TEMP 'installers'
+          $installer = Join-Path $installerDirectory 'lazarus-win64.exe'
+          $partial = "$installer.partial"
+          New-Item -ItemType Directory -Force -Path $installerDirectory | Out-Null
+
+          function Test-Installer([string] $Path) {
+            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+              return $false
+            }
+            $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+            return $actual -eq $env:LAZARUS_WINDOWS_SHA256
+          }
+
+          if (-not (Test-Installer $installer)) {
+            Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+            & curl.exe --fail --show-error --silent --location `
+              --retry 4 --retry-all-errors --retry-max-time 240 `
+              --connect-timeout 15 --max-time 240 `
+              --output $partial $env:INSTALLER_URL
+            if ($LASTEXITCODE -ne 0) {
+              throw "Lazarus installer download failed with exit code $LASTEXITCODE"
+            }
+            if (-not (Test-Installer $partial)) {
+              throw 'The Lazarus installer does not match its official SHA-256 digest'
+            }
+            Move-Item -LiteralPath $partial -Destination $installer -Force
+          }
+
+      - name: Install pinned Windows Lazarus and Free Pascal
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 7
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'installers\lazarus-win64.exe'
+          $installDirectory = Join-Path $env:RUNNER_TEMP 'lazarus'
+          & $installer '/VERYSILENT' '/SUPPRESSMSGBOXES' '/NORESTART' '/SP-' `
+            "/DIR=$installDirectory"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Lazarus installer failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Install pinned Lazarus and Free Pascal for experimental macOS
+        if: runner.os == 'macOS'
         timeout-minutes: 7
         uses: ollydev/setup-lazarus@2d902bfe7bf72ac91c6ee21130ed599ccc839bc7 # v4
         with:
@@ -291,21 +343,24 @@ jobs:
           laz-url: ${{ matrix.config.laz_url }}
           fpc-url: ${{ matrix.config.fpc_url }}
 
-      - name: Add bundled Windows Free Pascal to PATH
+      - name: Add installed Windows Lazarus and Free Pascal to PATH
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $lazbuild = Get-ChildItem -Path "$env:RUNNER_TEMP\lazarus" `
+            -Filter lazbuild.exe -File -Recurse | Select-Object -First 1
           $fpc = Get-ChildItem -Path "$env:RUNNER_TEMP\lazarus\fpc" -Filter fpc.exe -Recurse |
             Select-Object -First 1
-          if (-not $fpc) {
-            throw 'The Lazarus installation does not contain fpc.exe'
+          if ((-not $lazbuild) -or (-not $fpc)) {
+            throw 'The Lazarus installation does not contain lazbuild.exe and fpc.exe'
           }
+          $lazbuild.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           $fpc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Verify toolchain versions
         run: |
           test "$(fpc -iV)" = "$FPC_VERSION"
-          lazbuild --version | grep -F "$LAZARUS_VERSION"
+          test "$(lazbuild --version | tr -d '\r')" = "$LAZARUS_VERSION"
 
       - name: Generate application version unit
         run: scripts/write-version.sh '${{ needs.prepare.outputs.version }}' "$GITHUB_SHA"

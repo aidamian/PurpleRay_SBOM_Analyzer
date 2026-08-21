@@ -45,34 +45,46 @@ the OpenSSL 3 runtime and a system CA certificate store; the Debian package
 declares those dependencies. WSL2 additionally requires WSLg. macOS builds are
 not currently shipped.
 
-### One-line launchers
+### Reusable launchers
 
 The launchers check the platform and UI prerequisites, resolve the latest
 release, verify `SHA256SUMS.txt`, reuse a checksum-valid cached package, and
 start the application. Run the command in the directory where you want the
-versioned application directory to be created.
+versioned application directory to be created. Each command also keeps the
+launcher in that directory.
 
 Native Linux:
 
 ```bash
 curl --fail --show-error --silent --location \
+  --output start-linux.sh \
   https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-linux.sh \
-  | bash
+  && chmod u+x start-linux.sh \
+  && ./start-linux.sh
 ```
 
 WSL2 with WSLg:
 
 ```bash
 curl --fail --show-error --silent --location \
+  --output start-wsl2.sh \
   https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-wsl2.sh \
-  | bash
+  && chmod u+x start-wsl2.sh \
+  && ./start-wsl2.sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm 'https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-windows.ps1' | iex
+$launcher = Join-Path $PWD 'start-windows.ps1'
+irm 'https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-windows.ps1' `
+  -OutFile $launcher -ErrorAction Stop
+& $launcher
 ```
+
+The saved launcher is also the updater. Rerun it later without a version pin
+to install and launch the latest release; existing versioned application
+directories are retained.
 
 To pin a release, pass a canonical version without the `v` prefix. A command
 line argument takes precedence over `PURPLERAY_VERSION`:
@@ -85,7 +97,7 @@ PURPLERAY_VERSION=0.6.0 ./start-wsl2.sh
 ```powershell
 .\start-windows.ps1 -ReleaseVersion 0.6.0
 $env:PURPLERAY_VERSION = '0.6.0'
-irm 'https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-windows.ps1' | iex
+.\start-windows.ps1
 ```
 
 Arguments after the launcher options are forwarded to the application. For
@@ -328,7 +340,7 @@ clean bill of health.
 
 ## Development
 
-The reproducible CI toolchain is Free Pascal 3.2.2 and Lazarus 4.2. On a clean
+The reproducible CI toolchain is Free Pascal 3.2.2 and Lazarus 4.8. On a clean
 Ubuntu x64 WSL2 installation, install the same official Lazarus release and the
 GTK3 development headers with:
 
@@ -339,18 +351,23 @@ sudo apt-get install --yes ca-certificates curl libgtk-3-dev
 toolchain_directory=$(mktemp -d)
 cd "$toolchain_directory"
 curl --fail --location --retry 3 --output fpc-laz.deb \
-  'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.2/fpc-laz_3.2.2-210709_amd64.deb/download'
+  'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.8/fpc-laz_3.2.2-210709_amd64.deb/download'
 curl --fail --location --retry 3 --output fpc-src.deb \
-  'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.2/fpc-src_3.2.2-210709_amd64.deb/download'
+  'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.8/fpc-src_3.2.2-210709_amd64.deb/download'
 curl --fail --location --retry 3 --output lazarus-project.deb \
-  'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.2/lazarus-project_4.2.0-0_amd64.deb/download'
+  'https://sourceforge.net/projects/lazarus/files/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.8/lazarus-project_4.8.0-0_amd64.deb/download'
+printf '%s\n' \
+  '92000f2b831184e153aab0c910f8ae9240450e5c6d76dc189cf53116ee501d83  fpc-laz.deb' \
+  '8c9e145d8056754a9ca39ce3e52e982b8e4816124984c5f542f2a874e721ad53  fpc-src.deb' \
+  '401742cefb01ad99a628188034bf728fb5360d641ed2be5f91fb0ee183a301cd  lazarus-project.deb' \
+  | sha256sum --check --strict -
 sudo apt-get install --yes ./fpc-laz.deb ./fpc-src.deb ./lazarus-project.deb
 
 fpc -iV
 lazbuild --version
 ```
 
-The final commands should report FPC `3.2.2` and Lazarus `4.2`. Return to the
+The final commands should report FPC `3.2.2` and Lazarus `4.8`. Return to the
 repository and build the Linux application:
 
 ```bash
@@ -571,11 +588,16 @@ packaging/linux/           desktop, icon, AppStream, and Debian inputs
 packaging/scoop/           generated Scoop-manifest template
 packaging/winget/          generated WinGet multi-file templates
 packaging/macos/           experimental, unshipped bundle metadata template
+docs/sprints/              planned, delivered, validated, and released sprint evidence
 scripts/                   local build, test, version, and packaging helpers
 src/                       Lazarus project, UI, scanner, parsers, and persistence
 tests/                     deterministic non-UI test runner and fixtures
 .github/workflows/         native Windows/Linux CI and release automation
 ```
+
+The [sprint evidence index](docs/sprints/README.md) separates planned work from
+what was delivered, validated, and released, and keeps known evidence gaps
+explicit.
 
 The tracked root `VERSION` file is the sole operator-managed version authority.
 It contains exactly one canonical `MAJOR.MINOR.PATCH` value: no prefix, suffix,
@@ -614,14 +636,15 @@ scripts/regenerate-icon-resource.sh
 `.github/workflows/build-release.yml` currently tests and builds the Windows and
 Linux targets on `windows-latest` and pinned `ubuntu-24.04`. The macOS matrix
 entry is retained only as commented experimental scaffolding; no macOS job,
-artifact, or release is currently produced. Builds use FPC 3.2.2 and Lazarus 4.2 from the
+artifact, or release is currently produced. Builds use FPC 3.2.2 and Lazarus 4.8 from the
 official SourceForge release files. The maintained
 [`ollydev/setup-lazarus`](https://github.com/ollydev/setup-lazarus) setup action
-is pinned to an immutable commit and currently provisions Windows only; it
-introduces no runtime dependency. Linux restores checksum-verified official
-installers from the GitHub Actions cache and uses one bounded APT setup with a
-signed fallback mirror. Official GitHub cache, artifact, and checkout actions
-are pinned as well. A newer run cancels only a superseded pull-request run;
+is pinned to an immutable commit and retained only for the commented
+experimental macOS scaffold. Active Windows and Linux jobs download and verify
+the official installers against published SHA-256 digests before installation.
+Linux uses one bounded APT setup with a signed fallback mirror. Official GitHub
+cache, artifact, and checkout actions are pinned as well. A newer run cancels
+only a superseded pull-request run;
 main, manual, and release runs are never cancelled by concurrency. Preparation,
 dependency installation, builds, and publishing have bounded timeouts so a
 stalled hosted runner cannot consume minutes indefinitely. Markdown-only

@@ -1720,6 +1720,23 @@ begin
     AssertTrue(Pos('cancel-in-progress: ${{ github.event_name == ' +
       '''pull_request'' }}', WorkflowText) > 0,
       'release workflow can again cancel main or manual release runs');
+    AssertTrue((Pos('FPC_VERSION: ''3.2.2''', WorkflowText) > 0) and
+      (Pos('LAZARUS_VERSION: ''4.8''', WorkflowText) > 0) and
+      (Pos('lazarus-project_4.8.0-0_amd64.deb', WorkflowText) > 0) and
+      (Pos('Lazarus 4.2', WorkflowText) = 0),
+      'release workflow no longer pins the supported stable toolchain');
+    AssertTrue((Pos('LAZARUS_WINDOWS_SHA256: ' +
+      '''ED25EE171D55E23CF14E0633159FDD2325EFBA56E186F8AB817AD3BF97D267D7''',
+      WorkflowText) > 0) and
+      (Pos('Download and verify pinned Windows toolchain installer',
+      WorkflowText) > 0) and
+      (Pos('Lazarus%20Windows%2064%20bits/Lazarus%204.8/',
+      WorkflowText) > 0) and
+      (Pos('Get-FileHash -LiteralPath $Path -Algorithm SHA256',
+      WorkflowText) > 0) and
+      (Pos('Install pinned Windows Lazarus and Free Pascal',
+      WorkflowText) > 0),
+      'Windows CI no longer verifies the official Lazarus installer before execution');
     AssertTrue(Pos('Verify native Linux command line without a display',
       WorkflowText) > 0,
       'release workflow lacks a native displayless Linux CLI gate');
@@ -1798,11 +1815,21 @@ begin
       'Windows launcher lost lifecycle, provenance, endpoint, or SAC safeguards');
 
     InstallPosition := Pos('## Install / quick start', ReadmeText);
-    LauncherPosition := Pos('### One-line launchers', ReadmeText);
+    LauncherPosition := Pos('### Reusable launchers', ReadmeText);
     DevelopmentPosition := Pos('## Development', ReadmeText);
     AssertTrue((InstallPosition > 0) and (LauncherPosition > InstallPosition)
       and (DevelopmentPosition > LauncherPosition),
       'README no longer leads users from manual install to launchers before development');
+    AssertTrue((Pos('--output start-linux.sh', ReadmeText) > 0) and
+      (Pos('chmod u+x start-linux.sh', ReadmeText) > 0) and
+      (Pos('./start-linux.sh', ReadmeText) > 0) and
+      (Pos('--output start-wsl2.sh', ReadmeText) > 0) and
+      (Pos('chmod u+x start-wsl2.sh', ReadmeText) > 0) and
+      (Pos('./start-wsl2.sh', ReadmeText) > 0) and
+      (Pos('-OutFile $launcher', ReadmeText) > 0) and
+      (Pos('& $launcher', ReadmeText) > 0) and
+      (Pos('| bash', ReadmeText) = 0) and (Pos('| iex', ReadmeText) = 0),
+      'README bootstrap no longer preserves reusable launchers');
     AssertTrue(Pos('### First SBOM in 60 seconds', ReadmeText) > 0,
       'README lost the three-step first-SBOM walkthrough');
     AssertTrue(Pos('macOS has no current release, launcher, or support claim',
@@ -1810,6 +1837,13 @@ begin
       'README revived a shipped macOS support claim');
     AssertTrue(Pos('### Headless command line', ReadmeText) > 0,
       'README does not document the headless CLI');
+    AssertTrue((Pos('docs/sprints/README.md', ReadmeText) > 0) and
+      FileExists(IncludeTrailingPathDelimiter(ProjectRoot) + 'docs' +
+      DirectorySeparator + 'sprints' + DirectorySeparator + 'README.md') and
+      FileExists(IncludeTrailingPathDelimiter(ProjectRoot) + 'docs' +
+      DirectorySeparator + 'sprints' + DirectorySeparator +
+      'sprint-08-advanced-analysis.md'),
+      'tracked sprint delivery evidence is missing or undiscoverable');
     AssertTrue(Pos('scoop install .\purpleray-sbom-analyzer.json',
       ReadmeText) > 0,
       'README does not explain how to consume the shipped Scoop manifest');
