@@ -328,10 +328,17 @@ jobs:
         run: |
           $installer = Join-Path $env:RUNNER_TEMP 'installers\lazarus-win64.exe'
           $installDirectory = Join-Path $env:RUNNER_TEMP 'lazarus'
-          & $installer '/VERYSILENT' '/SUPPRESSMSGBOXES' '/NORESTART' '/SP-' `
-            "/DIR=$installDirectory"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Lazarus installer failed with exit code $LASTEXITCODE"
+          $installerArguments = @(
+            '/VERYSILENT'
+            '/SUPPRESSMSGBOXES'
+            '/NORESTART'
+            '/SP-'
+            "/DIR=`"$installDirectory`""
+          )
+          $installerProcess = Start-Process -FilePath $installer `
+            -ArgumentList $installerArguments -Wait -PassThru
+          if ($installerProcess.ExitCode -ne 0) {
+            throw "Lazarus installer failed with exit code $($installerProcess.ExitCode)"
           }
 
       - name: Install pinned Lazarus and Free Pascal for experimental macOS

@@ -1672,9 +1672,10 @@ end;
 procedure TestSprint6DistributionContracts;
 var
   Lines: TStringList;
-  WorkflowText, ReadmeText, LinuxLauncherText, WSLLauncherText,
+  WorkflowText, ReadmeText, GlossaryText, LinuxLauncherText, WSLLauncherText,
     WindowsLauncherText, LinuxBuildText, LinuxPackageText, WindowsPackageText,
-    ScoopText, WingetInstallerText, PackageValidatorText: string;
+    ScoopText, WingetInstallerText, PackageValidatorText,
+    VersionPreparationText: string;
   InstallPosition, LauncherPosition, DevelopmentPosition: SizeInt;
 begin
   Lines := TStringList.Create;
@@ -1685,9 +1686,15 @@ begin
     WorkflowText := Lines.Text;
     Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'README.md');
     ReadmeText := Lines.Text;
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'docs' +
+      DirectorySeparator + 'GLOSSARY.md');
+    GlossaryText := Lines.Text;
     Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'scripts' +
       DirectorySeparator + 'build-linux.sh');
     LinuxBuildText := Lines.Text;
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'scripts' +
+      DirectorySeparator + 'prepare-version-commit.sh');
+    VersionPreparationText := Lines.Text;
     Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
       'start-linux.sh');
     LinuxLauncherText := Lines.Text;
@@ -1750,6 +1757,13 @@ begin
       (Pos('Install pinned Windows Lazarus and Free Pascal',
       WorkflowText) > 0),
       'Windows CI no longer verifies the official Lazarus installer before execution');
+    AssertTrue((Pos('Start-Process -FilePath $installer', WorkflowText) > 0) and
+      (Pos('-ArgumentList $installerArguments -Wait -PassThru', WorkflowText) > 0) and
+      (Pos('$installerProcess.ExitCode', WorkflowText) > 0) and
+      (Pos('& $installer ''/VERYSILENT''', WorkflowText) = 0) and
+      (Pos('Lazarus installer failed with exit code $LASTEXITCODE',
+      WorkflowText) = 0),
+      'Windows CI no longer waits for the Lazarus installer or checks its process exit code');
     AssertTrue(Pos('Verify native Linux command line without a display',
       WorkflowText) > 0,
       'release workflow lacks a native displayless Linux CLI gate');
@@ -1856,6 +1870,33 @@ begin
       'README bootstrap no longer preserves reusable launchers');
     AssertTrue(Pos('### First SBOM in 60 seconds', ReadmeText) > 0,
       'README lost the three-step first-SBOM walkthrough');
+    AssertTrue((Pos('[glossary](docs/GLOSSARY.md)', ReadmeText) > 0) and
+      (Pos('### CycloneDX or CDX', GlossaryText) > 0) and
+      (Pos('### SPDX', GlossaryText) > 0) and
+      (Pos('### OSV.dev', GlossaryText) > 0) and
+      (Pos('### BSI TR-03183-2 v2.1.0', GlossaryText) > 0) and
+      (Pos('### CISA KEV', GlossaryText) > 0),
+      'the user-facing terminology glossary is missing or incomplete');
+    AssertTrue((Pos('scripts/prepare-version-commit.sh', ReadmeText) > 0) and
+      (Pos('cd "$repository_root"', VersionPreparationText) > 0) and
+      (Pos('scripts/write-version.sh', VersionPreparationText) > 0) and
+      (Pos('scripts/check-version.sh', VersionPreparationText) >
+      Pos('scripts/write-version.sh', VersionPreparationText)) and
+      (Pos('git diff --check', VersionPreparationText) >
+      Pos('scripts/check-version.sh', VersionPreparationText)) and
+      (Pos('git diff --cached --check', VersionPreparationText) >
+      Pos('git diff --check', VersionPreparationText)) and
+      (Pos('scripts/run-tests.sh', VersionPreparationText) >
+      Pos('git diff --cached --check', VersionPreparationText)) and
+      (Pos('scripts/build-linux.sh', VersionPreparationText) >
+      Pos('scripts/run-tests.sh', VersionPreparationText)) and
+      (Pos('git status --short --branch', VersionPreparationText) >
+      Pos('scripts/build-linux.sh', VersionPreparationText)) and
+      (Pos('git add ', VersionPreparationText) = 0) and
+      (Pos('git commit', VersionPreparationText) = 0) and
+      (Pos('git tag', VersionPreparationText) = 0) and
+      (Pos('git push', VersionPreparationText) = 0),
+      'the local version-preparation helper is missing, unsafe, or incomplete');
     AssertTrue((Pos('Linux x64 (GTK2)', ReadmeText) > 0) and
       (Pos('--widgetset=gtk2', ReadmeText) > 0) and
       (Pos('libgtk2.0-dev', ReadmeText) > 0) and

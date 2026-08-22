@@ -9,6 +9,9 @@ after the inventory SBOM has been written; it is unchecked again every time.
 Its native parsers read each artifact through one verified, size-bounded input;
 the application never downloads or requires a separate scanner.
 
+For definitions of terms used in the interface and generated reports, see the
+[glossary](docs/GLOSSARY.md).
+
 Published builds support Windows x64 and Linux x64 (GTK2), including Linux
 under WSL2 with WSLg. The Cocoa code and packaging are experimental and
 unshipped: macOS has no current release, launcher, or support claim.
@@ -591,6 +594,7 @@ packaging/linux/           desktop, icon, AppStream, and Debian inputs
 packaging/scoop/           generated Scoop-manifest template
 packaging/winget/          generated WinGet multi-file templates
 packaging/macos/           experimental, unshipped bundle metadata template
+docs/                      user-facing glossary and application screenshot
 scripts/                   local build, test, version, and packaging helpers
 src/                       Lazarus project, UI, scanner, parsers, and persistence
 tests/                     deterministic non-UI test runner and fixtures
@@ -600,15 +604,31 @@ tests/                     deterministic non-UI test runner and fixtures
 The tracked root `VERSION` file is the sole operator-managed version authority.
 It contains exactly one canonical `MAJOR.MINOR.PATCH` value: no prefix, suffix,
 or leading zero is accepted, and each numeric component must fit the Windows
-version-resource range (`0` through `65535`). No version-setting helper script
-is mandatory. CI reads that file, generates `src/uVersionInfo.pas`, and updates
-the Lazarus PE version-resource fields in its ephemeral workspace using the
-same version and full commit SHA. Generated changes are never committed back to
-`main`.
+version-resource range (`0` through `65535`). Edit only `VERSION`, never the
+generated mirrors by hand. CI reads that file, generates
+`src/uVersionInfo.pas`, and updates the Lazarus PE version-resource fields in
+its ephemeral workspace using the same version and full commit SHA. Generated
+CI changes are never committed back to `main`.
 
 The checked-in Pascal and Lazarus version fields are synchronized fallbacks for
-direct IDE builds. After editing `VERSION`, an operator can validate or
-synchronize those fallbacks with the optional helpers:
+direct IDE builds: the compiled Pascal application and Lazarus/Windows version
+resource cannot read the repository's text file at runtime. After editing only
+`VERSION`, prepare the local commit candidate with:
+
+```bash
+scripts/prepare-version-commit.sh
+```
+
+The script's only tracked source updates are `src/uVersionInfo.pas` and the
+version-resource fields in `src/purpleray_sbom_analyzer.lpi`. It validates their
+consistency, checks staged and unstaged diffs for whitespace errors, runs the
+non-UI tests, and builds the Linux GTK2 Release binary. It finishes with Git
+status and diff summaries but never stages, commits, tags, or pushes anything.
+The FPC 3.2.2, Lazarus 4.8, and GTK2 development setup described above is
+required.
+
+For an individual validation or synchronization step, use the underlying
+helpers directly:
 
 ```bash
 scripts/check-version.sh
