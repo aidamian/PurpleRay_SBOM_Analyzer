@@ -1676,7 +1676,25 @@ var
     WindowsLauncherText, LinuxBuildText, LinuxPackageText, WindowsPackageText,
     ScoopText, WingetInstallerText, PackageValidatorText,
     VersionPreparationText: string;
+  GlossaryCurrentKey, GlossaryPreviousKey, GlossaryTerm,
+    TrimmedGlossaryLine: string;
+  GlossaryClosing, GlossaryEntryCount, GlossaryLineIndex: Integer;
   InstallPosition, LauncherPosition, DevelopmentPosition: SizeInt;
+
+  function GlossarySortKey(const AValue: string): string;
+  var
+    CharacterIndex, ParenthesisPosition: Integer;
+    LowerValue: string;
+  begin
+    Result := '';
+    LowerValue := LowerCase(AValue);
+    ParenthesisPosition := Pos(' (', LowerValue);
+    if ParenthesisPosition > 0 then
+      SetLength(LowerValue, ParenthesisPosition - 1);
+    for CharacterIndex := 1 to Length(LowerValue) do
+      if LowerValue[CharacterIndex] in ['a'..'z', '0'..'9'] then
+        Result := Result + LowerValue[CharacterIndex];
+  end;
 begin
   Lines := TStringList.Create;
   try
@@ -1689,6 +1707,36 @@ begin
     Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'docs' +
       DirectorySeparator + 'GLOSSARY.md');
     GlossaryText := Lines.Text;
+    GlossaryEntryCount := 0;
+    GlossaryPreviousKey := '';
+    for GlossaryLineIndex := 0 to Lines.Count - 1 do
+    begin
+      TrimmedGlossaryLine := Trim(Lines[GlossaryLineIndex]);
+      if (TrimmedGlossaryLine <> '') and
+        (TrimmedGlossaryLine[1] = '#') then
+        AssertTrue((GlossaryLineIndex = 0) and
+          (TrimmedGlossaryLine = '# PurpleRay SBOM Analyzer glossary'),
+          'the glossary contains a subsection or an unexpected title');
+      if Copy(TrimmedGlossaryLine, 1, 2) <> '**' then
+        Continue;
+      GlossaryClosing := Pos('**', Copy(TrimmedGlossaryLine, 3, MaxInt));
+      AssertTrue(GlossaryClosing > 1,
+        'a glossary entry has no closing bold marker');
+      GlossaryTerm := Copy(TrimmedGlossaryLine, 3, GlossaryClosing - 1);
+      GlossaryCurrentKey := GlossarySortKey(GlossaryTerm);
+      AssertTrue(GlossaryCurrentKey <> '',
+        'a glossary entry has no sortable term');
+      AssertTrue(Trim(Copy(TrimmedGlossaryLine, GlossaryClosing + 4,
+        MaxInt)) <> '', 'a glossary entry has no definition');
+      if GlossaryPreviousKey <> '' then
+        AssertTrue(CompareStr(GlossaryPreviousKey, GlossaryCurrentKey) < 0,
+          'glossary entries are duplicated or not alphabetically sorted: ' +
+          GlossaryTerm);
+      GlossaryPreviousKey := GlossaryCurrentKey;
+      Inc(GlossaryEntryCount);
+    end;
+    AssertTrue(GlossaryEntryCount >= 100,
+      'the flat glossary lost required project terminology');
     Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'scripts' +
       DirectorySeparator + 'build-linux.sh');
     LinuxBuildText := Lines.Text;
@@ -1871,11 +1919,14 @@ begin
     AssertTrue(Pos('### First SBOM in 60 seconds', ReadmeText) > 0,
       'README lost the three-step first-SBOM walkthrough');
     AssertTrue((Pos('[glossary](docs/GLOSSARY.md)', ReadmeText) > 0) and
-      (Pos('### CycloneDX or CDX', GlossaryText) > 0) and
-      (Pos('### SPDX', GlossaryText) > 0) and
-      (Pos('### OSV.dev', GlossaryText) > 0) and
-      (Pos('### BSI TR-03183-2 v2.1.0', GlossaryText) > 0) and
-      (Pos('### CISA KEV', GlossaryText) > 0),
+      (Pos('**Added component**', GlossaryText) > 0) and
+      (Pos('**BSI TR-03183-2 v2.1.0**', GlossaryText) > 0) and
+      (Pos('**CISA KEV**', GlossaryText) > 0) and
+      (Pos('**CycloneDX or CDX**', GlossaryText) > 0) and
+      (Pos('**deps.dev**', GlossaryText) > 0) and
+      (Pos('**OSV.dev**', GlossaryText) > 0) and
+      (Pos('**SPDX**', GlossaryText) > 0) and
+      (Pos('**Unchanged component**', GlossaryText) > 0),
       'the user-facing terminology glossary is missing or incomplete');
     AssertTrue((Pos('scripts/prepare-version-commit.sh', ReadmeText) > 0) and
       (Pos('cd "$repository_root"', VersionPreparationText) > 0) and

@@ -1602,18 +1602,29 @@ function TS8SequencingOSVTransport.PostQueryBatch(
   ACancelCheck: TOSVCancelCheck; out AHTTPStatus: Integer;
   out AResponseBody: RawByteString): TOSVTransportOutcome;
 var
-  Digest: string;
+  ActivatedOutputFileName, Digest, ExpectedCanonicalFileName: string;
 begin
   Requests.Add(string(ARequestBody));
-  SawActivatedOutput := (Task <> nil) and
-    SameFileName(Task.GeneratedSBOMPath, ExpectedOutputFileName) and
-    FileExists(ExpectedOutputFileName);
+  ActivatedOutputFileName := '';
+  ExpectedCanonicalFileName := '';
+  if (Task <> nil) and FileExists(Task.GeneratedSBOMPath) and
+    FileExists(ExpectedOutputFileName) then
+  begin
+    ActivatedOutputFileName := CanonicalPath(Task.GeneratedSBOMPath);
+    ExpectedCanonicalFileName := CanonicalPath(ExpectedOutputFileName);
+  end;
+  { The scan service records the identity-backed path returned by its pinned
+    output directory. A Windows temporary directory can reach the same file
+    through a different drive-letter, junction, or 8.3 spelling, so compare
+    the resolved paths rather than the caller's original text. }
+  SawActivatedOutput := (ActivatedOutputFileName <> '') and
+    SameFileName(ActivatedOutputFileName, ExpectedCanonicalFileName);
   SawMatchingStoredDigest := SawActivatedOutput and
-    SHA256File(ExpectedOutputFileName, Digest, nil, nil) and
+    SHA256File(ActivatedOutputFileName, Digest, nil, nil) and
     (Digest = Task.GeneratedSBOMSHA256);
   SawCommittedCache := FileExists(ExpectedCacheFileName);
   if SawActivatedOutput then
-    OutputBytesAtLookup := S8ReadFileBytes(ExpectedOutputFileName);
+    OutputBytesAtLookup := S8ReadFileBytes(ActivatedOutputFileName);
   AHTTPStatus := 200;
   AResponseBody := EmptyResponse(QueryCount(ARequestBody));
   Result := otoSucceeded;
@@ -3072,7 +3083,7 @@ var
     OnlineBytes, ProgressFailureOutput, SettingsText: string;
   CLILines: TStringList;
   EnrichmentFailureCache, OfflineCache, OfflineOutput, OnlineCache,
-    OnlineOutput, OutputDirectory, ProgressFailureCache,
+    OnlineOutput, OutputAliasDirectory, OutputDirectory, ProgressFailureCache,
     TargetDirectory: string;
   EnrichmentFailurePin, OfflinePin, OnlinePin,
     ProgressFailurePin: TS8TimestampPin;
@@ -3094,6 +3105,10 @@ begin
     'sprint8-progress-failure-cache');
   EnrichmentFailureCache := NewTemporaryDirectory(
     'sprint8-enrichment-failure-cache');
+  OutputAliasDirectory := IncludeTrailingPathDelimiter(OutputDirectory) +
+    'path-alias';
+  if not ForceDirectories(OutputAliasDirectory) then
+    Fail('Unable to create the Sprint 8 output-path alias fixture');
   WriteText(IncludeTrailingPathDelimiter(TargetDirectory) + 'package.json',
     '{"name":"sprint8-service","version":"1.0.0",' +
     '"dependencies":{"left-pad":"1.3.0"}}');
@@ -3151,7 +3166,11 @@ begin
     S8ConfigureScanServiceTask(OnlineTask, TargetDirectory);
     OnlinePin.Task := OnlineTask;
     Sequencing.Task := OnlineTask;
-    Sequencing.ExpectedOutputFileName := OnlineOutput;
+    { Keep a textually different path to the same output. This makes the
+      Windows pinned-handle spelling regression deterministic on every host. }
+    Sequencing.ExpectedOutputFileName := IncludeTrailingPathDelimiter(
+      OutputAliasDirectory) + '..' + DirectorySeparator +
+      ExtractFileName(OnlineOutput);
     Sequencing.ExpectedCacheFileName := IncludeTrailingPathDelimiter(
       OnlineCache) + DefaultScanCacheFileName;
     AssertTrue(ExecuteScanToFile(OnlineTask, OnlineOutput,
