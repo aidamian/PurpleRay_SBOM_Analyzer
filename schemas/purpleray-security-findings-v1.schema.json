@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:purpleray:schema:security-findings:v1",
+  "title": "PurpleRay security-findings report v1",
+  "description": "Closed schema for a deterministic, privacy-minimal export of retained OSV.dev advisory matches. Entries are not confirmed vulnerabilities.",
+  "$comment": "Producer order is fixed: top-level fields follow schema order and matches follow the retained snapshot's canonical Package URL and advisory identifier order.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "formatVersion",
+    "source",
+    "summary",
+    "claim",
+    "privacy",
+    "matches",
+    "limitations"
+  ],
+  "properties": {
+    "format": {
+      "const": "purpleray-security-findings"
+    },
+    "formatVersion": {
+      "const": 1
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "taskId",
+        "managedSbomSha256",
+        "knownIssueSnapshotSha256",
+        "provider",
+        "checkedUtc",
+        "outcome"
+      ],
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "managedSbomSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "knownIssueSnapshotSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "provider": {
+          "const": "OSV.dev"
+        },
+        "checkedUtc": {
+          "$ref": "#/$defs/appUtcTimestamp"
+        },
+        "outcome": {
+          "enum": ["ok", "no-eligible-candidates"]
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eligibleCandidateCount",
+        "advisoryCount",
+        "matchCount"
+      ],
+      "properties": {
+        "eligibleCandidateCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2048
+        },
+        "advisoryCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4096
+        },
+        "matchCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8192
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "confirmedVulnerabilities", "text"],
+      "properties": {
+        "kind": {
+          "const": "advisory-matches"
+        },
+        "confirmedVulnerabilities": {
+          "const": false
+        },
+        "text": {
+          "const": "Entries are advisory matches from the retained OSV.dev snapshot, not confirmed vulnerabilities."
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pathsIncluded", "contactsIncluded", "diagnosticsIncluded"],
+      "properties": {
+        "pathsIncluded": {
+          "const": false
+        },
+        "contactsIncluded": {
+          "const": false
+        },
+        "diagnosticsIncluded": {
+          "const": false
+        }
+      }
+    },
+    "matches": {
+      "type": "array",
+      "maxItems": 8192,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["packageUrl", "advisoryId", "recordModified"],
+        "properties": {
+          "packageUrl": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^pkg:"
+          },
+          "advisoryId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[!-~]+$"
+          },
+          "recordModified": {
+            "$ref": "#/$defs/osvTimestamp"
+          }
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "const": "An advisory match does not establish reachability or exploitability."
+        },
+        {
+          "const": "The absence of advisory matches is not a clean bill of health."
+        }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "appUtcTimestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{3})?Z$"
+    },
+    "osvTimestamp": {
+      "type": "string",
+      "maxLength": 30,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
+    }
+  }
+}

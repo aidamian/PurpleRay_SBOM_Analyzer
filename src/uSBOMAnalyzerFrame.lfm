@@ -673,6 +673,10 @@ object SBOMAnalyzerFrame: TSBOMAnalyzerFrame
       Caption = 'CycloneDX SBOM...'
       OnClick = ExportSBOMClicked
     end
+    object ExportSecurityFindingsMenuItem: TMenuItem
+      Caption = 'Security findings report...'
+      OnClick = ExportSecurityFindingsClicked
+    end
     object ExportBSIReadinessMenuItem: TMenuItem
       Caption = 'BSI TR-03183-2 v2.1.0 readiness report...'
       OnClick = ExportBSIReadinessClicked

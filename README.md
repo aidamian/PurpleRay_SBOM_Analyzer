@@ -352,7 +352,17 @@ timestamped known-issue snapshot through the existing atomic history write;
 cancellation or failure keeps the last valid snapshot. There are no background
 calls or remembered consent, the CLI remains offline, and the managed SBOM and
 BSI readiness report remain unchanged. Full OSV records, CISA KEV, EPSS,
-deps.dev, VEX, and vulnerability-report exports are deferred.
+deps.dev, and VEX are deferred.
+
+A completed scan with a valid retained snapshot can export a deterministic
+**Security findings report** from the desktop Export menu. The
+[closed JSON format](schemas/purpleray-security-findings-v1.schema.json) binds
+its advisory matches to the task, managed-SBOM SHA-256, and known-issue
+snapshot SHA-256 while excluding paths, contacts, and diagnostics. It does not
+claim confirmed vulnerabilities, reachability, exploitability, severity,
+affectedness, remediation, or VEX status; the absence of advisory matches is
+not a clean bill of health. Exporting the report changes neither the managed
+SBOM nor history.
 
 ## Development
 

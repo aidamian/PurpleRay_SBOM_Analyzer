@@ -35,7 +35,8 @@ uses
   uComponentComparison, uCommandLine, uScanService, uAtomicFiles,
   uVerifiedInput, uArchiveInspector, uBinaryIdentifiers, uBoundedBinaryReader,
   uPEVersionInfo, uScanAnalysis, uScanPool, uScanCache, uSettingsStore,
-  uOSVCore, uKnownIssues, uKnownIssueService, uBSIReadiness;
+  uOSVCore, uKnownIssues, uKnownIssueService, uBSIReadiness,
+  uSecurityFindings;
 
 type
   TTestMethod = procedure;
@@ -1925,9 +1926,13 @@ begin
       (Pos('**CycloneDX or CDX**', GlossaryText) > 0) and
       (Pos('**deps.dev**', GlossaryText) > 0) and
       (Pos('**OSV.dev**', GlossaryText) > 0) and
+      (Pos('**Security-findings report**', GlossaryText) > 0) and
       (Pos('**SPDX**', GlossaryText) > 0) and
       (Pos('**Unchanged component**', GlossaryText) > 0),
       'the user-facing terminology glossary is missing or incomplete');
+    AssertTrue(Pos(
+      'schemas/purpleray-security-findings-v1.schema.json', ReadmeText) > 0,
+      'README does not link the public security-findings schema');
     AssertTrue((Pos('scripts/prepare-version-commit.sh', ReadmeText) > 0) and
       (Pos('cd "$repository_root"', VersionPreparationText) > 0) and
       (Pos('scripts/write-version.sh', VersionPreparationText) > 0) and
@@ -2625,9 +2630,9 @@ begin
       Pos('object FCalculateSHA256: TCheckBox', SettingsResource)),
       'settings checkbox visual order differs from the privacy workflow');
 
-    AssertEqual(3, CountTextOccurrences(AnalyzerSource,
+    AssertEqual(4, CountTextOccurrences(AnalyzerSource,
       'Dialog.Options := Dialog.Options + [ofOverwritePrompt]'),
-      'all three export dialogs must request overwrite confirmation');
+      'all four export dialogs must request overwrite confirmation');
     AssertTrue((Pos(
       'Caption = ''BSI TR-03183-2 v2.1.0 readiness report...''',
       AnalyzerResource) > 0) and
@@ -6780,6 +6785,7 @@ end;
 {$I sprint7_regressions.inc}
 {$I sprint8_regressions.inc}
 {$I sprint9_regressions.inc}
+{$I sprint10_regressions.inc}
 
 begin
   ProjectRoot := ExpandFileName(ExtractFilePath(ParamStr(0)) + '..' +
@@ -6852,6 +6858,7 @@ begin
   RunSprint7RegressionTests;
   RunSprint8RegressionTests;
   RunSprint9RegressionTests;
+  RunSprint10RegressionTests;
   WriteLn(Format('%d tests: %d passed, %d failed, %d skipped',
     [TestCount, PassCount, FailureCount, SkipCount]));
   RemoveTemporaryTree(TemporaryRoot);

@@ -381,6 +381,12 @@ mapper does not emit it, and it never means compliant.
 optional, or test use. Scope does not state whether a vulnerability is
 exploitable.
 
+**Security-findings report** — PurpleRay's deterministic, privacy-minimal JSON
+export of retained OSV.dev advisory matches, bound to the task, managed-SBOM
+SHA-256, and known-issue snapshot SHA-256. It is not a vulnerability or
+exploitability assessment, and the absence of advisory matches is not a clean
+bill of health.
+
 **`security.txt` and RFC 9116** — A standard way for an organization to publish
 security-contact information. The readiness mapper recognizes a suitable URL
 when present but does not invent or contact one.

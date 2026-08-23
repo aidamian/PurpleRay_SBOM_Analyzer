@@ -114,6 +114,7 @@ type
     CopySelectedMenuItem: TMenuItem;
     FExportMenu: TPopupMenu;
     ExportSBOMMenuItem: TMenuItem;
+    ExportSecurityFindingsMenuItem: TMenuItem;
     ExportBSIReadinessMenuItem: TMenuItem;
     FTaskMenu: TPopupMenu;
     DeleteTaskMenuItem: TMenuItem;
@@ -224,6 +225,9 @@ type
 
     {** Copies the selected task's immutable managed CycloneDX bytes. *}
     procedure ExportSBOMClicked(Sender: TObject);
+
+    {** Exports the retained OSV snapshot as deterministic advisory matches. *}
+    procedure ExportSecurityFindingsClicked(Sender: TObject);
 
     {** Builds a path-free BSI TR-03183-2 v2.1.0 readiness assessment. *}
     procedure ExportBSIReadinessClicked(Sender: TObject);
@@ -1484,7 +1488,7 @@ implementation
 uses
   Clipbrd, Graphics, LCLIntf, LCLType, Types, uVersionInfo, uTimeUtils, uPlatform,
   uAtomicFiles, uBSIReadiness, uJSONUtils, uScanSettingsDialog, uExportUtils,
-  uKnownIssues, uKnownIssueService, uOSVCore, uPresentation,
+  uKnownIssues, uKnownIssueService, uOSVCore, uPresentation, uSecurityFindings,
   uSaveDialogCompat;
 
 {$R *.lfm}
@@ -2640,6 +2644,8 @@ begin
     (ActiveTask.Status in [tsPending, tsRunning])) and not FCancelRequested;
   FExportButton.Enabled := (Task <> nil) and
     (Task.Status = tsCompleted) and FileExists(Task.GeneratedSBOMPath);
+  ExportSecurityFindingsMenuItem.Enabled :=
+    CanGenerateSecurityFindings(Task);
   FExportDatabaseButton.Enabled := (not IsScanActive) and
     (FHistoryService.TaskCount > 0) and
     DirectoryExists(FHistoryService.DataDirectory);
@@ -3161,6 +3167,52 @@ begin
         on E: Exception do
           ShowError('The SBOM could not be exported: ' + E.Message);
       end;
+    end;
+  finally
+    Dialog.Free;
+  end;
+end;
+
+procedure TSBOMAnalyzerFrame.ExportSecurityFindingsClicked(Sender: TObject);
+var
+  Dialog: TPurpleRaySaveDialog;
+  ExportedMatchCount: Integer;
+  Report: UTF8String;
+  SuggestedName: string;
+  Task: TScanTask;
+begin
+  Task := SelectedTask;
+  if not CanGenerateSecurityFindings(Task) then
+    Exit;
+  Dialog := TPurpleRaySaveDialog.Create(Self);
+  try
+    try
+      Report := GenerateSecurityFindings(Task);
+      ExportedMatchCount := Task.KnownIssueCheck.MatchCount;
+      SuggestedName := ChangeFileExt(ChangeFileExt(
+        TaskSBOMExportFileName(Task), ''), '') +
+        SecurityFindingsSuggestedExtension;
+      Dialog.Title := 'Export security findings report';
+      Dialog.Filter := 'JSON files (*.json)|*.json|All files|*';
+      Dialog.DefaultExt := 'json';
+      Dialog.FileName := SuggestedName;
+      Dialog.Options := Dialog.Options + [ofOverwritePrompt];
+      if Dialog.Execute then
+      begin
+        if (Trim(Task.GeneratedSBOMPath) <> '') and
+          SameFileName(ExpandFileName(Dialog.FileName),
+          ExpandFileName(Task.GeneratedSBOMPath)) then
+          raise EInOutError.Create(
+            'The security findings report cannot replace the managed SBOM');
+        WriteAtomicUTF8(Dialog.FileName, Report, False);
+        ShowExportFeedback(Dialog.FileName,
+          'Security findings report exported (' +
+          IntToStr(ExportedMatchCount) + ' advisory matches)');
+      end;
+    except
+      on E: Exception do
+        ShowError('The security findings report could not be exported: ' +
+          E.Message);
     end;
   finally
     Dialog.Free;
