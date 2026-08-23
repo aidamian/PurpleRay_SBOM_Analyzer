@@ -6,8 +6,9 @@
 
   Description
   -----------
-  Runs the scanner away from the LCL thread, queues coalesced progress safely,
-  generates the SBOM, and delivers an owned result to the main window.
+  Runs scans and explicit known-issue refreshes away from the LCL thread,
+  queues coalesced scan progress safely, and delivers an owned task snapshot
+  to the main window.
 
   Citation request
   ----------------
@@ -33,12 +34,16 @@ type
   TWorkerProgressEvent = procedure(Sender: TObject;
     const AProgress: TScanProgress) of object;
   TWorkerCompleteEvent = procedure(Sender: TObject; AResult: TScanTask) of object;
+  {** Selects a full inventory scan or an OSV-only completed-task refresh. *}
+  TScanWorkerMode = (swmScan, swmKnownIssueRefresh);
 
   TScanWorker = class(TThread)
   private
     FTask: TScanTask;
     FDataDirectory: string;
     FCheckKnownIssues: Boolean;
+    FWorkerMode: TScanWorkerMode;
+    FRefreshAttemptCompleted: Boolean;
     FOSVTransport: IOSVTransport;
     FLatestProgress: TScanProgress;
     FProgressQueued: LongInt;
@@ -48,6 +53,12 @@ type
     FThreadInitialized: Boolean;
     FOnProgress: TWorkerProgressEvent;
     FOnComplete: TWorkerCompleteEvent;
+
+    {** Initializes fields shared by scan and known-issue refresh workers. *}
+    procedure InitializeWorker(ATask: TScanTask;
+      const ADataDirectory: string; ACheckKnownIssues: Boolean;
+      AWorkerMode: TScanWorkerMode);
+
     {**
       Records an unexpected worker failure without discarding partial results.
 
@@ -161,6 +172,15 @@ type
     procedure PerformScan; virtual;
 
     {**
+      Refreshes the cloned completed task's known-issue snapshot only.
+
+      The default implementation uses the production OSV.dev transport. The
+      virtual boundary permits permanent tests to supply a fake transport
+      without adding a transport argument to the production constructor.
+    *}
+    procedure PerformKnownIssueRefresh; virtual;
+
+    {**
       Owns the complete background scan/SBOM lifecycle and queues completion.
 
       Parameters
@@ -204,6 +224,12 @@ type
     }
     constructor Create(ATask: TScanTask; const ADataDirectory: string;
       ACheckKnownIssues: Boolean = False);
+
+    {**
+      Creates a suspended worker that refreshes an existing completed task's
+      OSV.dev snapshot without scanning files or regenerating its SBOM.
+    *}
+    constructor CreateKnownIssueRefresh(ATask: TScanTask);
     destructor Destroy; override;
 
     {**
@@ -242,12 +268,14 @@ type
     property OnProgress: TWorkerProgressEvent read FOnProgress write FOnProgress;
     property OnComplete: TWorkerCompleteEvent read FOnComplete write FOnComplete;
     property ResultTask: TScanTask read FTask;
+    property WorkerMode: TScanWorkerMode read FWorkerMode;
+    property RefreshAttemptCompleted: Boolean read FRefreshAttemptCompleted;
   end;
 
 implementation
 
 uses
-  uOSVTransportFactory, uScanService, uTimeUtils;
+  uKnownIssueService, uOSVTransportFactory, uScanService, uTimeUtils;
 
 procedure TScanWorker.MarkTaskFailed(const AMessage: string);
 var
@@ -265,6 +293,19 @@ constructor TScanWorker.Create(ATask: TScanTask; const ADataDirectory: string;
   ACheckKnownIssues: Boolean);
 begin
   inherited Create(True);
+  InitializeWorker(ATask, ADataDirectory, ACheckKnownIssues, swmScan);
+end;
+
+constructor TScanWorker.CreateKnownIssueRefresh(ATask: TScanTask);
+begin
+  inherited Create(True);
+  InitializeWorker(ATask, '', True, swmKnownIssueRefresh);
+end;
+
+procedure TScanWorker.InitializeWorker(ATask: TScanTask;
+  const ADataDirectory: string; ACheckKnownIssues: Boolean;
+  AWorkerMode: TScanWorkerMode);
+begin
   FThreadInitialized := True;
   FProgressLockInitialized := False;
   FStarted := False;
@@ -273,9 +314,15 @@ begin
   FProgressLockInitialized := True;
   if ATask = nil then
     raise EArgumentNilException.Create('Scan worker task must not be nil');
+  if (AWorkerMode = swmKnownIssueRefresh) and
+    (ATask.Status <> tsCompleted) then
+    raise EArgumentException.Create(
+      'Known-issue refresh requires a completed scan task');
   FTask := ATask.Clone;
   FDataDirectory := ExcludeTrailingPathDelimiter(ADataDirectory);
   FCheckKnownIssues := ACheckKnownIssues;
+  FWorkerMode := AWorkerMode;
+  FRefreshAttemptCompleted := False;
 end;
 
 destructor TScanWorker.Destroy;
@@ -409,7 +456,44 @@ begin
   end;
 end;
 
+procedure TScanWorker.PerformKnownIssueRefresh;
+var
+  Transport: IOSVTransport;
+begin
+  Transport := nil;
+  try
+    try
+      Transport := CreateProductionOSVTransport;
+    except
+      { Transport setup failure is a completed, non-fatal refresh outcome;
+        ExecuteKnownIssueCheck records the bounded unavailable snapshot. }
+      on EOutOfMemory do
+        Transport := nil;
+      on EOSVProductionTransportUnavailable do
+        Transport := nil;
+    end;
+    EnterCriticalSection(FProgressLock);
+    try
+      FOSVTransport := Transport;
+    finally
+      LeaveCriticalSection(FProgressLock);
+    end;
+    ExecuteKnownIssueCheck(FTask, Transport, @CancellationRequested);
+  finally
+    EnterCriticalSection(FProgressLock);
+    try
+      FOSVTransport := nil;
+    finally
+      LeaveCriticalSection(FProgressLock);
+    end;
+  end;
+end;
+
 procedure TScanWorker.Execute;
+var
+  OriginalCompletedUTC, OriginalCreatedUTC, OriginalStartedUTC: string;
+  OriginalDurationMS: Int64;
+  OriginalStatus: TTaskStatus;
 
   function InventoryWasCommitted: Boolean;
   begin
@@ -431,6 +515,33 @@ procedure TScanWorker.Execute;
   end;
 
 begin
+  if FWorkerMode = swmKnownIssueRefresh then
+  begin
+    OriginalCreatedUTC := FTask.CreatedUTC;
+    OriginalStartedUTC := FTask.StartedUTC;
+    OriginalCompletedUTC := FTask.CompletedUTC;
+    OriginalDurationMS := FTask.DurationMS;
+    OriginalStatus := FTask.Status;
+    try
+      try
+        PerformKnownIssueRefresh;
+        FRefreshAttemptCompleted := True;
+      except
+        { A refresh failure must not relabel or retime the cloned completed
+          inventory. The completion flag tells the UI not to adopt it. }
+      end;
+    finally
+      { Online intelligence is independent of immutable scan provenance. }
+      FTask.CreatedUTC := OriginalCreatedUTC;
+      FTask.StartedUTC := OriginalStartedUTC;
+      FTask.CompletedUTC := OriginalCompletedUTC;
+      FTask.DurationMS := OriginalDurationMS;
+      FTask.Status := OriginalStatus;
+      TThread.Queue(Self, @DeliverCompletion);
+    end;
+    Exit;
+  end;
+
   try
     try
       PerformScan;

@@ -6779,6 +6779,7 @@ end;
 
 {$I sprint7_regressions.inc}
 {$I sprint8_regressions.inc}
+{$I sprint9_regressions.inc}
 
 begin
   ProjectRoot := ExpandFileName(ExtractFilePath(ParamStr(0)) + '..' +
@@ -6850,6 +6851,7 @@ begin
   RunTest('scan cancellation', @TestScanCancellation);
   RunSprint7RegressionTests;
   RunSprint8RegressionTests;
+  RunSprint9RegressionTests;
   WriteLn(Format('%d tests: %d passed, %d failed, %d skipped',
     [TestCount, PassCount, FailureCount, SkipCount]));
   RemoveTemporaryTree(TemporaryRoot);

@@ -63,6 +63,7 @@ type
     FNewButton: TButton;
     FCancelButton: TButton;
     FRescanButton: TButton;
+    FRefreshIntelligenceButton: TButton;
     FRefreshButton: TButton;
     FExportButton: TButton;
     FExportDatabaseButton: TButton;
@@ -173,6 +174,15 @@ type
         Invalid or unavailable targets leave the action disabled or unchanged.
     }
     procedure RescanClicked(Sender: TObject);
+
+    {**
+      Explicitly refreshes OSV.dev intelligence for a completed scan.
+
+      The confirmation is deliberately per action and is never persisted.
+      Only eligible versioned Package URLs are sent; the target is not
+      rescanned and the managed SBOM is not changed.
+    *}
+    procedure RefreshIntelligenceClicked(Sender: TObject);
 
     {**
       Reloads persisted task history while no scan is active.
@@ -1149,6 +1159,12 @@ type
     }
     procedure ConfigureAndStartScan(const ADirectory: string);
 
+    {** Starts an OSV-only worker for an already completed task. *}
+    procedure StartIntelligenceRefresh(ATask: TScanTask);
+
+    {** Atomically applies a successful last-valid intelligence snapshot. *}
+    procedure CompleteIntelligenceRefresh(AResult: TScanTask);
+
     {**
       Presents an analyzer-scoped error unless shutdown has started.
 
@@ -1468,7 +1484,8 @@ implementation
 uses
   Clipbrd, Graphics, LCLIntf, LCLType, Types, uVersionInfo, uTimeUtils, uPlatform,
   uAtomicFiles, uBSIReadiness, uJSONUtils, uScanSettingsDialog, uExportUtils,
-  uOSVCore, uPresentation, uSaveDialogCompat;
+  uKnownIssues, uKnownIssueService, uOSVCore, uPresentation,
+  uSaveDialogCompat;
 
 {$R *.lfm}
 
@@ -1715,23 +1732,50 @@ end;
 function TSBOMAnalyzerFrame.RequestActiveCancellation(
   AConfirm: Boolean): Boolean;
 var
+  ActiveTaskID, TargetName: string;
+  IsIntelligenceRefresh: Boolean;
   Task: TScanTask;
+  Worker: TScanWorker;
 begin
   Result := False;
   Task := FindTask(FActiveTaskID);
-  if (FWorker = nil) or (Task = nil) or
+  if (FWorker = nil) or (Task = nil) then
+    Exit;
+  ActiveTaskID := FActiveTaskID;
+  TargetName := Task.TargetRootName;
+  Worker := FWorker;
+  IsIntelligenceRefresh :=
+    Worker.WorkerMode = swmKnownIssueRefresh;
+  if not IsIntelligenceRefresh and
     not (Task.Status in [tsPending, tsRunning]) then
     Exit;
   if FCancelRequested then
     Exit(True);
-  if AConfirm and (MessageDlg(AppName, 'Cancel the running scan of "' +
-    Task.TargetRootName + '"?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes) then
+  if AConfirm then
+    if IsIntelligenceRefresh then
+    begin
+      if MessageDlg(AppName, 'Cancel the OSV.dev intelligence refresh for "' +
+        TargetName + '"? The previous result will be retained.',
+        mtConfirmation, [mbYes, mbNo], 0) <> mrYes then
+        Exit;
+    end
+    else if MessageDlg(AppName, 'Cancel the running scan of "' +
+      TargetName + '"?', mtConfirmation,
+      [mbYes, mbNo], 0) <> mrYes then
+      Exit;
+  { The modal confirmation pumps LCL events. The queued completion may have
+    won while the prompt was open, so never cancel or relabel stale state. }
+  if (FWorker = nil) or (FWorker <> Worker) or
+    (FActiveTaskID <> ActiveTaskID) or FWorker.Finished then
     Exit;
   FCancelRequested := True;
   FWorker.Cancel;
   FCancelButton.Enabled := False;
-  FProgressPath.Caption := 'Cancelling scan of ' + Task.TargetRootName +
-    ' safely...';
+  if IsIntelligenceRefresh then
+    FProgressPath.Caption := 'Cancelling intelligence refresh safely...'
+  else
+    FProgressPath.Caption := 'Cancelling scan of ' + TargetName +
+      ' safely...';
   Result := True;
 end;
 
@@ -1740,6 +1784,8 @@ var
   Task: TScanTask;
 begin
   if (FWorker = nil) or (FWorker.ResultTask = nil) then
+    Exit;
+  if FWorker.WorkerMode <> swmScan then
     Exit;
   Task := FindTask(FWorker.ResultTask.ID);
   if Task <> nil then
@@ -1750,17 +1796,24 @@ begin
 end;
 
 function TSBOMAnalyzerFrame.FinalizeFinishedWorker: Boolean;
+var
+  IsScanWorker: Boolean;
 begin
   Result := FWorker = nil;
   if Result or not FWorker.Finished then
     Exit;
+  IsScanWorker := FWorker.WorkerMode = swmScan;
   FWorker.OnProgress := nil;
   FWorker.OnComplete := nil;
-  AdoptWorkerResult;
+  if IsScanWorker then
+    AdoptWorkerResult
+  else if FActiveTaskID <> '' then
+    CompleteIntelligenceRefresh(FWorker.ResultTask);
   SetActiveTaskID('');
   FCancelRequested := False;
-  SaveHistory;
-  if (FWorker.ResultTask <> nil) and
+  if IsScanWorker then
+    SaveHistory;
+  if IsScanWorker and (FWorker.ResultTask <> nil) and
     (FindTask(FWorker.ResultTask.ID) <> nil) then
     try
       FHistoryService.NotifyTaskUpdated(FWorker.ResultTask.ID, False);
@@ -1819,7 +1872,12 @@ begin
   FProgressStats.Visible := True;
   FProgressBar.Visible := True;
   FProgressBar.Position := 0;
+  {$IFDEF LCLGTK2}
+  { Lazarus 4.8 GTK2 can remove its marquee pulse source twice at shutdown. }
+  FProgressBar.Style := pbstNormal;
+  {$ELSE}
   FProgressBar.Style := pbstMarquee;
+  {$ENDIF}
   FExportFeedbackPanel.Visible := False;
   FLastExportPath := '';
 end;
@@ -2563,17 +2621,23 @@ end;
 procedure TSBOMAnalyzerFrame.UpdateButtons;
 var
   Task, ActiveTask: TScanTask;
-  IsScanActive: Boolean;
+  IsIntelligenceRefresh, IsScanActive: Boolean;
 begin
   Task := SelectedTask;
   ActiveTask := FindTask(FActiveTaskID);
   IsScanActive := FActiveTaskID <> '';
+  IsIntelligenceRefresh := (FWorker <> nil) and
+    (FWorker.WorkerMode = swmKnownIssueRefresh);
   FNewButton.Enabled := not IsScanActive;
   FRefreshButton.Enabled := not IsScanActive;
+  FRefreshIntelligenceButton.Enabled := (not IsScanActive) and
+    (Task <> nil) and (Task.Status = tsCompleted) and
+    (Trim(Task.GeneratedSBOMSHA256) <> '');
   FRescanButton.Enabled := (not IsScanActive) and (Task <> nil) and
     DirectoryExists(Task.TargetDirectory);
   FCancelButton.Enabled := IsScanActive and (ActiveTask <> nil) and
-    (ActiveTask.Status in [tsPending, tsRunning]) and not FCancelRequested;
+    (IsIntelligenceRefresh or
+    (ActiveTask.Status in [tsPending, tsRunning])) and not FCancelRequested;
   FExportButton.Enabled := (Task <> nil) and
     (Task.Status = tsCompleted) and FileExists(Task.GeneratedSBOMPath);
   FExportDatabaseButton.Enabled := (not IsScanActive) and
@@ -2677,6 +2741,129 @@ begin
   end;
 end;
 
+procedure TSBOMAnalyzerFrame.StartIntelligenceRefresh(ATask: TScanTask);
+begin
+  FreeFinishedWorker;
+  if (FWorker <> nil) or (ATask = nil) or
+    (ATask.Status <> tsCompleted) or
+    (Trim(ATask.GeneratedSBOMSHA256) = '') then
+    Exit;
+  FCancelRequested := False;
+  SetActiveTaskID(ATask.ID);
+  SetActiveFooter;
+  FProgressPath.Caption := 'Refreshing OSV.dev intelligence for ' +
+    ATask.TargetRootName + '...';
+  FProgressStats.Caption := 'No files are being rescanned; the managed SBOM ' +
+    'remains unchanged.';
+  try
+    FWorker := TScanWorker.CreateKnownIssueRefresh(ATask);
+    FWorker.OnProgress := @WorkerProgress;
+    FWorker.OnComplete := @WorkerComplete;
+    FWorker.Start;
+  except
+    on E: Exception do
+    begin
+      FreeAndNil(FWorker);
+      SetActiveTaskID('');
+      SetCompactFooter('Intelligence refresh could not be started; the ' +
+        'previous result was retained.');
+      ShowError('OSV.dev intelligence refresh could not be started: ' +
+        E.Message);
+    end;
+  end;
+  UpdateButtons;
+end;
+
+procedure TSBOMAnalyzerFrame.CompleteIntelligenceRefresh(
+  AResult: TScanTask);
+var
+  Applied: Boolean;
+  PreviousCheck, ReplacementCheck: TKnownIssueCheck;
+  Task: TScanTask;
+begin
+  Task := nil;
+  if AResult <> nil then
+    Task := FindTask(AResult.ID);
+  if (Task = nil) or (Task.Status <> tsCompleted) or (FWorker = nil) or
+    (AResult.GeneratedSBOMSHA256 <> Task.GeneratedSBOMSHA256) or
+    FCancelRequested or
+    not FWorker.RefreshAttemptCompleted or
+    not KnownIssueCheckCanReplace(AResult.KnownIssueCheck) then
+  begin
+    if FCancelRequested then
+      SetCompactFooter('Intelligence refresh cancelled; the previous result ' +
+        'was retained.')
+    else if (AResult <> nil) and AResult.KnownIssueCheck.Requested and
+      (AResult.KnownIssueCheck.OutcomeCode <> '') then
+      SetCompactFooter('Intelligence refresh not applied (' +
+        AResult.KnownIssueCheck.OutcomeCode +
+        '); the previous result was retained.')
+    else
+      SetCompactFooter('Intelligence refresh did not complete; the previous ' +
+        'result was retained.');
+    Exit;
+  end;
+
+  PreviousCheck := nil;
+  ReplacementCheck := nil;
+  Applied := False;
+  try
+    try
+      ReplacementCheck := AResult.KnownIssueCheck.Clone;
+      PreviousCheck := Task.KnownIssueCheck;
+      Task.KnownIssueCheck := ReplacementCheck;
+      ReplacementCheck := nil;
+      try
+        FHistoryService.Save;
+        Applied := True;
+      finally
+        if Applied then
+          FreeAndNil(PreviousCheck)
+        else
+        begin
+          ReplacementCheck := Task.KnownIssueCheck;
+          Task.KnownIssueCheck := PreviousCheck;
+          PreviousCheck := nil;
+          FreeAndNil(ReplacementCheck);
+        end;
+      end;
+    except
+      on E: Exception do
+      begin
+        SetCompactFooter('Intelligence refresh could not be saved; the ' +
+          'previous result was retained.');
+        ShowError('OSV.dev intelligence could not be saved: ' + E.Message);
+      end;
+    end;
+  finally
+    PreviousCheck.Free;
+    ReplacementCheck.Free;
+  end;
+  if not Applied then
+    Exit;
+
+  try
+    UpdateTaskRow(Task);
+    if SelectedTask = Task then
+      UpdateDetails;
+    try
+      FHistoryService.NotifyTaskUpdated(Task.ID, False);
+    except
+      on E: Exception do
+        ShowError('The refreshed intelligence could not be published: ' +
+          E.Message);
+    end;
+    SetCompactFooter(Format(
+      'OSV.dev intelligence refreshed at %s: %d matches. Managed SBOM ' +
+      'unchanged.', [Task.KnownIssueCheck.CheckedUTC,
+      Task.KnownIssueCheck.MatchCount]));
+  except
+    on E: Exception do
+      ShowError('The refreshed intelligence could not be displayed: ' +
+        E.Message);
+  end;
+end;
+
 procedure TSBOMAnalyzerFrame.ShowError(const AMessage: string);
 begin
   if not FClosing then
@@ -2715,6 +2902,7 @@ end;
 
 function TSBOMAnalyzerFrame.RequestClose: Boolean;
 var
+  IsIntelligenceRefresh: Boolean;
   Task: TScanTask;
   TargetName: string;
 begin
@@ -2730,7 +2918,16 @@ begin
     TargetName := Task.TargetRootName
   else
     TargetName := 'the selected folder';
-  if MessageDlg(AppName, 'A scan of "' + TargetName +
+  IsIntelligenceRefresh := (FWorker <> nil) and
+    (FWorker.WorkerMode = swmKnownIssueRefresh);
+  if IsIntelligenceRefresh then
+  begin
+    if MessageDlg(AppName, 'An OSV.dev intelligence refresh for "' +
+      TargetName + '" is running. Cancel it and quit?', mtConfirmation,
+      [mbYes, mbNo], 0) <> mrYes then
+      Exit;
+  end
+  else if MessageDlg(AppName, 'A scan of "' + TargetName +
     '" is running. Cancel it and quit?', mtConfirmation,
     [mbYes, mbNo], 0) <> mrYes then
     Exit;
@@ -2766,8 +2963,9 @@ var
 begin
   if FActiveTaskID <> '' then
   begin
-    MessageDlg(AppName, 'A scan is already running. Wait for it to finish or ' +
-      'cancel it before dropping another folder.', mtInformation, [mbOK], 0);
+    MessageDlg(AppName, 'Another analyzer operation is running. Wait for it ' +
+      'to finish or cancel it before dropping another folder.',
+      mtInformation, [mbOK], 0);
     Exit;
   end;
   for I := Low(AFileNames) to High(AFileNames) do
@@ -2852,8 +3050,9 @@ var
 begin
   if FActiveTaskID <> '' then
   begin
-    MessageDlg(AppName, 'A scan is already running. Wait for it to finish or ' +
-      'cancel it before starting another scan.', mtInformation, [mbOK], 0);
+    MessageDlg(AppName, 'Another analyzer operation is running. Wait for it ' +
+      'to finish or cancel it before starting another scan.',
+      mtInformation, [mbOK], 0);
     Exit;
   end;
   Dialog := TPurpleRaySelectDirectoryDialog.Create(Self);
@@ -2878,6 +3077,29 @@ begin
   Task := SelectedTask;
   if (FActiveTaskID = '') and (Task <> nil) then
     ConfigureAndStartScan(Task.TargetDirectory);
+end;
+
+procedure TSBOMAnalyzerFrame.RefreshIntelligenceClicked(Sender: TObject);
+var
+  Task: TScanTask;
+begin
+  if FActiveTaskID <> '' then
+    Exit;
+  Task := SelectedTask;
+  if (Task = nil) or (Task.Status <> tsCompleted) or
+    (Trim(Task.GeneratedSBOMSHA256) = '') then
+    Exit;
+  if MessageDlg(AppName,
+    'Refresh package intelligence for "' + Task.TargetRootName + '"?' +
+    LineEnding + LineEnding +
+    'Only eligible canonical versioned Package URLs are sent to OSV.dev. ' +
+    'No files, paths, hashes, authors, or SBOM content are sent.' +
+    LineEnding + LineEnding +
+    'The target is not rescanned and the managed SBOM will not change. ' +
+    'This consent applies only to this refresh.', mtConfirmation,
+    [mbYes, mbNo], 0) <> mrYes then
+    Exit;
+  StartIntelligenceRefresh(Task);
 end;
 
 procedure TSBOMAnalyzerFrame.RefreshClicked(Sender: TObject);
@@ -3272,6 +3494,9 @@ var
 begin
   if FClosing then
     Exit;
+  if (FWorker <> nil) and
+    (FWorker.WorkerMode = swmKnownIssueRefresh) then
+    Exit;
   Task := FindTask(FActiveTaskID);
   if Task = nil then
     Exit;
@@ -3298,6 +3523,17 @@ var
 begin
   if FClosing then
     Exit;
+  if (FWorker <> nil) and
+    (FWorker.WorkerMode = swmKnownIssueRefresh) then
+  begin
+    CompleteIntelligenceRefresh(AResult);
+    SetActiveTaskID('');
+    FCancelRequested := False;
+    UpdateButtons;
+    if FClosePending then
+      ClosePollTimer.Enabled := True;
+    Exit;
+  end;
   Task := FindTask(AResult.ID);
   WasSelected := FSelectedTaskID = AResult.ID;
   if Task <> nil then

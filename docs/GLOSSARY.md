@@ -91,7 +91,8 @@ PurpleRay does not infer a version change for multi-version identities.
 **CISA KEV** — The US Cybersecurity and Infrastructure Security Agency's
 [Known Exploited Vulnerabilities catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog).
 Inclusion confirms exploitation in the wild, not exploitation of a particular
-installation. PurpleRay does not currently retrieve or export KEV data.
+installation. PurpleRay does not retrieve or export KEV data; it is deferred
+from the manual OSV refresh.
 
 **CLI and GUI** — The Command-Line Interface accepts text arguments without
 opening the desktop application; the Graphical User Interface is the
@@ -174,8 +175,8 @@ SHA-512 evidence for distributed or source artifacts. A local component
 SHA-256 or unverified lock-file declaration does not satisfy this mapping.
 
 **deps.dev** — An external [dependency-data service](https://deps.dev/) for
-package metadata and dependency graphs. It is a proposed future enrichment
-source; PurpleRay does not currently query it.
+package metadata and dependency graphs. PurpleRay does not query it; it is
+deferred from the manual OSV refresh.
 
 **Derivable** — A BSI readiness status meaning potentially useful evidence
 exists elsewhere in the source document, but the preferred mapped field is
@@ -212,7 +213,7 @@ contain neither qualifiers nor a subpath.
 [daily probability estimate](https://www.first.org/epss/) that exploitation
 activity for a CVE will be observed in the next 30 days. It is a prioritization
 input, not severity or proof about one installation. PurpleRay does not
-currently retrieve or export EPSS data.
+retrieve or export EPSS data; it is deferred from the manual OSV refresh.
 
 **Evidence and evidence occurrence** — Evidence is observed data supporting an
 inventory field. A CycloneDX evidence occurrence records where component
@@ -260,6 +261,10 @@ conservative parsing for the TOML and YAML evidence it supports.
 **Known issue** — PurpleRay's neutral UI term for an advisory association
 returned by OSV.dev. A match means a package coordinate matched a record, not
 that the scanned application is exploitable in its environment.
+
+**Known-issue snapshot** — The bounded, timestamped OSV.dev check retained
+with a task in atomic history. A manual refresh replaces it only after a valid
+result and keeps the last valid snapshot after cancellation or failure.
 
 **Lock file** — Resolved dependency evidence that often records exact versions
 and may declare archive hashes. A declared hash is not locally verified unless
@@ -313,7 +318,8 @@ rules.
 **OSV.dev** — The online service PurpleRay may query after writing the inventory
 SBOM. PurpleRay sends eligible exact-version Package URLs and retains bounded
 advisory matches; it does not upload the SBOM, scanned files, paths, hashes,
-licences, or author data.
+licences, or author data. Manual refresh uses the same batch-match contract;
+retrieval of full OSV records is deferred.
 
 **OSV-Scanner** — The separate first-party scanner for OSV data. PurpleRay
 documents it as an external handoff option but neither bundles nor invokes it.
@@ -334,7 +340,8 @@ without executing the binary; their presence does not prove authenticity.
 
 **Point-in-time lookup** — A result based on the advisory database at the
 recorded check time. PurpleRay does not continuously monitor completed scans,
-so saved results can become stale.
+so saved results can become stale. Refresh runs only when an operator
+explicitly requests it.
 
 **Post-build inspection** — Inspection of files after they have been created,
 unlike an authoritative build-time SBOM that receives exact data from the
@@ -439,4 +446,4 @@ metadata alone.
 party to state whether a product is affected, not affected, fixed, or under
 investigation for a vulnerability; see [CISA's SBOM and VEX resources](https://www.cisa.gov/topics/cyber-threats-and-advisories/sbom/sbomresourceslibrary).
 An automated package match cannot justify `not affected`. PurpleRay does not
-currently retrieve or export VEX data.
+retrieve or export VEX data; VEX remains outside the manual OSV refresh.

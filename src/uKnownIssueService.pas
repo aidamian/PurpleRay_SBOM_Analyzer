@@ -16,7 +16,16 @@ unit uKnownIssueService;
 interface
 
 uses
-  uModels, uOSVCore;
+  uKnownIssues, uModels, uOSVCore;
+
+(**
+  Reports whether a completed lookup may replace an older valid snapshot.
+
+  Only successful and no-eligible-candidate outcomes are complete snapshots.
+  Cancellation, transport/protocol failure, and resource-limit outcomes must
+  leave the previous result in place.
+*)
+function KnownIssueCheckCanReplace(ACheck: TKnownIssueCheck): Boolean;
 
 (**
   Runs one explicitly requested OSV.dev check over a completed inventory.
@@ -51,6 +60,13 @@ implementation
 
 uses
   Classes, SysUtils, uTimeUtils;
+
+function KnownIssueCheckCanReplace(ACheck: TKnownIssueCheck): Boolean;
+begin
+  Result := (ACheck <> nil) and ACheck.Requested and
+    ((ACheck.OutcomeCode = OSVOutcomeCode(osoSucceeded)) or
+    (ACheck.OutcomeCode = OSVOutcomeCode(osoNoEligibleCandidates)));
+end;
 
 procedure AddTaskWarning(ATask: TScanTask; const AMessage: string);
 var

@@ -6,6 +6,8 @@ serializer retains tested CycloneDX 1.6 compatibility. It scans without network
 access by default and never executes files from the selected folder. An
 explicit, per-scan OSV.dev check can send only eligible versioned Package URLs
 after the inventory SBOM has been written; it is unchecked again every time.
+The same bounded check can be manually refreshed for a completed desktop scan
+after a separate per-use confirmation, without rescanning the target.
 Its native parsers read each artifact through one verified, size-bounded input;
 the application never downloads or requires a separate scanner.
 
@@ -202,8 +204,8 @@ PurpleRay-managed data; export a backup from the application first if needed.
   inventory using standard CycloneDX lifecycle and composition fields.
 - Persists scan history and settings as recoverable atomic JSON files.
 - Can perform an explicitly requested, bounded OSV.dev point-in-time lookup
-  after the immutable inventory is written, without adding vulnerability data
-  to that CycloneDX document.
+  after the immutable inventory is written, then manually refresh a completed
+  task's retained result without rescanning or changing that CycloneDX document.
 - Can export a separate, deterministic
   [BSI TR-03183-2 v2.1.0](https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/tr-03183.html)
   readiness report that lists observed and missing fields without claiming
@@ -341,6 +343,16 @@ responses, pagination tokens, and rejected coordinate values are not
 persisted. Network failure or cancellation does not invalidate the completed
 inventory. Results are point-in-time advisory matches, and no finding is not a
 clean bill of health.
+
+For a completed desktop scan, **Refresh intelligence** manually reruns this
+known-issue check. Each refresh requires new consent, reuses the retained
+canonical exact-version Package URLs without a rescan, and calls only the
+existing bounded OSV.dev batch query. A valid result replaces the task's
+timestamped known-issue snapshot through the existing atomic history write;
+cancellation or failure keeps the last valid snapshot. There are no background
+calls or remembered consent, the CLI remains offline, and the managed SBOM and
+BSI readiness report remain unchanged. Full OSV records, CISA KEV, EPSS,
+deps.dev, VEX, and vulnerability-report exports are deferred.
 
 ## Development
 
@@ -747,10 +759,11 @@ the Foundation approves the project and supplies its project identifiers.
 This program will not transfer any information to other networked systems
 unless specifically requested by the user or the person installing or
 operating it. Inventory scanning and headless operation are local and offline.
-The desktop OSV.dev choice is unchecked every time and, when selected, sends
-only eligible exact-version Package URLs after the managed SBOM is complete;
-the UI discloses this before the scan begins. Optional launcher scripts contact
-GitHub only when the user runs them to request and download a release.
+The per-scan OSV.dev choice is unchecked every time. A completed-scan refresh
+also requires a new confirmation. Both send only eligible exact-version Package
+URLs after the managed SBOM is complete; the UI discloses this before each
+request. Optional launcher scripts contact GitHub only when the user runs them
+to request and download a release.
 
 ## License
 
@@ -794,6 +807,6 @@ appropriately using the citation above.
   PE, and Mach-O binaries, but the scanner does not invoke a loader, execute
   targets, resolve libraries to host-specific absolute paths, or infer every
   transitive/runtime-loaded dependency. It also does not contact registries,
-  execute package managers, or evaluate build scripts. The explicitly selected
-  OSV.dev check is a separate post-inventory advisory query, not dependency
-  discovery.
+  execute package managers, or evaluate build scripts. An explicitly selected
+  OSV.dev check or manual refresh is a separate post-inventory advisory query,
+  not dependency discovery.

@@ -28,7 +28,7 @@ object SBOMAnalyzerFrame: TSBOMAnalyzerFrame
       BorderSpacing.Bottom = 10
       Caption = 'Export...'
       OnClick = ExportClicked
-      TabOrder = 5
+      TabOrder = 6
     end
     object FExportDatabaseButton: TButton
       Left = 778
@@ -41,7 +41,7 @@ object SBOMAnalyzerFrame: TSBOMAnalyzerFrame
       BorderSpacing.Bottom = 10
       Caption = 'Back up data...'
       OnClick = ExportDatabaseClicked
-      TabOrder = 4
+      TabOrder = 5
     end
     object FRefreshButton: TButton
       Left = 702
@@ -49,15 +49,28 @@ object SBOMAnalyzerFrame: TSBOMAnalyzerFrame
       Top = 10
       Width = 64
       Align = alRight
-      BorderSpacing.Right = 12
+      BorderSpacing.Right = 4
       BorderSpacing.Top = 10
       BorderSpacing.Bottom = 10
       Caption = 'Refresh'
       OnClick = RefreshClicked
+      TabOrder = 4
+    end
+    object FRefreshIntelligenceButton: TButton
+      Left = 546
+      Height = 28
+      Top = 10
+      Width = 144
+      Align = alRight
+      BorderSpacing.Right = 12
+      BorderSpacing.Top = 10
+      BorderSpacing.Bottom = 10
+      Caption = 'Refresh intelligence...'
+      OnClick = RefreshIntelligenceClicked
       TabOrder = 3
     end
     object FRescanButton: TButton
-      Left = 634
+      Left = 478
       Height = 28
       Top = 10
       Width = 64
@@ -70,7 +83,7 @@ object SBOMAnalyzerFrame: TSBOMAnalyzerFrame
       TabOrder = 2
     end
     object FCancelButton: TButton
-      Left = 566
+      Left = 410
       Height = 28
       Top = 10
       Width = 64
@@ -83,7 +96,7 @@ object SBOMAnalyzerFrame: TSBOMAnalyzerFrame
       TabOrder = 1
     end
     object FNewButton: TButton
-      Left = 484
+      Left = 328
       Height = 28
       Top = 10
       Width = 78
