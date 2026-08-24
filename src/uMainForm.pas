@@ -247,7 +247,8 @@ type
     procedure CreateFeatureFrames;
 
     {**
-      Draws the small navigation glyphs used by the rail buttons.
+      Draws the navigation glyphs used by the rail buttons at the
+      current DPI-scaled size.
 
       Parameters
       ----------
@@ -262,6 +263,68 @@ type
       None
     }
     procedure AssignNavigationGlyphs;
+
+    {**
+      Picks the embedded icon frame that best fills the brand image box.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure SelectBrandIconFrame;
+
+    {**
+      Applies DPI-scaled glyph margin and spacing to the rail buttons.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure ApplyNavigationMetrics;
+  protected
+    {**
+      Re-applies DPI-dependent rail metrics after LCL layout scaling.
+
+      Parameters
+      ----------
+      AMode
+        Layout adjustment policy supplied by the LCL.
+      AFromPPI
+        Source pixels per inch.
+      AToPPI
+        Target pixels per inch.
+      AOldFormWidth
+        Form width before adjustment.
+      ANewFormWidth
+        Form width after adjustment.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure AutoAdjustLayout(AMode: TLayoutAdjustmentPolicy;
+      const AFromPPI, AToPPI, AOldFormWidth, ANewFormWidth: Integer);
+      override;
 
     {**
       Activates one feature without destroying the other frames.
@@ -577,7 +640,11 @@ begin
   VersionLabel.Font.Color := clGrayText;
   ApplicationSubtitleLabel.Font.Color := clGrayText;
   if Application.Icon <> nil then
+  begin
     AppIconImage.Picture.Icon.Assign(Application.Icon);
+    SelectBrandIconFrame;
+  end;
+  ApplyNavigationMetrics;
   AssignNavigationGlyphs;
   FActiveFeatureIndex := -1;
   FHistoryService := TTaskHistoryService.Create(ADataDirectory);
@@ -615,14 +682,82 @@ begin
   inherited Destroy;
 end;
 
+procedure TMainForm.SelectBrandIconFrame;
+var
+  BrandIcon: TIcon;
+  I, BestIndex, BestSize, Target, Size: Integer;
+begin
+  BrandIcon := AppIconImage.Picture.Icon;
+  if (BrandIcon = nil) or (BrandIcon.Count = 0) then
+    Exit;
+  Target := AppIconImage.Width;
+  BestIndex := 0;
+  BestSize := 0;
+  { Prefer the smallest frame that is at least the box size; otherwise the
+    largest available, so the brand mark never upscales from a tiny frame. }
+  for I := 0 to BrandIcon.Count - 1 do
+  begin
+    BrandIcon.Current := I;
+    Size := BrandIcon.Width;
+    if ((Size >= Target) and ((BestSize < Target) or (Size < BestSize))) or
+      ((Size < Target) and (BestSize < Target) and (Size > BestSize)) then
+    begin
+      BestIndex := I;
+      BestSize := Size;
+    end;
+  end;
+  BrandIcon.Current := BestIndex;
+end;
+
+procedure TMainForm.ApplyNavigationMetrics;
+const
+  DesignMargin = 10;
+  DesignSpacing = 8;
+var
+  Buttons: array[0..2] of TSpeedButton;
+  I: Integer;
+begin
+  Buttons[0] := DashboardNavButton;
+  Buttons[1] := AnalyzerNavButton;
+  Buttons[2] := KnowledgeNavButton;
+  for I := Low(Buttons) to High(Buttons) do
+  begin
+    Buttons[I].Margin := Scale96ToForm(DesignMargin);
+    Buttons[I].Spacing := Scale96ToForm(DesignSpacing);
+  end;
+end;
+
+procedure TMainForm.AutoAdjustLayout(AMode: TLayoutAdjustmentPolicy;
+  const AFromPPI, AToPPI, AOldFormWidth, ANewFormWidth: Integer);
+begin
+  inherited AutoAdjustLayout(AMode, AFromPPI, AToPPI, AOldFormWidth,
+    ANewFormWidth);
+  if AMode = lapAutoAdjustForDPI then
+  begin
+    { The image box was just rescaled; reselect the best icon frame and
+      rescale the rail metrics the LCL does not scale on its own. }
+    SelectBrandIconFrame;
+    ApplyNavigationMetrics;
+    AssignNavigationGlyphs;
+  end;
+end;
+
 procedure TMainForm.AssignNavigationGlyphs;
+var
+  Size: Integer;
+
+  function P(AValue: Integer): Integer;
+  begin
+    { Scale a 16-px design coordinate to the current glyph size. }
+    Result := Round(AValue * Size / NavigationGlyphSize);
+  end;
 
   function NewGlyph: TBitmap;
   begin
     Result := TBitmap.Create;
-    Result.SetSize(NavigationGlyphSize, NavigationGlyphSize);
+    Result.SetSize(Size, Size);
     Result.Canvas.Brush.Color := clFuchsia;
-    Result.Canvas.FillRect(0, 0, NavigationGlyphSize, NavigationGlyphSize);
+    Result.Canvas.FillRect(0, 0, Size, Size);
     Result.Canvas.Pen.Color := NavigationAccentColor;
     Result.Canvas.Brush.Color := NavigationAccentColor;
     Result.TransparentColor := clFuchsia;
@@ -632,13 +767,16 @@ procedure TMainForm.AssignNavigationGlyphs;
 var
   Glyph: TBitmap;
 begin
+  Size := Scale96ToForm(NavigationGlyphSize);
+  if Size < NavigationGlyphSize then
+    Size := NavigationGlyphSize;
   { Dashboard: four tiles. }
   Glyph := NewGlyph;
   try
-    Glyph.Canvas.FillRect(1, 1, 7, 7);
-    Glyph.Canvas.FillRect(9, 1, 15, 7);
-    Glyph.Canvas.FillRect(1, 9, 7, 15);
-    Glyph.Canvas.FillRect(9, 9, 15, 15);
+    Glyph.Canvas.FillRect(P(1), P(1), P(7), P(7));
+    Glyph.Canvas.FillRect(P(9), P(1), P(15), P(7));
+    Glyph.Canvas.FillRect(P(1), P(9), P(7), P(15));
+    Glyph.Canvas.FillRect(P(9), P(9), P(15), P(15));
     DashboardNavButton.Glyph.Assign(Glyph);
   finally
     Glyph.Free;
@@ -647,10 +785,10 @@ begin
   Glyph := NewGlyph;
   try
     Glyph.Canvas.Brush.Style := bsClear;
-    Glyph.Canvas.Pen.Width := 2;
-    Glyph.Canvas.Ellipse(1, 1, 11, 11);
-    Glyph.Canvas.MoveTo(10, 10);
-    Glyph.Canvas.LineTo(15, 15);
+    Glyph.Canvas.Pen.Width := P(2);
+    Glyph.Canvas.Ellipse(P(1), P(1), P(11), P(11));
+    Glyph.Canvas.MoveTo(P(10), P(10));
+    Glyph.Canvas.LineTo(P(15), P(15));
     AnalyzerNavButton.Glyph.Assign(Glyph);
   finally
     Glyph.Free;
@@ -659,10 +797,10 @@ begin
   Glyph := NewGlyph;
   try
     Glyph.Canvas.Brush.Style := bsClear;
-    Glyph.Canvas.Pen.Width := 2;
-    Glyph.Canvas.Rectangle(1, 2, 15, 14);
-    Glyph.Canvas.MoveTo(8, 2);
-    Glyph.Canvas.LineTo(8, 14);
+    Glyph.Canvas.Pen.Width := P(2);
+    Glyph.Canvas.Rectangle(P(1), P(2), P(15), P(14));
+    Glyph.Canvas.MoveTo(P(8), P(2));
+    Glyph.Canvas.LineTo(P(8), P(14));
     KnowledgeNavButton.Glyph.Assign(Glyph);
   finally
     Glyph.Free;
