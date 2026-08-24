@@ -639,7 +639,7 @@ object SBOMAnalyzerFrame: TSBOMAnalyzerFrame
           end
         end
         object MessagesPage: TTabSheet
-          Caption = 'Messages'
+          Caption = 'Details'
           ClientHeight = 503
           ClientWidth = 724
           object FMessagesMemo: TMemo

@@ -1674,7 +1674,8 @@ procedure TestSprint6DistributionContracts;
 var
   Lines: TStringList;
   WorkflowText, ReadmeText, GlossaryText, LinuxLauncherText, WSLLauncherText,
-    WindowsLauncherText, LinuxBuildText, LinuxPackageText, WindowsPackageText,
+    WindowsLauncherText, BatchLauncherText, LinuxBuildText, LinuxPackageText,
+    WindowsPackageText,
     ScoopText, WingetInstallerText, PackageValidatorText,
     VersionPreparationText: string;
   GlossaryCurrentKey, GlossaryPreviousKey, GlossaryTerm,
@@ -1870,19 +1871,21 @@ begin
 
     AssertTrue((Pos('--release-version', LinuxLauncherText) > 0) and
       (Pos('PURPLERAY_VERSION', LinuxLauncherText) > 0) and
-      (Pos('gh attestation verify', LinuxLauncherText) > 0) and
-      (Pos('attestation verify --help', LinuxLauncherText) > 0) and
-      (Pos('upgrade gh', LinuxLauncherText) > 0) and
+      (Pos('SHA256SUMS.txt', LinuxLauncherText) > 0) and
+      (Pos('command -v gh', LinuxLauncherText) = 0) and
+      (Pos('attestation verify --help', LinuxLauncherText) = 0) and
       (Pos('glibc 2.34', LinuxLauncherText) > 0) and
       (Pos('install_desktop_files', LinuxLauncherText) > 0),
-      'native Linux launcher lost pinning, provenance, preflight, or desktop integration');
+      'native Linux launcher lost pinning, checksum verification, preflight, ' +
+      'or desktop integration, or depends on the GitHub CLI');
     AssertTrue((Pos('--release-version', WSLLauncherText) > 0) and
       (Pos('PURPLERAY_VERSION', WSLLauncherText) > 0) and
-      (Pos('gh attestation verify', WSLLauncherText) > 0) and
-      (Pos('attestation verify --help', WSLLauncherText) > 0) and
-      (Pos('upgrade gh', WSLLauncherText) > 0) and
+      (Pos('SHA256SUMS.txt', WSLLauncherText) > 0) and
+      (Pos('command -v gh', WSLLauncherText) = 0) and
+      (Pos('attestation verify --help', WSLLauncherText) = 0) and
       (Pos('WSLg XWayland is unavailable', WSLLauncherText) > 0),
-      'WSL2 launcher lost pinning, provenance, or UI preflight');
+      'WSL2 launcher lost pinning, checksum verification, or UI preflight, ' +
+      'or depends on the GitHub CLI');
     AssertTrue((Pos('libgtk-x11-2.0.so.0', LinuxLauncherText) > 0) and
       (Pos('libgtk-x11-2.0.so.0', WSLLauncherText) > 0) and
       (Pos('libgtk-3.so.0', LinuxLauncherText) = 0) and
@@ -1893,13 +1896,43 @@ begin
     AssertTrue((Pos('$ProgressPreference = ''SilentlyContinue''',
       WindowsLauncherText) > 0) and
       (Pos('PURPLERAY_VERSION', WindowsLauncherText) > 0) and
-      (Pos('gh attestation verify', WindowsLauncherText) > 0) and
-      (Pos('attestation verify --help', WindowsLauncherText) > 0) and
-      (Pos('upgrade gh', WindowsLauncherText) > 0) and
+      (Pos('SHA256SUMS.txt', WindowsLauncherText) > 0) and
+      (Pos('Get-Command gh', WindowsLauncherText) = 0) and
+      (Pos('attestation verify --help', WindowsLauncherText) = 0) and
       (Pos('/releases/latest', WindowsLauncherText) > 0) and
       (Pos('api.github.com', WindowsLauncherText) = 0) and
       (Pos('Smart App Control', WindowsLauncherText) > 0),
-      'Windows launcher lost lifecycle, provenance, endpoint, or SAC safeguards');
+      'Windows launcher lost lifecycle, checksum verification, endpoint, or SAC ' +
+      'safeguards, or depends on the GitHub CLI');
+    AssertTrue(FileExists(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'start-win.bat'), 'the self-contained Windows batch launcher is missing');
+    Lines.LoadFromFile(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'start-win.bat');
+    BatchLauncherText := Lines.Text;
+    AssertTrue((Pos('SHA256SUMS.txt', BatchLauncherText) > 0) and
+      (Pos('certutil.exe', BatchLauncherText) > 0) and
+      (Pos('tar.exe', BatchLauncherText) > 0) and
+      (Pos('curl.exe', BatchLauncherText) > 0) and
+      (Pos('PURPLERAY_VERSION', BatchLauncherText) > 0) and
+      (Pos('/releases/latest', BatchLauncherText) > 0) and
+      (Pos('api.github.com', BatchLauncherText) = 0) and
+      (Pos('powershell.exe', LowerCase(BatchLauncherText)) = 0) and
+      (Pos('powershell -', LowerCase(BatchLauncherText)) = 0) and
+      (Pos('gh.exe', BatchLauncherText) = 0) and
+      (Pos('Smart App Control', BatchLauncherText) > 0),
+      'batch launcher is not self-contained (needs PowerShell or gh) or lost ' +
+      'checksum verification, pinning, endpoint, or SAC guidance');
+    with TFileStream.Create(IncludeTrailingPathDelimiter(ProjectRoot) +
+      'start-win.bat', fmOpenRead or fmShareDenyNone) do
+    try
+      SetLength(BatchLauncherText, Size);
+      if Size > 0 then
+        ReadBuffer(BatchLauncherText[1], Size);
+    finally
+      Free;
+    end;
+    AssertTrue(Pos(#13#10, BatchLauncherText) > 0,
+      'batch launcher must use CRLF line endings for cmd.exe');
 
     InstallPosition := Pos('## Install / quick start', ReadmeText);
     LauncherPosition := Pos('### Reusable launchers', ReadmeText);
@@ -2387,7 +2420,7 @@ begin
     Task.Artifacts.Add(Artifact);
     Task.Errors.Add('task error');
     AssertEqual(3, TaskMessageCount(Task),
-      'Messages-tab count should include warnings, errors, and artifact notes');
+      'Details-tab count should include warnings, errors, and artifact notes');
     AssertEqual(#$E2#$9C#$93 + ' parsed',
       ArtifactStatusDisplayText(arsParsed),
       'parsed artifact status glyph or text differs');
@@ -2668,7 +2701,7 @@ begin
     AssertTrue((Pos('ComponentsPage.Caption := ''Components (''',
       AnalyzerSource) > 0) and
       (Pos('ArtifactsPage.Caption := ''Artifacts (''', AnalyzerSource) > 0) and
-      (Pos('MessagesPage.Caption := ''Messages (''', AnalyzerSource) > 0),
+      (Pos('MessagesPage.Caption := ''Details (''', AnalyzerSource) > 0),
       'detail tabs do not expose result counts');
 
     CopyBlock := ExtractTextSection(AnalyzerSource,

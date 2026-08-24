@@ -20,21 +20,21 @@ object MainForm: TMainForm
     Left = 0
     Height = 720
     Top = 0
-    Width = 190
+    Width = 168
     Align = alLeft
     BevelOuter = bvNone
     ClientHeight = 720
-    ClientWidth = 190
+    ClientWidth = 168
     TabOrder = 0
     object BrandPanel: TPanel
       Left = 0
       Height = 68
       Top = 0
-      Width = 190
+      Width = 168
       Align = alTop
       BevelOuter = bvNone
       ClientHeight = 68
-      ClientWidth = 190
+      ClientWidth = 168
       TabOrder = 0
       object AppIconImage: TImage
         Left = 10
@@ -68,7 +68,7 @@ object MainForm: TMainForm
       Left = 8
       Height = 30
       Top = 64
-      Width = 174
+      Width = 152
       Align = alTop
       AllowAllUp = False
       BorderSpacing.Left = 8
@@ -87,7 +87,7 @@ object MainForm: TMainForm
       Left = 8
       Height = 30
       Top = 104
-      Width = 174
+      Width = 152
       Align = alTop
       AllowAllUp = False
       BorderSpacing.Left = 8
@@ -105,7 +105,7 @@ object MainForm: TMainForm
       Left = 8
       Height = 30
       Top = 144
-      Width = 174
+      Width = 152
       Align = alTop
       AllowAllUp = False
       BorderSpacing.Left = 8
@@ -119,11 +119,26 @@ object MainForm: TMainForm
       GroupIndex = 1
       OnClick = KnowledgeNavClicked
     end
+    object RailToggleButton: TSpeedButton
+      Left = 8
+      Height = 26
+      Top = 665
+      Width = 152
+      Align = alBottom
+      BorderSpacing.Left = 8
+      BorderSpacing.Right = 8
+      BorderSpacing.Bottom = 4
+      Caption = #194#171' Collapse'
+      Flat = True
+      ParentShowHint = False
+      ShowHint = True
+      OnClick = RailToggleClicked
+    end
     object VersionLabel: TLabel
       Left = 18
       Height = 15
       Top = 695
-      Width = 154
+      Width = 132
       Align = alBottom
       BorderSpacing.Left = 18
       BorderSpacing.Bottom = 10

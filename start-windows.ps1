@@ -227,40 +227,11 @@ $ReleaseVersionWasPassed = $PSBoundParameters.ContainsKey('ReleaseVersion')
                 Move-Item -LiteralPath $DownloadPath -Destination $ArchivePath -Force
             }
 
-            $GitHubCLI = Get-Command gh -ErrorAction SilentlyContinue
-            $GitHubCLISupportsAttestations = $false
-            if ($null -ne $GitHubCLI) {
-                & gh attestation verify --help *> $null
-                $GitHubCLISupportsAttestations = ($LASTEXITCODE -eq 0)
-            }
-
-            if ($GitHubCLISupportsAttestations) {
-                Write-Host "Verifying GitHub build-provenance attestation for $AssetName"
-                & gh attestation verify $ArchivePath --repo $ProjectRepository
-                if ($LASTEXITCODE -ne 0) {
-                    Stop-WithError 'GitHub build-provenance attestation verification failed'
-                }
-            }
-            elseif ($null -ne $GitHubCLI) {
-                Write-Host (
-                    'The installed GitHub CLI does not support artifact attestation ' +
-                    'verification. Checksum verification succeeded, but provenance was not checked.'
-                )
-                Write-Host (
-                    "Optional: upgrade gh, then run: gh attestation verify `"$ArchivePath`" " +
-                    "--repo $ProjectRepository"
-                )
-            }
-            else {
-                Write-Host (
-                    'GitHub CLI was not found; checksum verification succeeded, but provenance ' +
-                    'was not checked.'
-                )
-                Write-Host (
-                    "Optional: install gh, then run: gh attestation verify `"$ArchivePath`" " +
-                    "--repo $ProjectRepository"
-                )
-            }
+            Write-Host "Checksum verification succeeded for $AssetName."
+            Write-Host (
+                'Optional provenance check (no extra tooling is required to run the app): ' +
+                "gh attestation verify `"$ArchivePath`" --repo $ProjectRepository"
+            )
 
             $HasNotices = Test-ZipLayout $ArchivePath
             New-Item -ItemType Directory -Path $ExtractDirectory | Out-Null

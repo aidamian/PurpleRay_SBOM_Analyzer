@@ -50,6 +50,7 @@ type
     DashboardNavButton: TSpeedButton;
     AnalyzerNavButton: TSpeedButton;
     KnowledgeNavButton: TSpeedButton;
+    RailToggleButton: TSpeedButton;
     VersionLabel: TLabel;
     WorkspaceNotebook: TNotebook;
     DashboardPage: TPage;
@@ -193,7 +194,26 @@ type
       None
     }
     procedure KnowledgeNavClicked(Sender: TObject);
+
+    {**
+      Collapses the rail to glyphs only, or expands it back.
+
+      Parameters
+      ----------
+      Sender
+        LCL event source; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure RailToggleClicked(Sender: TObject);
   private
+    FRailCollapsed: Boolean;
     FHistoryService: TTaskHistoryService;
     FAnalyzerFrame: TSBOMAnalyzerFrame;
     FDashboardFrame: TDashboardFrame;
@@ -297,6 +317,23 @@ type
       None
     }
     procedure ApplyNavigationMetrics;
+
+    {**
+      Applies the expanded or collapsed rail geometry at the current DPI.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure ApplyRailLayout;
   protected
     {**
       Re-applies DPI-dependent rail metrics after LCL layout scaling.
@@ -643,6 +680,12 @@ const
   { PurpleRay brand accent in TColor byte order (BGR of #5F57AD). }
   NavigationAccentColor: TColor = TColor($AD575F);
   NavigationGlyphSize = 16;
+  RailExpandedWidth = 168;
+  RailCollapsedWidth = 56;
+  RailGlyphMargin = 10;
+  RailGlyphSpacing = 8;
+  BrandIconExpandedLeft = 10;
+  BrandIconCollapsedLeft = 4;
 
 constructor TMainForm.Create(TheOwner: TComponent);
 begin
@@ -736,9 +779,11 @@ begin
 end;
 
 procedure TMainForm.ApplyNavigationMetrics;
-const
-  DesignMargin = 10;
-  DesignSpacing = 8;
+begin
+  ApplyRailLayout;
+end;
+
+procedure TMainForm.ApplyRailLayout;
 var
   Buttons: array[0..2] of TSpeedButton;
   I: Integer;
@@ -746,11 +791,66 @@ begin
   Buttons[0] := DashboardNavButton;
   Buttons[1] := AnalyzerNavButton;
   Buttons[2] := KnowledgeNavButton;
-  for I := Low(Buttons) to High(Buttons) do
-  begin
-    Buttons[I].Margin := Scale96ToForm(DesignMargin);
-    Buttons[I].Spacing := Scale96ToForm(DesignSpacing);
+  NavigationRail.DisableAutoSizing;
+  try
+    if FRailCollapsed then
+    begin
+      NavigationRail.Width := Scale96ToForm(RailCollapsedWidth);
+      AppIconImage.Left := Scale96ToForm(BrandIconCollapsedLeft);
+      ApplicationTitleLabel.Visible := False;
+      ApplicationSubtitleLabel.Visible := False;
+      VersionLabel.Visible := False;
+      RailToggleButton.Caption := #$C2#$BB;
+      RailToggleButton.Hint := 'Expand navigation';
+      for I := Low(Buttons) to High(Buttons) do
+      begin
+        Buttons[I].ShowCaption := False;
+        Buttons[I].Margin := -1;
+        Buttons[I].Spacing := 0;
+        Buttons[I].ShowHint := True;
+        Buttons[I].ParentShowHint := False;
+      end;
+      DashboardNavButton.Hint := 'Dashboard';
+      AnalyzerNavButton.Hint := 'SBOM Analyzer';
+      KnowledgeNavButton.Hint := 'Knowledge Base';
+    end
+    else
+    begin
+      NavigationRail.Width := Scale96ToForm(RailExpandedWidth);
+      AppIconImage.Left := Scale96ToForm(BrandIconExpandedLeft);
+      ApplicationTitleLabel.Visible := True;
+      ApplicationSubtitleLabel.Visible := True;
+      VersionLabel.Visible := True;
+      RailToggleButton.Caption := #$C2#$AB + ' Collapse';
+      RailToggleButton.Hint := 'Collapse navigation';
+      for I := Low(Buttons) to High(Buttons) do
+      begin
+        Buttons[I].ShowCaption := True;
+        Buttons[I].Margin := Scale96ToForm(RailGlyphMargin);
+        Buttons[I].Spacing := Scale96ToForm(RailGlyphSpacing);
+        Buttons[I].ShowHint := False;
+        Buttons[I].Hint := '';
+      end;
+    end;
+    { alBottom controls stack by Top: keep the version label lowest and
+      the toggle directly above it after visibility changes. }
+    VersionLabel.Top := NavigationRail.ClientHeight;
+    RailToggleButton.Top := VersionLabel.Top - RailToggleButton.Height - 1;
+  finally
+    NavigationRail.EnableAutoSizing;
   end;
+  if (FActiveFeatureIndex >= 0) and
+    (FActiveFeatureIndex < WorkspaceNotebook.PageCount) then
+    WorkspaceNotebook.Page[FActiveFeatureIndex].SetBounds(0, 0,
+      WorkspaceNotebook.ClientWidth, WorkspaceNotebook.ClientHeight);
+  AnalyzerActivityChanged(FAnalyzerFrame, (FAnalyzerFrame <> nil) and
+    FAnalyzerFrame.ScanActive);
+end;
+
+procedure TMainForm.RailToggleClicked(Sender: TObject);
+begin
+  FRailCollapsed := not FRailCollapsed;
+  ApplyRailLayout;
 end;
 
 procedure TMainForm.AutoAdjustLayout(AMode: TLayoutAdjustmentPolicy;
@@ -883,6 +983,10 @@ begin
       FeatureIndexKnowledgeBase: KnowledgeNavButton.Down := True;
     end;
     WorkspaceNotebook.PageIndex := AIndex;
+    { A page hidden while the rail changed width keeps stale bounds until
+      it is shown; re-fit it to the notebook explicitly. }
+    WorkspaceNotebook.Page[AIndex].SetBounds(0, 0,
+      WorkspaceNotebook.ClientWidth, WorkspaceNotebook.ClientHeight);
     FActiveFeatureIndex := AIndex;
     case AIndex of
       FeatureIndexDashboard:
@@ -1038,13 +1142,16 @@ begin
     Exit;
   if AScanActive then
   begin
-    AnalyzerNavButton.Hint := 'SBOM Analyzer — scan in progress';
     AnalyzerNavButton.Font.Style := [fsBold];
+    if FRailCollapsed then
+      AnalyzerNavButton.Hint := 'SBOM Analyzer ' + #$E2#$80#$94 +
+        ' scan in progress';
   end
   else
   begin
-    AnalyzerNavButton.Hint := 'SBOM Analyzer';
     AnalyzerNavButton.Font.Style := [];
+    if FRailCollapsed then
+      AnalyzerNavButton.Hint := 'SBOM Analyzer';
   end;
 end;
 

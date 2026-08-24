@@ -188,24 +188,14 @@ verify_or_download_package() {
   DOWNLOAD_PATH=''
 }
 
-verify_attestation_if_available() {
+report_checksum_verified() {
   local package_path="$1"
 
-  if command -v gh >/dev/null 2>&1 &&
-    gh attestation verify --help >/dev/null 2>&1; then
-    printf 'Verifying GitHub build-provenance attestation for %s\n' "${package_path##*/}"
-    gh attestation verify "$package_path" --repo "$PROJECT_REPOSITORY" ||
-      fail 'GitHub build-provenance attestation verification failed'
-  elif command -v gh >/dev/null 2>&1; then
-    printf '%s\n' \
-      'The installed GitHub CLI does not support artifact attestation verification.' \
-      'Checksum verification succeeded, but provenance was not checked.' \
-      "Optional: upgrade gh, then run: gh attestation verify '$package_path' --repo '$PROJECT_REPOSITORY'"
-  else
-    printf '%s\n' \
-      'GitHub CLI was not found; checksum verification succeeded, but provenance was not checked.' \
-      "Optional: install gh, then run: gh attestation verify '$package_path' --repo '$PROJECT_REPOSITORY'"
-  fi
+  # No extra tooling is required to run the application. Provenance can be
+  # checked manually with the GitHub CLI if desired.
+  printf 'Checksum verification succeeded for %s\n' "${package_path##*/}"
+  printf '%s\n' \
+    "Optional provenance check: gh attestation verify '$package_path' --repo '$PROJECT_REPOSITORY'"
 }
 
 validate_tar_package() {
@@ -375,7 +365,7 @@ main() {
   package_path="$install_directory/$asset_name"
   printf 'Preparing PurpleRay SBOM Analyzer %s in %s\n' "$TAG_NAME" "$install_directory"
   verify_or_download_package "$asset_name" "$expected_sha256" "$package_path"
-  verify_attestation_if_available "$package_path"
+  report_checksum_verified "$package_path"
 
   if [[ "$asset_name" == "$tar_asset_name" ]]; then
     install_tar_package "$package_path" "$install_directory" "$binary_path"

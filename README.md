@@ -79,7 +79,17 @@ curl --fail --show-error --silent --location \
   && ./start-wsl2.sh
 ```
 
-Windows PowerShell:
+Windows, no PowerShell needed (`start-win.bat` uses only `curl.exe`,
+`certutil.exe`, and `tar.exe`, which ship with Windows 10 1803+ and Windows
+11). Download it and double-click it, or from a Command Prompt:
+
+```bat
+curl.exe -fL -o start-win.bat https://raw.githubusercontent.com/aidamian/PurpleRay_SBOM_Analyzer/main/start-win.bat
+start-win.bat
+```
+
+Windows PowerShell (if scripts are blocked by the execution policy, run it as
+`powershell -ExecutionPolicy Bypass -File .\start-windows.ps1`):
 
 ```powershell
 $launcher = Join-Path $PWD 'start-windows.ps1'
@@ -106,6 +116,16 @@ $env:PURPLERAY_VERSION = '0.6.0'
 .\start-windows.ps1
 ```
 
+```bat
+set PURPLERAY_VERSION=0.6.0
+start-win.bat
+```
+
+`start-win.bat` takes no arguments and forwards none; it exists to download,
+verify, and start the desktop application. To pass options to the
+application on Windows, use `start-windows.ps1` or run the installed
+`purpleray-sbom-analyzer.exe` directly.
+
 Arguments after the launcher options are forwarded to the application. For
 example, `./start-linux.sh --release-version 0.6.0 -- --version` checks the
 installed application version without opening the desktop UI.
@@ -127,11 +147,10 @@ Release verification has three distinct layers:
 
 - The published SHA-256 checksum detects a damaged or substituted download.
 - A GitHub artifact attestation binds that exact package digest to this
-  repository and its GitHub Actions workflow. If the installed `gh` supports
-  `gh attestation verify`, each launcher verifies the attestation and treats a
-  verification failure as fatal. If `gh` is absent or too old to support that
-  command, the launcher reports that only the checksum was verified and prints
-  the exact optional verification command plus an install or upgrade hint.
+  repository and its GitHub Actions workflow. The launchers do not require or
+  invoke the GitHub CLI; after the checksum check succeeds they print the
+  optional `gh attestation verify` command for anyone who wants to check
+  provenance manually (see "Verifying release provenance").
 - An Authenticode signature identifies a trusted Windows publisher and can
   satisfy Windows application-control policy. Checksums and attestations do
   not replace it, which is why an unsigned package can still be blocked.

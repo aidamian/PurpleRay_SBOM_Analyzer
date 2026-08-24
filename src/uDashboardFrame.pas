@@ -429,7 +429,9 @@ begin
   FCardsPanel.ChildSizing.ControlsPerLine := 2;
   FCardsPanel.ChildSizing.HorizontalSpacing := 14;
   FCardsPanel.ChildSizing.EnlargeHorizontal := crsHomogenousChildResize;
+  FCardsPanel.ChildSizing.ShrinkHorizontal := crsHomogenousChildResize;
   FCardsPanel.ChildSizing.EnlargeVertical := crsHomogenousChildResize;
+  FCardsPanel.ChildSizing.ShrinkVertical := crsHomogenousChildResize;
 
   FAnalyzerCard := BuildCard('SBOM Analyzer',
     'Scan a local folder, inspect components and artifacts, and export ' +
@@ -461,7 +463,9 @@ begin
   FStatsPanel.ChildSizing.ControlsPerLine := DashboardStatTileCount;
   FStatsPanel.ChildSizing.HorizontalSpacing := 12;
   FStatsPanel.ChildSizing.EnlargeHorizontal := crsHomogenousChildResize;
+  FStatsPanel.ChildSizing.ShrinkHorizontal := crsHomogenousChildResize;
   FStatsPanel.ChildSizing.EnlargeVertical := crsHomogenousChildResize;
+  FStatsPanel.ChildSizing.ShrinkVertical := crsHomogenousChildResize;
 
   for I := 0 to DashboardStatTileCount - 1 do
   begin
