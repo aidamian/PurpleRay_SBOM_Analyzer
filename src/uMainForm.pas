@@ -6,9 +6,11 @@
 
   Description
   -----------
-  Owns the product identity, shared task-history service, feature selector,
-  tabless feature workspace, and form-level event routing. Analysis and
-  comparison behavior remain encapsulated by their feature frames.
+  Owns the product identity, shared task-history service, left
+  navigation rail, and form-level event routing across the Dashboard,
+  SBOM Analyzer, and Knowledge Base features. Scan comparison runs in a
+  modal dialog owned by the shell. Feature behavior remains
+  encapsulated by the feature frames.
 
   Citation request
   ----------------
@@ -28,22 +30,34 @@ unit uMainForm;
 interface
 
 uses
-  Classes, Forms, Controls, StdCtrls, ExtCtrls, uTaskHistory,
-  uSBOMAnalyzerFrame, uCompareScansFrame;
+  Classes, Forms, Controls, StdCtrls, ExtCtrls, Buttons, Graphics,
+  uTaskHistory, uSBOMAnalyzerFrame, uCompareScansDialog, uDashboardFrame,
+  uKnowledgeBaseFrame;
+
+const
+  FeatureIndexDashboard = 0;
+  FeatureIndexAnalyzer = 1;
+  FeatureIndexKnowledgeBase = 2;
 
 type
   TMainForm = class(TForm)
   published
-    AnalyzerPage: TPage;
-    ApplicationTitleLabel: TLabel;
+    NavigationRail: TPanel;
+    BrandPanel: TPanel;
     AppIconImage: TImage;
-    ComparePage: TPage;
-    FeatureSelector: TComboBox;
-    ShellHeaderPanel: TPanel;
+    ApplicationTitleLabel: TLabel;
+    ApplicationSubtitleLabel: TLabel;
+    DashboardNavButton: TSpeedButton;
+    AnalyzerNavButton: TSpeedButton;
+    KnowledgeNavButton: TSpeedButton;
+    VersionLabel: TLabel;
     WorkspaceNotebook: TNotebook;
+    DashboardPage: TPage;
+    AnalyzerPage: TPage;
+    KnowledgeBasePage: TPage;
 
     {**
-      Activates the selected feature when the main window is shown.
+      Activates the startup feature when the main window is shown.
 
       Parameters
       ----------
@@ -61,14 +75,15 @@ type
     procedure FormShown(Sender: TObject);
 
     {**
-      Delegates application shutdown preparation to both compiled features.
+      Delegates application shutdown preparation to the features.
 
       Parameters
       ----------
       Sender
         LCL event source; not otherwise used.
       CanClose
-        Receives whether every feature completed its shutdown preparation.
+        Receives whether every feature completed its shutdown
+        preparation.
 
       Returns
       -------
@@ -81,14 +96,15 @@ type
     procedure FormCloseRequested(Sender: TObject; var CanClose: Boolean);
 
     {**
-      Routes files and directories dropped on the shell to the analyzer feature.
+      Routes files and directories dropped on the shell to the analyzer.
 
       Parameters
       ----------
       Sender
         LCL event source; not otherwise used.
       FileNames
-        Absolute or platform-native paths supplied by the LCL drop event.
+        Absolute or platform-native paths supplied by the LCL drop
+        event.
 
       Returns
       -------
@@ -102,7 +118,7 @@ type
       const FileNames: array of string);
 
     {**
-      Offers form-level keyboard input to the active compiled feature.
+      Offers form-level keyboard input to the active feature.
 
       Parameters
       ----------
@@ -125,12 +141,12 @@ type
       Shift: TShiftState);
 
     {**
-      Selects the workspace page represented by the feature selector.
+      Activates the Dashboard feature.
 
       Parameters
       ----------
       Sender
-        Feature selector that raised the event; not otherwise used.
+        LCL event source; not otherwise used.
 
       Returns
       -------
@@ -140,17 +156,55 @@ type
       ------
       None
     }
-    procedure FeatureSelectionChanged(Sender: TObject);
+    procedure DashboardNavClicked(Sender: TObject);
+
+    {**
+      Activates the SBOM Analyzer feature.
+
+      Parameters
+      ----------
+      Sender
+        LCL event source; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure AnalyzerNavClicked(Sender: TObject);
+
+    {**
+      Activates the Knowledge Base feature.
+
+      Parameters
+      ----------
+      Sender
+        LCL event source; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure KnowledgeNavClicked(Sender: TObject);
   private
     FHistoryService: TTaskHistoryService;
     FAnalyzerFrame: TSBOMAnalyzerFrame;
-    FCompareFrame: TCompareScansFrame;
+    FDashboardFrame: TDashboardFrame;
+    FKnowledgeBaseFrame: TKnowledgeBaseFrame;
+    FCompareDialog: TCompareScansDialog;
     FCloseReissueQueued: Boolean;
     FActiveFeatureIndex: Integer;
     FSelectingFeature: Boolean;
 
     {**
-      Initializes product identity, shared history, and compiled features.
+      Initializes product identity, shared history, and features.
 
       Parameters
       ----------
@@ -166,12 +220,13 @@ type
       EResNotFound, EReadError
         May propagate when an embedded LFM resource cannot be loaded.
       EOutOfMemory, EInOutError
-        May propagate while loading shared task history or feature state.
+        May propagate while loading shared task history or feature
+        state.
     }
     procedure InitializeShell(const ADataDirectory: string);
 
     {**
-      Creates and embeds both statically registered feature frames.
+      Creates and embeds the three feature frames.
 
       Parameters
       ----------
@@ -186,17 +241,35 @@ type
       EResNotFound, EReadError
         May propagate when a feature-frame resource cannot be loaded.
       EOutOfMemory
-        May propagate when the frame or its model state cannot be allocated.
+        May propagate when a frame or its model state cannot be
+        allocated.
     }
     procedure CreateFeatureFrames;
 
     {**
-      Activates one compiled feature without destroying the other frame.
+      Draws the small navigation glyphs used by the rail buttons.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure AssignNavigationGlyphs;
+
+    {**
+      Activates one feature without destroying the other frames.
 
       Parameters
       ----------
       AIndex
-        Selector/notebook index: zero for Analyzer or one for Compare Scans.
+        Feature index: Dashboard, Analyzer, or Knowledge Base.
 
       Returns
       -------
@@ -209,7 +282,24 @@ type
     procedure SelectFeature(AIndex: Integer);
 
     {**
-      Fans one revisioned shared-history event out to both feature frames.
+      Opens the modal Compare Scans dialog over the shell.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure OpenCompareDialog;
+
+    {**
+      Fans one revisioned shared-history event out to the features.
 
       Parameters
       ----------
@@ -253,7 +343,7 @@ type
     function PrimaryShortcut(AShift: TShiftState): Boolean;
 
     {**
-      Reflects analyzer activity without changing the stable feature name.
+      Reflects analyzer activity on the navigation rail.
 
       Parameters
       ----------
@@ -273,7 +363,8 @@ type
     procedure AnalyzerActivityChanged(Sender: TObject; AScanActive: Boolean);
 
     {**
-      Queues a second close request after asynchronous scan cancellation.
+      Queues a second close request after asynchronous scan
+      cancellation.
 
       Parameters
       ----------
@@ -291,7 +382,8 @@ type
     procedure AnalyzerCloseReady(Sender: TObject);
 
     {**
-      Reissues the native form close outside the worker-completion callback.
+      Reissues the native form close outside the worker-completion
+      callback.
 
       Parameters
       ----------
@@ -307,9 +399,81 @@ type
       None
     }
     procedure ReissueClose(Data: PtrInt);
+
+    {**
+      Opens the analyzer from a dashboard launcher.
+
+      Parameters
+      ----------
+      Sender
+        Dashboard frame; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure DashboardOpenAnalyzer(Sender: TObject);
+
+    {**
+      Opens the Knowledge Base from a dashboard launcher.
+
+      Parameters
+      ----------
+      Sender
+        Dashboard frame; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure DashboardOpenKnowledgeBase(Sender: TObject);
+
+    {**
+      Starts a new scan from a dashboard launcher.
+
+      Parameters
+      ----------
+      Sender
+        Dashboard frame; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure DashboardNewScan(Sender: TObject);
+
+    {**
+      Opens the Compare Scans dialog from a feature request.
+
+      Parameters
+      ----------
+      Sender
+        Requesting frame; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure CompareRequested(Sender: TObject);
   public
     {**
-      Creates the LFM-backed shell, shared history, and compiled features.
+      Creates the LFM-backed shell, shared history, and features.
 
       Parameters
       ----------
@@ -319,31 +483,34 @@ type
       Returns
       -------
       TMainForm
-        Initialized application shell containing Analyzer and Compare Scans.
+        Initialized application shell containing all three features.
 
       Raises
       ------
       EResNotFound, EReadError
         May propagate when an embedded LFM resource cannot be loaded.
       EOutOfMemory
-        May propagate while allocating the shell or either feature.
+        May propagate while allocating the shell or a feature.
     }
     constructor Create(TheOwner: TComponent); override;
 
     {**
-      Creates the complete shell with an explicit isolated persistence root.
+      Creates the complete shell with an explicit isolated persistence
+      root.
 
       Parameters
       ----------
       TheOwner
         Optional LCL component owner.
       ADataDirectory
-        Directory used by shared history, settings, and generated SBOMs.
+        Directory used by shared history, settings, and generated
+        SBOMs.
 
       Returns
       -------
       TMainForm
-        Initialized two-feature shell isolated from the operator profile.
+        Initialized three-feature shell isolated from the operator
+        profile.
 
       Raises
       ------
@@ -356,7 +523,7 @@ type
       const ADataDirectory: string);
 
     {**
-      Detaches callbacks, prepares both frames, and frees history last.
+      Detaches callbacks, prepares the frames, and frees history last.
 
       Parameters
       ----------
@@ -379,9 +546,14 @@ var
 implementation
 
 uses
-  SysUtils, Graphics, LCLType, uVersionInfo;
+  SysUtils, LCLType, uVersionInfo;
 
 {$R *.lfm}
+
+const
+  { PurpleRay brand accent in TColor byte order (BGR of #5F57AD). }
+  NavigationAccentColor: TColor = TColor($AD575F);
+  NavigationGlyphSize = 16;
 
 constructor TMainForm.Create(TheOwner: TComponent);
 begin
@@ -399,19 +571,25 @@ end;
 procedure TMainForm.InitializeShell(const ADataDirectory: string);
 begin
   Caption := AppName + ' ' + DisplayVersion;
-  ApplicationTitleLabel.Caption := AppName + '  ' + DisplayVersion;
+  ApplicationTitleLabel.Caption := 'PurpleRay';
+  ApplicationSubtitleLabel.Caption := 'SBOM Analyzer';
+  VersionLabel.Caption := DisplayVersion;
+  VersionLabel.Font.Color := clGrayText;
+  ApplicationSubtitleLabel.Font.Color := clGrayText;
   if Application.Icon <> nil then
     AppIconImage.Picture.Icon.Assign(Application.Icon);
+  AssignNavigationGlyphs;
   FActiveFeatureIndex := -1;
   FHistoryService := TTaskHistoryService.Create(ADataDirectory);
   FHistoryService.OnChanged := @HistoryChanged;
   CreateFeatureFrames;
-  { Keep construction free of focus changes. GTK can report child controls as
-    focusable before their parent form is visible and then reject SetFocus. }
+  { Keep construction free of focus changes. GTK can report child
+    controls as focusable before their parent form is visible and then
+    reject SetFocus. }
   FSelectingFeature := True;
   try
-    FeatureSelector.ItemIndex := 0;
-    WorkspaceNotebook.PageIndex := 0;
+    DashboardNavButton.Down := True;
+    WorkspaceNotebook.PageIndex := FeatureIndexDashboard;
   finally
     FSelectingFeature := False;
   end;
@@ -426,14 +604,69 @@ begin
   begin
     FAnalyzerFrame.OnActivityChanged := nil;
     FAnalyzerFrame.OnCloseReady := nil;
+    FAnalyzerFrame.OnCompareRequested := nil;
     FAnalyzerFrame.PrepareForClose;
   end;
-  if FCompareFrame <> nil then
-    FCompareFrame.PrepareForClose;
-  FreeAndNil(FCompareFrame);
+  FreeAndNil(FCompareDialog);
+  FreeAndNil(FKnowledgeBaseFrame);
+  FreeAndNil(FDashboardFrame);
   FreeAndNil(FAnalyzerFrame);
   FreeAndNil(FHistoryService);
   inherited Destroy;
+end;
+
+procedure TMainForm.AssignNavigationGlyphs;
+
+  function NewGlyph: TBitmap;
+  begin
+    Result := TBitmap.Create;
+    Result.SetSize(NavigationGlyphSize, NavigationGlyphSize);
+    Result.Canvas.Brush.Color := clFuchsia;
+    Result.Canvas.FillRect(0, 0, NavigationGlyphSize, NavigationGlyphSize);
+    Result.Canvas.Pen.Color := NavigationAccentColor;
+    Result.Canvas.Brush.Color := NavigationAccentColor;
+    Result.TransparentColor := clFuchsia;
+    Result.Transparent := True;
+  end;
+
+var
+  Glyph: TBitmap;
+begin
+  { Dashboard: four tiles. }
+  Glyph := NewGlyph;
+  try
+    Glyph.Canvas.FillRect(1, 1, 7, 7);
+    Glyph.Canvas.FillRect(9, 1, 15, 7);
+    Glyph.Canvas.FillRect(1, 9, 7, 15);
+    Glyph.Canvas.FillRect(9, 9, 15, 15);
+    DashboardNavButton.Glyph.Assign(Glyph);
+  finally
+    Glyph.Free;
+  end;
+  { Analyzer: magnifier. }
+  Glyph := NewGlyph;
+  try
+    Glyph.Canvas.Brush.Style := bsClear;
+    Glyph.Canvas.Pen.Width := 2;
+    Glyph.Canvas.Ellipse(1, 1, 11, 11);
+    Glyph.Canvas.MoveTo(10, 10);
+    Glyph.Canvas.LineTo(15, 15);
+    AnalyzerNavButton.Glyph.Assign(Glyph);
+  finally
+    Glyph.Free;
+  end;
+  { Knowledge Base: open book. }
+  Glyph := NewGlyph;
+  try
+    Glyph.Canvas.Brush.Style := bsClear;
+    Glyph.Canvas.Pen.Width := 2;
+    Glyph.Canvas.Rectangle(1, 2, 15, 14);
+    Glyph.Canvas.MoveTo(8, 2);
+    Glyph.Canvas.LineTo(8, 14);
+    KnowledgeNavButton.Glyph.Assign(Glyph);
+  finally
+    Glyph.Free;
+  end;
 end;
 
 procedure TMainForm.CreateFeatureFrames;
@@ -444,32 +677,75 @@ begin
   FAnalyzerFrame.Align := alClient;
   FAnalyzerFrame.OnActivityChanged := @AnalyzerActivityChanged;
   FAnalyzerFrame.OnCloseReady := @AnalyzerCloseReady;
-  FCompareFrame := TCompareScansFrame.CreateWithHistoryService(ComparePage,
+  FAnalyzerFrame.OnCompareRequested := @CompareRequested;
+
+  FDashboardFrame := TDashboardFrame.CreateWithHistoryService(DashboardPage,
     FHistoryService);
-  FCompareFrame.Parent := ComparePage;
-  FCompareFrame.Align := alClient;
+  FDashboardFrame.Parent := DashboardPage;
+  FDashboardFrame.Align := alClient;
+  FDashboardFrame.OnOpenAnalyzer := @DashboardOpenAnalyzer;
+  FDashboardFrame.OnOpenKnowledgeBase := @DashboardOpenKnowledgeBase;
+  FDashboardFrame.OnNewScan := @DashboardNewScan;
+  FDashboardFrame.OnCompare := @CompareRequested;
+
+  FKnowledgeBaseFrame := TKnowledgeBaseFrame.Create(KnowledgeBasePage);
+  FKnowledgeBaseFrame.Parent := KnowledgeBasePage;
+  FKnowledgeBaseFrame.Align := alClient;
+
   AnalyzerActivityChanged(FAnalyzerFrame, FAnalyzerFrame.ScanActive);
 end;
 
 procedure TMainForm.SelectFeature(AIndex: Integer);
 begin
-  if FSelectingFeature or not (AIndex in [0, 1]) then
+  if FSelectingFeature or not (AIndex in [FeatureIndexDashboard,
+    FeatureIndexAnalyzer, FeatureIndexKnowledgeBase]) then
     Exit;
   FSelectingFeature := True;
   try
-    if (FActiveFeatureIndex = 0) and (FAnalyzerFrame <> nil) then
-      FAnalyzerFrame.Deactivate
-    else if (FActiveFeatureIndex = 1) and (FCompareFrame <> nil) then
-      FCompareFrame.Deactivate;
-    FeatureSelector.ItemIndex := AIndex;
+    case FActiveFeatureIndex of
+      FeatureIndexDashboard:
+        if FDashboardFrame <> nil then
+          FDashboardFrame.Deactivate;
+      FeatureIndexAnalyzer:
+        if FAnalyzerFrame <> nil then
+          FAnalyzerFrame.Deactivate;
+      FeatureIndexKnowledgeBase:
+        if FKnowledgeBaseFrame <> nil then
+          FKnowledgeBaseFrame.Deactivate;
+    end;
+    case AIndex of
+      FeatureIndexDashboard: DashboardNavButton.Down := True;
+      FeatureIndexAnalyzer: AnalyzerNavButton.Down := True;
+      FeatureIndexKnowledgeBase: KnowledgeNavButton.Down := True;
+    end;
     WorkspaceNotebook.PageIndex := AIndex;
     FActiveFeatureIndex := AIndex;
-    if (AIndex = 0) and (FAnalyzerFrame <> nil) then
-      FAnalyzerFrame.Activate
-    else if (AIndex = 1) and (FCompareFrame <> nil) then
-      FCompareFrame.Activate;
+    case AIndex of
+      FeatureIndexDashboard:
+        if FDashboardFrame <> nil then
+          FDashboardFrame.Activate;
+      FeatureIndexAnalyzer:
+        if FAnalyzerFrame <> nil then
+          FAnalyzerFrame.Activate;
+      FeatureIndexKnowledgeBase:
+        if FKnowledgeBaseFrame <> nil then
+          FKnowledgeBaseFrame.Activate;
+    end;
   finally
     FSelectingFeature := False;
+  end;
+end;
+
+procedure TMainForm.OpenCompareDialog;
+begin
+  if FCompareDialog <> nil then
+    Exit;
+  FCompareDialog := TCompareScansDialog.CreateForHistory(Self,
+    FHistoryService);
+  try
+    FCompareDialog.ShowModal;
+  finally
+    FreeAndNil(FCompareDialog);
   end;
 end;
 
@@ -480,8 +756,10 @@ begin
     Exit;
   if FAnalyzerFrame <> nil then
     FAnalyzerFrame.HistoryChanged(AKind, ATaskID, ARevision);
-  if FCompareFrame <> nil then
-    FCompareFrame.HistoryChanged(AKind, ATaskID, ARevision);
+  if FDashboardFrame <> nil then
+    FDashboardFrame.HistoryChanged(AKind, ATaskID, ARevision);
+  if FCompareDialog <> nil then
+    FCompareDialog.HistoryChanged(AKind, ATaskID, ARevision);
 end;
 
 function TMainForm.PrimaryShortcut(AShift: TShiftState): Boolean;
@@ -498,14 +776,12 @@ begin
   if FAnalyzerFrame = nil then
     Exit;
   FAnalyzerFrame.ShowPendingWarnings;
-  SelectFeature(FeatureSelector.ItemIndex);
+  SelectFeature(FeatureIndexDashboard);
 end;
 
 procedure TMainForm.FormCloseRequested(Sender: TObject; var CanClose: Boolean);
 begin
   CanClose := (FAnalyzerFrame = nil) or FAnalyzerFrame.RequestClose;
-  if CanClose and (FCompareFrame <> nil) then
-    CanClose := FCompareFrame.PrepareForClose;
 end;
 
 procedure TMainForm.FormDropFiles(Sender: TObject;
@@ -513,7 +789,7 @@ procedure TMainForm.FormDropFiles(Sender: TObject;
 begin
   if FAnalyzerFrame <> nil then
   begin
-    SelectFeature(0);
+    SelectFeature(FeatureIndexAnalyzer);
     FAnalyzerFrame.HandleDroppedFiles(FileNames);
   end;
 end;
@@ -521,33 +797,48 @@ end;
 procedure TMainForm.FormKeyPressed(Sender: TObject; var Key: Word;
   Shift: TShiftState);
 begin
-  if PrimaryShortcut(Shift) and (Key = VK_1) then
-  begin
-    SelectFeature(0);
-    Key := 0;
-    Exit;
-  end;
-  if PrimaryShortcut(Shift) and (Key = VK_2) then
-  begin
-    SelectFeature(1);
-    Key := 0;
-    Exit;
-  end;
-  if PrimaryShortcut(Shift) and (Key = VK_N) then
-    SelectFeature(0);
-  if (FActiveFeatureIndex = 0) and (FAnalyzerFrame <> nil) then
-  begin
+  if PrimaryShortcut(Shift) then
+    case Key of
+      VK_1:
+        begin
+          SelectFeature(FeatureIndexDashboard);
+          Key := 0;
+          Exit;
+        end;
+      VK_2:
+        begin
+          SelectFeature(FeatureIndexAnalyzer);
+          Key := 0;
+          Exit;
+        end;
+      VK_3:
+        begin
+          SelectFeature(FeatureIndexKnowledgeBase);
+          Key := 0;
+          Exit;
+        end;
+      VK_N:
+        SelectFeature(FeatureIndexAnalyzer);
+    end;
+  if (FActiveFeatureIndex = FeatureIndexAnalyzer) and
+    (FAnalyzerFrame <> nil) then
     if FAnalyzerFrame.HandleShortcut(Key, Shift) then
-      Key := 0;
-  end
-  else if (FActiveFeatureIndex = 1) and (FCompareFrame <> nil) then
-    if FCompareFrame.HandleShortcut(Key, Shift) then
       Key := 0;
 end;
 
-procedure TMainForm.FeatureSelectionChanged(Sender: TObject);
+procedure TMainForm.DashboardNavClicked(Sender: TObject);
 begin
-  SelectFeature(FeatureSelector.ItemIndex);
+  SelectFeature(FeatureIndexDashboard);
+end;
+
+procedure TMainForm.AnalyzerNavClicked(Sender: TObject);
+begin
+  SelectFeature(FeatureIndexAnalyzer);
+end;
+
+procedure TMainForm.KnowledgeNavClicked(Sender: TObject);
+begin
+  SelectFeature(FeatureIndexKnowledgeBase);
 end;
 
 procedure TMainForm.AnalyzerActivityChanged(Sender: TObject;
@@ -557,13 +848,13 @@ begin
     Exit;
   if AScanActive then
   begin
-    FeatureSelector.Hint := 'SBOM Analyzer — scan in progress';
-    FeatureSelector.Font.Style := [fsBold];
+    AnalyzerNavButton.Hint := 'SBOM Analyzer — scan in progress';
+    AnalyzerNavButton.Font.Style := [fsBold];
   end
   else
   begin
-    FeatureSelector.Hint := 'SBOM Analyzer';
-    FeatureSelector.Font.Style := [];
+    AnalyzerNavButton.Hint := 'SBOM Analyzer';
+    AnalyzerNavButton.Font.Style := [];
   end;
 end;
 
@@ -579,6 +870,28 @@ procedure TMainForm.ReissueClose(Data: PtrInt);
 begin
   FCloseReissueQueued := False;
   Close;
+end;
+
+procedure TMainForm.DashboardOpenAnalyzer(Sender: TObject);
+begin
+  SelectFeature(FeatureIndexAnalyzer);
+end;
+
+procedure TMainForm.DashboardOpenKnowledgeBase(Sender: TObject);
+begin
+  SelectFeature(FeatureIndexKnowledgeBase);
+end;
+
+procedure TMainForm.DashboardNewScan(Sender: TObject);
+begin
+  SelectFeature(FeatureIndexAnalyzer);
+  if FAnalyzerFrame <> nil then
+    FAnalyzerFrame.StartNewScan;
+end;
+
+procedure TMainForm.CompareRequested(Sender: TObject);
+begin
+  OpenCompareDialog;
 end;
 
 end.

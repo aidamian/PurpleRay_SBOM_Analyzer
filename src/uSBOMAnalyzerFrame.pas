@@ -532,6 +532,26 @@ type
     FLastExportPath: string;
     FOnActivityChanged: TAnalyzerActivityEvent;
     FOnCloseReady: TNotifyEvent;
+    FCompareScansButton: TButton;
+    FOnCompareRequested: TNotifyEvent;
+
+    {**
+      Raises the shell-facing compare request for this feature.
+
+      Parameters
+      ----------
+      Sender
+        LCL event source; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure CompareScansClicked(Sender: TObject);
 
     {**
       Adapts owned-service notifications to the shell-facing history API.
@@ -1477,7 +1497,26 @@ type
     procedure HistoryChanged(AKind: TTaskHistoryChangeKind;
       const ATaskID: string; ARevision: QWord);
 
+    {**
+      Starts the interactive New Scan flow programmatically.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure StartNewScan;
+
     property ScanActive: Boolean read GetScanActive;
+    property OnCompareRequested: TNotifyEvent read FOnCompareRequested
+      write FOnCompareRequested;
     property OnActivityChanged: TAnalyzerActivityEvent
       read FOnActivityChanged write FOnActivityChanged;
     property OnCloseReady: TNotifyEvent read FOnCloseReady write FOnCloseReady;
@@ -1678,6 +1717,19 @@ end;
 procedure TSBOMAnalyzerFrame.InitializeFrame(const ADataDirectory: string;
   AHistoryService: TTaskHistoryService);
 begin
+  { Compare Scans entry point sits above the task history, per the
+    approved iteration-2 shell design. }
+  FCompareScansButton := TButton.Create(Self);
+  FCompareScansButton.Parent := TaskPane;
+  FCompareScansButton.Align := alTop;
+  FCompareScansButton.Caption := 'Compare scans...';
+  FCompareScansButton.BorderSpacing.Left := 10;
+  FCompareScansButton.BorderSpacing.Top := 8;
+  FCompareScansButton.BorderSpacing.Right := 10;
+  FCompareScansButton.BorderSpacing.Bottom := 2;
+  FCompareScansButton.OnClick := @CompareScansClicked;
+  FCompareScansButton.Top := 0;
+  TaskHeading.Top := FCompareScansButton.Top + FCompareScansButton.Height + 1;
   FSBOMMemo.Font.Pitch := fpFixed;
   {$IFDEF Windows}
   FSBOMMemo.Font.Name := 'Consolas';
@@ -3048,6 +3100,17 @@ begin
   else
     SelectTask(nil);
   UpdateButtons;
+end;
+
+procedure TSBOMAnalyzerFrame.CompareScansClicked(Sender: TObject);
+begin
+  if Assigned(FOnCompareRequested) then
+    FOnCompareRequested(Self);
+end;
+
+procedure TSBOMAnalyzerFrame.StartNewScan;
+begin
+  NewScanClicked(Self);
 end;
 
 procedure TSBOMAnalyzerFrame.NewScanClicked(Sender: TObject);

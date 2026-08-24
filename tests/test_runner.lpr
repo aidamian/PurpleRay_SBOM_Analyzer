@@ -36,7 +36,7 @@ uses
   uVerifiedInput, uArchiveInspector, uBinaryIdentifiers, uBoundedBinaryReader,
   uPEVersionInfo, uScanAnalysis, uScanPool, uScanCache, uSettingsStore,
   uOSVCore, uKnownIssues, uKnownIssueService, uBSIReadiness,
-  uSecurityFindings;
+  uSecurityFindings, uGlossary, uGlossaryContent, uDashboardStats;
 
 type
   TTestMethod = procedure;
@@ -2058,17 +2058,21 @@ begin
       'function TMainForm.PrimaryShortcut');
     KeyBlock := ExtractTextSection(ShellSource,
       'procedure TMainForm.FormKeyPressed',
-      'procedure TMainForm.FeatureSelectionChanged');
+      'procedure TMainForm.DashboardNavClicked');
     DestroyBlock := ExtractTextSection(ShellSource,
       'destructor TMainForm.Destroy;',
-      'procedure TMainForm.CreateFeatureFrames;');
+      'procedure TMainForm.AssignNavigationGlyphs;');
 
     AssertTrue(Pos('TMainForm = class(TForm)', ShellSource) > 0,
       'the application shell is not the main form');
     AssertTrue(Pos('uSBOMAnalyzerFrame', ShellSource) > 0,
       'the shell does not import the Analyzer feature frame');
-    AssertTrue(Pos('uCompareScansFrame', ShellSource) > 0,
-      'the shell does not import the Compare Scans feature frame');
+    AssertTrue(Pos('uCompareScansDialog', ShellSource) > 0,
+      'the shell does not import the Compare Scans dialog host');
+    AssertTrue(Pos('uDashboardFrame', ShellSource) > 0,
+      'the shell does not import the Dashboard feature frame');
+    AssertTrue(Pos('uKnowledgeBaseFrame', ShellSource) > 0,
+      'the shell does not import the Knowledge Base feature frame');
     AssertTrue(Pos('uTaskHistory', ShellSource) > 0,
       'the shell does not own shared task history');
     AssertEqual(1, CountTextOccurrences(ShellSource,
@@ -2079,18 +2083,25 @@ begin
     AssertTrue((InitializeBlock <> '') and
       (Pos('SelectFeature(', InitializeBlock) = 0) and
       (Pos('procedure TMainForm.FormShown', ShellSource) <
-      Pos('SelectFeature(FeatureSelector.ItemIndex)', ShellSource)),
+      Pos('SelectFeature(FeatureIndexDashboard)', ShellSource)),
       'feature activation can move focus before the shell is shown');
     AssertTrue(Pos('TSBOMAnalyzerFrame.CreateWithHistoryService(AnalyzerPage,',
       CreateFeaturesBlock) > 0,
       'the shell does not inject shared history into Analyzer');
-    AssertTrue(Pos('TCompareScansFrame.CreateWithHistoryService(ComparePage,',
+    AssertTrue(Pos('TDashboardFrame.CreateWithHistoryService(DashboardPage,',
       CreateFeaturesBlock) > 0,
-      'the shell does not inject shared history into Compare Scans');
+      'the shell does not inject shared history into the Dashboard');
     AssertTrue(Pos('FAnalyzerFrame.Parent := AnalyzerPage', ShellSource) > 0,
       'the Analyzer frame is not parented to its notebook page');
-    AssertTrue(Pos('FCompareFrame.Parent := ComparePage', ShellSource) > 0,
-      'the Compare Scans frame is not parented to its notebook page');
+    AssertTrue(Pos('FDashboardFrame.Parent := DashboardPage',
+      ShellSource) > 0,
+      'the Dashboard frame is not parented to its notebook page');
+    AssertTrue(Pos('FKnowledgeBaseFrame.Parent := KnowledgeBasePage',
+      ShellSource) > 0,
+      'the Knowledge Base frame is not parented to its notebook page');
+    AssertTrue(Pos('TCompareScansDialog.CreateForHistory(Self,',
+      ShellSource) > 0,
+      'the shell does not host Compare Scans as a modal dialog');
     AssertTrue(Pos('uModels', ShellSource) = 0,
       'the shell imports task-model responsibilities');
     AssertTrue(Pos('uSettingsStore', ShellSource) = 0,
@@ -2102,56 +2113,65 @@ begin
     AssertTrue(Pos('uExportUtils', ShellSource) = 0,
       'the shell imports export responsibilities');
     AssertTrue((Pos('FAnalyzerFrame.HistoryChanged(', HistoryChangedBlock) > 0)
-      and (Pos('FCompareFrame.HistoryChanged(', HistoryChangedBlock) > 0),
-      'the shell does not fan shared-history changes to both features');
+      and (Pos('FDashboardFrame.HistoryChanged(', HistoryChangedBlock) > 0)
+      and (Pos('FCompareDialog.HistoryChanged(', HistoryChangedBlock) > 0),
+      'the shell does not fan shared-history changes to every consumer');
     AssertTrue((Pos('VK_1', KeyBlock) > 0) and
-      (Pos('SelectFeature(0)', KeyBlock) > 0) and
+      (Pos('SelectFeature(FeatureIndexDashboard)', KeyBlock) > 0) and
       (Pos('VK_2', KeyBlock) > 0) and
-      (Pos('SelectFeature(1)', KeyBlock) > 0),
+      (Pos('SelectFeature(FeatureIndexAnalyzer)', KeyBlock) > 0) and
+      (Pos('VK_3', KeyBlock) > 0) and
+      (Pos('SelectFeature(FeatureIndexKnowledgeBase)', KeyBlock) > 0),
       'feature keyboard navigation is incomplete');
-    AssertTrue((Pos('FActiveFeatureIndex = 0', KeyBlock) > 0) and
-      (Pos('FAnalyzerFrame.HandleShortcut', KeyBlock) > 0) and
-      (Pos('FActiveFeatureIndex = 1', KeyBlock) > 0) and
-      (Pos('FCompareFrame.HandleShortcut', KeyBlock) > 0),
+    AssertTrue((Pos('FActiveFeatureIndex = FeatureIndexAnalyzer',
+      KeyBlock) > 0) and
+      (Pos('FAnalyzerFrame.HandleShortcut', KeyBlock) > 0),
       'active-feature shortcut routing is incomplete');
-    AssertTrue((Pos('FreeAndNil(FCompareFrame)', DestroyBlock) > 0) and
+    AssertTrue((Pos('FreeAndNil(FDashboardFrame)', DestroyBlock) > 0) and
+      (Pos('FreeAndNil(FKnowledgeBaseFrame)', DestroyBlock) > 0) and
       (Pos('FreeAndNil(FAnalyzerFrame)', DestroyBlock) > 0) and
       (Pos('FreeAndNil(FHistoryService)', DestroyBlock) >
       Pos('FreeAndNil(FAnalyzerFrame)', DestroyBlock)),
-      'shared history is not destroyed after both borrowing frames');
+      'shared history is not destroyed after the borrowing frames');
 
     AssertTrue(Pos('object MainForm: TMainForm', ShellResource) > 0,
       'the main-form resource root differs');
-    AssertTrue((Pos(LineEnding + '  Height = 600' + LineEnding,
+    AssertTrue((Pos(LineEnding + '  Height = 720' + LineEnding,
       ShellResource) > 0) and
-      (Pos(LineEnding + '  Width = 980' + LineEnding,
+      (Pos(LineEnding + '  Width = 1180' + LineEnding,
       ShellResource) > 0) and
-      (Pos('Constraints.MinHeight = 440', ShellResource) > 0) and
-      (Pos('Constraints.MinWidth = 720', ShellResource) > 0),
-      'the compact WSL2 main-window geometry regressed');
+      (Pos('Constraints.MinHeight = 560', ShellResource) > 0) and
+      (Pos('Constraints.MinWidth = 920', ShellResource) > 0),
+      'the main-window geometry regressed');
     AssertTrue(Pos('AllowDropFiles = True', ShellResource) > 0,
       'the shell no longer accepts folder drops');
     AssertTrue(Pos('KeyPreview = True', ShellResource) > 0,
       'the shell no longer receives application shortcuts');
-    AssertTrue(Pos('object FeatureSelector: TComboBox', ShellResource) > 0,
-      'the feature selector is missing');
-    AssertTrue(Pos('Style = csDropDownList', ShellResource) > 0,
-      'the feature selector should not accept arbitrary text');
+    AssertTrue(Pos('object NavigationRail: TPanel', ShellResource) > 0,
+      'the left navigation rail is missing');
+    AssertTrue((Pos('object DashboardNavButton: TSpeedButton',
+      ShellResource) > 0) and
+      (Pos('object AnalyzerNavButton: TSpeedButton', ShellResource) > 0) and
+      (Pos('object KnowledgeNavButton: TSpeedButton', ShellResource) > 0),
+      'the navigation rail does not expose all three root features');
+    AssertEqual(3, CountTextOccurrences(ShellResource, 'GroupIndex = 1'),
+      'rail buttons must form one mutually exclusive selection group');
     AssertTrue(Pos('object WorkspaceNotebook: TNotebook', ShellResource) > 0,
       'the tabless workspace notebook is missing');
+    AssertTrue(Pos('object DashboardPage: TPage', ShellResource) > 0,
+      'the Dashboard workspace page is missing');
     AssertTrue(Pos('object AnalyzerPage: TPage', ShellResource) > 0,
       'the Analyzer workspace page is missing');
-    AssertTrue(Pos('object ComparePage: TPage', ShellResource) > 0,
-      'the Compare Scans workspace page is missing');
-    AssertTrue((Pos('''SBOM Analyzer''', ShellResource) > 0) and
-      (Pos('''Compare Scans''', ShellResource) > 0),
-      'the feature selector does not expose both compiled features');
+    AssertTrue(Pos('object KnowledgeBasePage: TPage', ShellResource) > 0,
+      'the Knowledge Base workspace page is missing');
+    AssertTrue(Pos('object FeatureSelector', ShellResource) = 0,
+      'the retired feature-selector combo box is still present');
     PageCount := 0;
     for LineIndex := 0 to ShellResourceLines.Count - 1 do
       if Pos(': TPage', ShellResourceLines[LineIndex]) > 0 then
         Inc(PageCount);
-    AssertEqual(2, PageCount,
-      'the shell should expose exactly two completed feature pages');
+    AssertEqual(3, PageCount,
+      'the shell should expose exactly three feature pages');
 
     AssertTrue(Pos('TSBOMAnalyzerFrame = class(TFrame)', AnalyzerSource) > 0,
       'the Analyzer workspace is not an LCL frame');
@@ -6786,6 +6806,7 @@ end;
 {$I sprint8_regressions.inc}
 {$I sprint9_regressions.inc}
 {$I sprint10_regressions.inc}
+{$I sprint11_regressions.inc}
 
 begin
   ProjectRoot := ExpandFileName(ExtractFilePath(ParamStr(0)) + '..' +
@@ -6859,6 +6880,7 @@ begin
   RunSprint8RegressionTests;
   RunSprint9RegressionTests;
   RunSprint10RegressionTests;
+  RunSprint11RegressionTests;
   WriteLn(Format('%d tests: %d passed, %d failed, %d skipped',
     [TestCount, PassCount, FailureCount, SkipCount]));
   RemoveTemporaryTree(TemporaryRoot);

@@ -1,14 +1,14 @@
 object MainForm: TMainForm
   Left = 180
-  Height = 600
+  Height = 720
   Top = 90
-  Width = 980
+  Width = 1180
   AllowDropFiles = True
   Caption = 'PurpleRay SBOM Analyzer'
-  ClientHeight = 600
-  ClientWidth = 980
-  Constraints.MinHeight = 440
-  Constraints.MinWidth = 720
+  ClientHeight = 720
+  ClientWidth = 1180
+  Constraints.MinHeight = 560
+  Constraints.MinWidth = 920
   KeyPreview = True
   OnCloseQuery = FormCloseRequested
   OnDropFiles = FormDropFiles
@@ -16,75 +16,123 @@ object MainForm: TMainForm
   OnShow = FormShown
   Position = poScreenCenter
   LCLVersion = '3.0.0.3'
-  object ShellHeaderPanel: TPanel
+  object NavigationRail: TPanel
     Left = 0
-    Height = 48
+    Height = 720
     Top = 0
-    Width = 980
-    Align = alTop
+    Width = 190
+    Align = alLeft
     BevelOuter = bvNone
-    ClientHeight = 48
-    ClientWidth = 980
+    ClientHeight = 720
+    ClientWidth = 190
     TabOrder = 0
-    object AppIconImage: TImage
-      Left = 10
-      Height = 32
-      Top = 8
-      Width = 32
-      Align = alLeft
-      BorderSpacing.Left = 10
-      BorderSpacing.Top = 8
-      BorderSpacing.Bottom = 8
-      Center = True
-      Proportional = True
-    end
-    object ApplicationTitleLabel: TLabel
-      Left = 52
-      Height = 48
+    object BrandPanel: TPanel
+      Left = 0
+      Height = 58
       Top = 0
-      Width = 740
-      Align = alClient
-      BorderSpacing.Left = 10
-      Caption = 'PurpleRay SBOM Analyzer'
-      Font.Height = -17
-      Font.Style = [fsBold]
-      Layout = tlCenter
-      ParentFont = False
-    end
-    object FeatureSelector: TComboBox
-      Left = 800
-      Height = 28
-      Top = 10
-      Width = 170
-      Align = alRight
-      BorderSpacing.Left = 8
-      BorderSpacing.Top = 10
-      BorderSpacing.Right = 10
-      BorderSpacing.Bottom = 10
-      ItemHeight = 0
-      ItemIndex = 0
-      Items.Strings = (
-        'SBOM Analyzer'
-        'Compare Scans'
-      )
-      OnChange = FeatureSelectionChanged
-      ShowHint = True
-      Style = csDropDownList
+      Width = 190
+      Align = alTop
+      BevelOuter = bvNone
+      ClientHeight = 58
+      ClientWidth = 190
       TabOrder = 0
-      Text = 'SBOM Analyzer'
+      object AppIconImage: TImage
+        Left = 14
+        Height = 28
+        Top = 14
+        Width = 28
+        Center = True
+        Proportional = True
+      end
+      object ApplicationTitleLabel: TLabel
+        Left = 50
+        Height = 17
+        Top = 12
+        Width = 100
+        Caption = 'PurpleRay'
+        Font.Style = [fsBold]
+        ParentFont = False
+      end
+      object ApplicationSubtitleLabel: TLabel
+        Left = 50
+        Height = 15
+        Top = 30
+        Width = 110
+        Caption = 'SBOM Analyzer'
+        ParentFont = False
+      end
+    end
+    object DashboardNavButton: TSpeedButton
+      Left = 8
+      Height = 36
+      Top = 64
+      Width = 174
+      Align = alTop
+      AllowAllUp = False
+      BorderSpacing.Left = 8
+      BorderSpacing.Top = 6
+      BorderSpacing.Right = 8
+      Caption = 'Dashboard'
+      Down = True
+      Flat = True
+      GroupIndex = 1
+      OnClick = DashboardNavClicked
+    end
+    object AnalyzerNavButton: TSpeedButton
+      Left = 8
+      Height = 36
+      Top = 104
+      Width = 174
+      Align = alTop
+      AllowAllUp = False
+      BorderSpacing.Left = 8
+      BorderSpacing.Top = 4
+      BorderSpacing.Right = 8
+      Caption = 'SBOM Analyzer'
+      Flat = True
+      GroupIndex = 1
+      OnClick = AnalyzerNavClicked
+    end
+    object KnowledgeNavButton: TSpeedButton
+      Left = 8
+      Height = 36
+      Top = 144
+      Width = 174
+      Align = alTop
+      AllowAllUp = False
+      BorderSpacing.Left = 8
+      BorderSpacing.Top = 4
+      BorderSpacing.Right = 8
+      Caption = 'Knowledge Base'
+      Flat = True
+      GroupIndex = 1
+      OnClick = KnowledgeNavClicked
+    end
+    object VersionLabel: TLabel
+      Left = 18
+      Height = 15
+      Top = 695
+      Width = 154
+      Align = alBottom
+      BorderSpacing.Left = 18
+      BorderSpacing.Bottom = 10
+      Caption = 'v0.0.0'
+      ParentFont = False
     end
   end
   object WorkspaceNotebook: TNotebook
-    Left = 0
-    Height = 552
-    Top = 48
-    Width = 980
-    PageIndex = 0
+    Left = 190
+    Height = 720
+    Top = 0
+    Width = 990
     Align = alClient
+    PageIndex = 0
     TabOrder = 1
+    object DashboardPage: TPage
+    end
     object AnalyzerPage: TPage
     end
-    object ComparePage: TPage
+    object KnowledgeBasePage: TPage
     end
   end
 end

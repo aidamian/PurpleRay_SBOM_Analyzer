@@ -1,0 +1,10 @@
+object KnowledgeBaseFrame: TKnowledgeBaseFrame
+  Left = 0
+  Height = 626
+  Top = 0
+  Width = 1050
+  ClientHeight = 626
+  ClientWidth = 1050
+  TabOrder = 0
+  LCLVersion = '3.0.0.3'
+end
