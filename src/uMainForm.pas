@@ -32,7 +32,7 @@ interface
 uses
   Classes, Forms, Controls, StdCtrls, ExtCtrls, Buttons, Graphics,
   uTaskHistory, uSBOMAnalyzerFrame, uCompareScansDialog, uDashboardFrame,
-  uKnowledgeBaseFrame;
+  uKnowledgeBaseFrame, uSplashForm;
 
 const
   FeatureIndexDashboard = 0;
@@ -586,6 +586,32 @@ type
       const ADataDirectory: string);
 
     {**
+      Realizes the native widget trees of the not-yet-shown feature pages.
+
+      The LCL creates native handles only for visible controls, so the
+      first visit to a feature page would otherwise pay the whole widget
+      construction cost on the click. Calling this once before the main
+      window is shown moves that cost into startup, where the splash
+      reports progress.
+
+      Parameters
+      ----------
+      ASplash
+        Optional splash whose status line receives per-feature progress.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      Exception
+        Native handle-creation failures raised by HandleNeeded propagate
+        to the caller; nothing is swallowed.
+    }
+    procedure WarmUpFeaturePages(ASplash: TSplashForm);
+
+    {**
       Detaches callbacks, prepares the frames, and frees history last.
 
       Parameters
@@ -885,6 +911,32 @@ begin
   finally
     FreeAndNil(FCompareDialog);
   end;
+end;
+
+procedure TMainForm.WarmUpFeaturePages(ASplash: TSplashForm);
+
+  procedure RealizeTree(AControl: TWinControl);
+  var
+    I: Integer;
+  begin
+    AControl.HandleNeeded;
+    for I := 0 to AControl.ControlCount - 1 do
+      if AControl.Controls[I] is TWinControl then
+        RealizeTree(TWinControl(AControl.Controls[I]));
+  end;
+
+  procedure WarmPage(APage: TPage; const AFeatureName: string);
+  begin
+    if ASplash <> nil then
+      ASplash.SetStatus('Preparing ' + AFeatureName + '...');
+    RealizeTree(APage);
+  end;
+
+begin
+  HandleNeeded;
+  WarmPage(DashboardPage, 'Dashboard');
+  WarmPage(AnalyzerPage, 'SBOM Analyzer');
+  WarmPage(KnowledgeBasePage, 'Knowledge Base');
 end;
 
 procedure TMainForm.HistoryChanged(Sender: TObject;

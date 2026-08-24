@@ -27,7 +27,8 @@ program purpleray_sbom_analyzer;
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
-  uCommandLine, Interfaces, Forms, Graphics, uMainForm, uVersionInfo;
+  uCommandLine, Interfaces, Forms, Graphics, uMainForm, uVersionInfo,
+  uSplashForm;
 
 {$R *.res}
 {$R app_icon.res}
@@ -58,12 +59,27 @@ begin
   end;
 end;
 
+var
+  Splash: TSplashForm;
+
 begin
   RequireDerivedFormResource := True;
   Application.Scaled := True;
   Application.Initialize;
   Application.Title := AppName + ' ' + DisplayVersion;
   LoadApplicationIcon;
-  Application.CreateForm(TMainForm, MainForm);
+  Splash := TSplashForm.CreateSplash(nil, DisplayVersion);
+  try
+    Splash.Show;
+    Splash.SetStatus('Loading application...');
+    { One deliberate pump so the widget set maps and paints the splash
+      before the main window is constructed; later statuses only repaint. }
+    Application.ProcessMessages;
+    Application.CreateForm(TMainForm, MainForm);
+    MainForm.WarmUpFeaturePages(Splash);
+    Splash.SetStatus('Ready');
+  finally
+    Splash.Free;
+  end;
   Application.Run;
 end.
