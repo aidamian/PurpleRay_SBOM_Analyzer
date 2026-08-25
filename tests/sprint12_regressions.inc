@@ -404,6 +404,145 @@ begin
   end;
 end;
 
+procedure TestScanStartRollbackContract;
+var
+  ActiveSetterBlock, AnalyzerSource, RefreshBlock, RollbackBlock,
+    StartBlock: string;
+  ActiveAt, AddAt, CreateAt, ExceptAt, PendingAt, SaveAt, SelectAt, StartAt,
+    SuccessPersistAt, TryAt: SizeInt;
+begin
+  AnalyzerSource := S12ReadProjectFile('src/uSBOMAnalyzerFrame.pas');
+  StartBlock := ExtractTextSection(AnalyzerSource,
+    'procedure TSBOMAnalyzerFrame.StartScan(',
+    'procedure TSBOMAnalyzerFrame.ConfigureAndStartScan(');
+  ActiveAt := Pos('SetActiveTaskID(Task.ID);', StartBlock);
+  AddAt := Pos('FHistoryService.AddTask(Task, 0);', StartBlock);
+  CreateAt := Pos('FWorker := TScanWorker.Create(', StartBlock);
+  PendingAt := Pos('FPendingScanTaskID := Task.ID;', StartBlock);
+  SaveAt := Pos('SaveHistory;', StartBlock);
+  SelectAt := Pos('SelectTask(Task);', StartBlock);
+  StartAt := Pos('FWorker.Start;', StartBlock);
+  TryAt := Pos('  try' + LineEnding + '    { The Details report', StartBlock);
+  ExceptAt := Pos('  except' + LineEnding + '    on E: Exception do',
+    StartBlock);
+  AssertTrue((StartBlock <> '') and (AddAt > 0) and (TryAt > AddAt) and
+    (PendingAt > TryAt) and (SelectAt > PendingAt) and (SaveAt > SelectAt) and
+    (ActiveAt > SaveAt) and (CreateAt > ActiveAt) and (StartAt > CreateAt) and
+    (ExceptAt > StartAt),
+    'all adopted-task UI state and worker startup must share one guard');
+  RollbackBlock := Copy(StartBlock, ExceptAt, MaxInt);
+  AssertTrue(Pos('FreeAndNil(FWorker);', RollbackBlock) > 0,
+    'a failed scan start must release the partial worker');
+  AssertTrue((Pos('Task.Status := tsFailed;', RollbackBlock) > 0) and
+    (Pos('Task.CompletedUTC := UTCNowISO8601;', RollbackBlock) > 0) and
+    (Pos('Task.Errors.Add(''The scan worker could not be started.'');',
+      RollbackBlock) > 0) and
+    (Pos('try' + LineEnding + '        SaveHistory;', RollbackBlock) > 0) and
+    (Pos('NotifyTaskUpdated(Task.ID, False)', RollbackBlock) > 0),
+    'failed startup must retain a path-free error and contain persistence failures');
+  AssertTrue((Pos('FCancelRequested := False;', RollbackBlock) > 0) and
+    (Pos('SetActiveTaskID('''');', RollbackBlock) > 0) and
+    (Pos('SetCompactFooter(', RollbackBlock) > 0) and
+    (Pos('UpdateButtons;', RollbackBlock) > 0),
+    'a failed scan start must unlock active state and restore compact UI');
+  SuccessPersistAt := Pos('  try' + LineEnding + '    SaveHistory;' +
+    LineEnding + '    FHistoryService.NotifyTaskUpdated(Task.ID, False);',
+    StartBlock);
+  AssertTrue(SuccessPersistAt > ExceptAt,
+    'post-start history persistence and publication must share a guard');
+  ActiveSetterBlock := ExtractTextSection(AnalyzerSource,
+    'procedure TSBOMAnalyzerFrame.SetActiveTaskID(',
+    'procedure TSBOMAnalyzerFrame.SetActiveFooter;');
+  AssertTrue((Pos('FPendingScanTaskID := '''';', ActiveSetterBlock) > 0) and
+    (Pos('FPendingScanChecksKnownIssues := False;', ActiveSetterBlock) > 0) and
+    (Pos('try' + LineEnding + '      FOnActivityChanged(Self, IsActive);',
+    ActiveSetterBlock) > 0),
+    'clearing active state and its cosmetic callback must be exception-safe');
+  RefreshBlock := ExtractTextSection(AnalyzerSource,
+    'procedure TSBOMAnalyzerFrame.StartIntelligenceRefresh(',
+    'procedure TSBOMAnalyzerFrame.CompleteIntelligenceRefresh(');
+  TryAt := Pos('  try' + LineEnding + '    FCancelRequested := False;',
+    RefreshBlock);
+  ActiveAt := Pos('SetActiveTaskID(ATask.ID);', RefreshBlock);
+  CreateAt := Pos('FWorker := TScanWorker.CreateKnownIssueRefresh(',
+    RefreshBlock);
+  StartAt := Pos('FWorker.Start;', RefreshBlock);
+  ExceptAt := Pos('  except' + LineEnding + '    on E: Exception do',
+    RefreshBlock);
+  AssertTrue((TryAt > 0) and (ActiveAt > TryAt) and (CreateAt > ActiveAt) and
+    (StartAt > CreateAt) and (ExceptAt > StartAt) and
+    (Pos('SetActiveTaskID('''');', Copy(RefreshBlock, ExceptAt, MaxInt)) > 0),
+    'intelligence-refresh UI activation and worker startup must share a guard');
+end;
+
+procedure TestScanDirectoryWarningPrivacyContract;
+var
+  EngineSource, EnterBlock, RootCheckBlock, ScanBlock: string;
+begin
+  EngineSource := S12ReadProjectFile('src/uScanEngine.pas');
+  EnterBlock := ExtractTextSection(EngineSource,
+    'function TScanEngine.EnterDirectory(',
+    'function TScanEngine.ScanDirectory(');
+  ScanBlock := ExtractTextSection(EngineSource,
+    'function TScanEngine.ScanDirectory(',
+    'procedure TScanEngine.CountArtifactStatus(');
+  RootCheckBlock := ExtractTextSection(EngineSource,
+    'procedure TScanEngine.VerifyScanRoot;',
+    'procedure TScanEngine.ReportCacheDiagnostic;');
+  AssertTrue((EnterBlock <> '') and
+    (Pos('WarningPath := NormalizeRelativePath(ARelativeDirectory)',
+      EnterBlock) > 0) and
+    (Pos('[outside selected folder]', EnterBlock) = 0),
+    'directory warnings must retain only the safe root-relative link path');
+  AssertEqual(2, CountTextOccurrences(EnterBlock, 'WarningPath);'),
+    'both EnterDirectory warning emissions must use the selected safe path');
+  AssertTrue((Pos('+ ADirectory', EnterBlock) = 0) and
+    (Pos('if EnterDirectory(AbsolutePath, RelativePath) then', ScanBlock) > 0),
+    'EnterDirectory must receive the relative path and never emit its absolute path');
+  AssertTrue((Pos('ScanRootVerificationFailure', RootCheckBlock) > 0) and
+    (Pos('Unable to enumerate directory .: '' + E.Message', EngineSource) = 0),
+    'root identity failures must map to the fixed path-free diagnostic');
+  AssertTrue((Pos('raise EScanRootVerificationError.Create(', RootCheckBlock) > 0) and
+    (Pos('on E: EScanRootVerificationError do' + LineEnding +
+      '        raise;', ScanBlock) > 0),
+    'root identity failures must bypass the generic enumeration warning path');
+end;
+
+procedure TestWindowsBuildPreflightContract;
+var
+  BuildAt, CompilerAt, LinkerAt, LazbuildAt, RTLAt: SizeInt;
+  LowerText, Text: string;
+begin
+  Text := S12ReadProjectFile('scripts/build-windows.sh');
+  LowerText := LowerCase(Text);
+  LazbuildAt := Pos('if ! command -v lazbuild', Text);
+  CompilerAt := Pos('if ! command -v ppcrossx64', Text);
+  LinkerAt := Pos('if ! command -v x86_64-w64-mingw32-ld', Text);
+  RTLAt := Pos('if ! ppcrossx64 -Twin64 -Px86_64 -Cn', Text);
+  BuildAt := Pos('lazbuild -B', Text);
+  AssertTrue((LazbuildAt > 0) and (CompilerAt > LazbuildAt) and
+    (LinkerAt > CompilerAt) and (RTLAt > LinkerAt) and (BuildAt > RTLAt),
+    'Windows cross-build preflight checks are missing or out of order');
+  AssertTrue((Pos('set -euo pipefail', Text) > 0) and
+    (Pos('cross_probe_directory=$(mktemp -d', Text) > 0) and
+    (Pos('trap ''rm -rf -- "$cross_probe_directory"'' EXIT', Text) > 0),
+    'the guarded target probes or temporary RTL probe cleanup are missing');
+  AssertEqual(4, CountTextOccurrences(Text,
+    'Windows cross-build cannot start:'),
+    'Windows preflight must expose exactly four bounded failure messages');
+  AssertTrue((Pos('lazbuild was not found in PATH', Text) > 0) and
+    (Pos('ppcrossx64 was not found in PATH', Text) > 0) and
+    (Pos('x86_64-w64-mingw32-ld was not found in PATH', Text) > 0) and
+    (Pos('Win64 RTL units are unavailable to ppcrossx64', Text) > 0) and
+    (Pos('ppcrossx64 -iTO', Text) = 0) and
+    (Pos('ppcrossx64 -iTP', Text) = 0),
+    'Windows preflight diagnostics or portable capability checks changed');
+  AssertTrue((Pos('internal migration notes', LowerText) = 0) and
+    (Pos('distro fpc tree', LowerText) = 0) and
+    (Pos('internal-purpleray', LowerText) = 0),
+    'the public build helper contains a private reference or distro-tree assumption');
+end;
+
 procedure TestRailCollapseContract;
 var
   ShellSource, ShellResource, ToggleSection, LayoutBlock, ToggleBlock,
@@ -690,6 +829,11 @@ begin
     @TestDetailsReportPrivacyAndSettings);
   RunTest('details report structure and timestamps',
     @TestDetailsReportStructureAndTimestamps);
+  RunTest('scan-start rollback contract', @TestScanStartRollbackContract);
+  RunTest('scan-directory warning privacy contract',
+    @TestScanDirectoryWarningPrivacyContract);
+  RunTest('Windows build preflight contract',
+    @TestWindowsBuildPreflightContract);
   RunTest('rail collapse contract', @TestRailCollapseContract);
   RunTest('startup splash contract', @TestStartupSplashContract);
   RunTest('red-row and copy contract', @TestRedRowAndCopyContract);

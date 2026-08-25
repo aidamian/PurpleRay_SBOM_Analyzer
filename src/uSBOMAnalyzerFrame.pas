@@ -2150,7 +2150,11 @@ begin
     FPendingScanChecksKnownIssues := False;
   end;
   if (WasActive <> IsActive) and Assigned(FOnActivityChanged) then
-    FOnActivityChanged(Self, IsActive);
+    try
+      FOnActivityChanged(Self, IsActive);
+    except
+      { Navigation decoration must not own scan lifecycle state. }
+    end;
 end;
 
 procedure TSBOMAnalyzerFrame.SetActiveFooter;
@@ -3024,6 +3028,7 @@ end;
 procedure TSBOMAnalyzerFrame.StartScan(const ADirectory: string;
   ASettings: TScanSettings; ACheckKnownIssues: Boolean);
 var
+  FailureMessage: string;
   Task: TScanTask;
   Target: string;
 begin
@@ -3045,32 +3050,62 @@ begin
   Task.Status := tsPending;
   FTaskSearch.Clear;
   FHistoryService.AddTask(Task, 0);
-  { The Details report states the user's online-check intent while the
-    scan is pending or running; the worker records the result itself. }
-  FPendingScanTaskID := Task.ID;
-  FPendingScanChecksKnownIssues := ACheckKnownIssues;
-  SelectTask(Task);
-  SaveHistory;
-  Task.Status := tsRunning;
-  FCancelRequested := False;
-  SetActiveTaskID(Task.ID);
-  UpdateTaskRow(Task);
-  if SelectedTask = Task then
-    PopulateMessages(Task);
-  SetActiveFooter;
-  FProgressPath.Caption := 'Starting scan of ' + Task.TargetRootName + '...';
-  FProgressStats.Caption := 'Preparing worker thread';
-  FWorker := TScanWorker.Create(Task, FHistoryService.DataDirectory,
-    ACheckKnownIssues);
-  FWorker.OnProgress := @WorkerProgress;
-  FWorker.OnComplete := @WorkerComplete;
-  FWorker.Start;
-  SaveHistory;
   try
+    { The Details report states the user's online-check intent while the
+      scan is pending or running; the worker records the result itself. }
+    FPendingScanTaskID := Task.ID;
+    FPendingScanChecksKnownIssues := ACheckKnownIssues;
+    SelectTask(Task);
+    SaveHistory;
+    Task.Status := tsRunning;
+    FCancelRequested := False;
+    SetActiveTaskID(Task.ID);
+    UpdateTaskRow(Task);
+    if SelectedTask = Task then
+      PopulateMessages(Task);
+    SetActiveFooter;
+    FProgressPath.Caption := 'Starting scan of ' + Task.TargetRootName + '...';
+    FProgressStats.Caption := 'Preparing worker thread';
+    FWorker := TScanWorker.Create(Task, FHistoryService.DataDirectory,
+      ACheckKnownIssues);
+    FWorker.OnProgress := @WorkerProgress;
+    FWorker.OnComplete := @WorkerComplete;
+    FWorker.Start;
+  except
+    on E: Exception do
+    begin
+      FailureMessage := E.ClassName + ': ' + E.Message;
+      FreeAndNil(FWorker);
+      Task.Status := tsFailed;
+      Task.CompletedUTC := UTCNowISO8601;
+      Task.DurationMS := 0;
+      Task.Errors.Add('The scan worker could not be started.');
+      FCancelRequested := False;
+      SetActiveTaskID('');
+      UpdateTaskRow(Task);
+      if SelectedTask = Task then
+        PopulateMessages(Task);
+      SetCompactFooter('Scan could not be started; no files were scanned.');
+      try
+        SaveHistory;
+        FHistoryService.NotifyTaskUpdated(Task.ID, False);
+      except
+        on PublishError: Exception do
+          ShowError('The failed scan could not be persisted or published: ' +
+            PublishError.Message);
+      end;
+      UpdateButtons;
+      ShowError('The scan could not be started: ' + FailureMessage);
+      Exit;
+    end;
+  end;
+  try
+    SaveHistory;
     FHistoryService.NotifyTaskUpdated(Task.ID, False);
   except
     on E: Exception do
-      ShowError('The running scan could not be published: ' + E.Message);
+      ShowError('The running scan could not be persisted or published: ' +
+        E.Message);
   end;
   UpdateButtons;
 end;
@@ -3125,14 +3160,14 @@ begin
     (ATask.Status <> tsCompleted) or
     (Trim(ATask.GeneratedSBOMSHA256) = '') then
     Exit;
-  FCancelRequested := False;
-  SetActiveTaskID(ATask.ID);
-  SetActiveFooter;
-  FProgressPath.Caption := 'Refreshing OSV.dev intelligence for ' +
-    ATask.TargetRootName + '...';
-  FProgressStats.Caption := 'No files are being rescanned; the managed SBOM ' +
-    'remains unchanged.';
   try
+    FCancelRequested := False;
+    SetActiveTaskID(ATask.ID);
+    SetActiveFooter;
+    FProgressPath.Caption := 'Refreshing OSV.dev intelligence for ' +
+      ATask.TargetRootName + '...';
+    FProgressStats.Caption := 'No files are being rescanned; the managed ' +
+      'SBOM remains unchanged.';
     FWorker := TScanWorker.CreateKnownIssueRefresh(ATask);
     FWorker.OnProgress := @WorkerProgress;
     FWorker.OnComplete := @WorkerComplete;

@@ -1,5 +1,9 @@
 # PurpleRay SBOM Analyzer
 
+[![Build, test, and release](https://github.com/aidamian/PurpleRay_SBOM_Analyzer/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/aidamian/PurpleRay_SBOM_Analyzer/actions/workflows/build-release.yml) [![Latest release](https://img.shields.io/github/v/release/aidamian/PurpleRay_SBOM_Analyzer?display_name=tag&sort=semver)](https://github.com/aidamian/PurpleRay_SBOM_Analyzer/releases/latest) [![License: Apache-2.0](https://img.shields.io/github/license/aidamian/PurpleRay_SBOM_Analyzer)](LICENSE)
+
+This README describes the current published v1.2.1 feature set. The release badge above and the [latest-release page](https://github.com/aidamian/PurpleRay_SBOM_Analyzer/releases/latest) resolve dynamically when a newer version is published.
+
 PurpleRay SBOM Analyzer is a small, native desktop application that inventories
 local software artifacts and produces deterministic CycloneDX 1.7 JSON. The
 serializer retains tested CycloneDX 1.6 compatibility. It scans without network
@@ -18,11 +22,12 @@ Published builds support Windows x64 and Linux x64 (GTK2), including Linux
 under WSL2 with WSLg. The Cocoa code and packaging are experimental and
 unshipped: macOS has no current release, launcher, or support claim.
 
-Its main window is a lightweight native feature shell with a compact selector
-and tabless workspace. Each completed feature is compiled into the executable
-as an LFM-backed `TFrame`; this is not a plugin system. The selector exposes
-`SBOM Analyzer` and `Compare Scans`, and both features remain alive when the
-user switches between them.
+Its main window is a lightweight native feature shell with a collapsible
+navigation rail and tabless workspace. The rail exposes **Dashboard**, **SBOM
+Analyzer**, and **Knowledge Base**. The dashboard summarizes local scan history
+and opens common actions, while the searchable glossary is bundled for offline
+use. **Compare scans...** is an action that opens a modal comparison window; it
+is not a rail feature or plugin.
 
 ## Install / quick start
 
@@ -159,14 +164,26 @@ Release verification has three distinct layers:
 
 For a small application folder:
 
-1. Launch PurpleRay, leave **SBOM Analyzer** selected, choose **New Scan**, and
-   select the folder.
+1. Launch PurpleRay and choose **New Scan...** from the Dashboard, or open
+   **SBOM Analyzer**, choose **New Scan**, and select the folder.
 2. Review the safe offline defaults, leave the online check unchecked, and
    choose **Start Scan**.
 3. When the task completes, choose **Export...**, then **CycloneDX SBOM...**,
    to save the inventory JSON.
 
-![PurpleRay SBOM Analyzer main window](docs/purpleray-sbom-analyzer.png)
+### Screenshots
+
+![PurpleRay SBOM Analyzer dashboard with local activity and recent scans](assets/images/application-overview.png)
+
+*Application overview. This screenshot uses synthetic illustrative data; no live advisory query was made.*
+
+![PurpleRay SBOM Analyzer components table with known-issue indicators](assets/images/components-known-issues.png)
+
+*Components and known-issue indicators. This screenshot uses synthetic illustrative data; no live advisory query was made.*
+
+![PurpleRay SBOM Analyzer scan Details tab](assets/images/scan-details.png)
+
+*Scan details report. This screenshot uses synthetic illustrative data; no live advisory query was made.*
 
 ### Uninstalling
 
@@ -195,6 +212,11 @@ PurpleRay-managed data; export a backup from the application first if needed.
 
 ## What it does
 
+- Opens on a local Dashboard that summarizes retained scans, components,
+  artifacts, advisories on record, and bundled glossary terms, with a
+  recent-scan table, all computed locally without contacting a service.
+- Includes a searchable Knowledge Base whose glossary content is embedded in
+  the executable and available offline.
 - Runs each recursive scan on a worker thread with cooperative cancellation.
 - Detects package manifests, lock files, license-evidence files, and PE, ELF,
   Mach-O, and universal Mach-O binaries by content.
@@ -222,14 +244,20 @@ PurpleRay-managed data; export a backup from the application first if needed.
 - Marks each generated document as a post-build, incomplete best-effort
   inventory using standard CycloneDX lifecycle and composition fields.
 - Persists scan history and settings as recoverable atomic JSON files.
+- Can reuse a verified local evidence cache for rescans after rehashing each
+  pinned file and matching the scan identity and evidence-affecting settings;
+  headless scans never use this desktop cache.
 - Can perform an explicitly requested, bounded OSV.dev point-in-time lookup
   after the immutable inventory is written, then manually refresh a completed
   task's retained result without rescanning or changing that CycloneDX document.
+- Can export a deterministic, privacy-minimized Security findings report from a
+  valid retained known-issue snapshot without changing the managed SBOM.
 - Can export a separate, deterministic
   [BSI TR-03183-2 v2.1.0](https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/tr-03183.html)
   readiness report that lists observed and missing fields without claiming
   compliance.
-- Compares any two completed retained scans without reading the targets again.
+- Opens a modal comparison for any two completed retained scans without reading
+  the targets again.
 - Excludes absolute filesystem paths from the SBOM unless the user explicitly
   enables them for that scan.
 
@@ -240,21 +268,28 @@ discovered. A lookup with no finding is not a clean bill of health.
 
 ## Using the application
 
-Select **SBOM Analyzer**, choose **New Scan**, and select a folder, or drop a
-local folder onto the main window. The settings dialog identifies that exact
-target in both its title and a copyable read-only field. Review the settings,
-then start the scan.
-The history pane keeps old tasks and has its own search box. Drag the vertical
-splitter to resize it. The detail tabs expose the summary, components,
-artifacts, generated JSON, warnings, and parser messages.
+Use the navigation rail to switch among **Dashboard**, **SBOM Analyzer**, and
+**Knowledge Base**; press **Ctrl+B** to collapse or expand it. The Dashboard
+summarizes locally retained activity and provides **Open**, **New Scan...**, and
+**Compare scans...** actions. The Knowledge Base provides an embedded,
+searchable glossary that remains available offline.
 
-Select **Compare Scans** to compare the retained component inventories from
-two completed tasks. The comparison is directional: the first task is the
-baseline and the second is the comparison. By default, the newest completed
-scan is compared with the newest older scan of the same target when one is
-available. **Swap** reverses that direction. The report shows added, removed,
-and unambiguous version-changed components and can be searched, filtered,
-sorted, or copied without rescanning either folder.
+In **SBOM Analyzer**, choose **New Scan** and select a folder, or drop a local
+folder onto the main window. The settings dialog identifies that exact target
+in both its title and a copyable read-only field. Review the settings, then
+start the scan. The history pane keeps old tasks and has its own search box;
+drag the vertical splitter to resize it. The detail tabs are **Summary**,
+**Components**, **Artifacts**, **SBOM JSON**, and **Details**. The Details tab
+presents the plain-text scan report, including warnings and parser messages.
+
+Choose **Compare scans...** from the Dashboard or above the Analyzer task
+history to open the comparison modal. It compares the retained component
+inventories from two completed tasks. The comparison is directional: the first
+task is the baseline and the second is the comparison. By default, the newest
+completed scan is compared with the newest older scan of the same target when
+one is available. **Swap** reverses that direction. The report shows added,
+removed, and unambiguous version-changed components and can be searched,
+filtered, sorted, or copied without rescanning either folder.
 
 Package URLs provide the strongest comparison identity after removing only
 their version. Records without a usable Package URL use a conservative
@@ -315,16 +350,21 @@ removed.
 Keyboard shortcuts:
 
 - `Ctrl+N`: new scan
-- `Ctrl+1`: switch to SBOM Analyzer
-- `Ctrl+2`: switch to Compare Scans
+- `Ctrl+1`: switch to Dashboard
+- `Ctrl+2`: switch to SBOM Analyzer
+- `Ctrl+3`: switch to Knowledge Base
+- `Ctrl+B`: collapse or expand the navigation rail
 - `Ctrl+E`: open export choices for the selected completed task
 - `Ctrl+C`: copy the selected summary, component, or
   artifact row, or selected comparison rows (including full values hidden by
   compact table cells)
-- `Ctrl+F`: focus the search box in Compare Scans
-- `F5`: refresh the active feature from shared history
-- `Escape`: cancel the active scan only while SBOM Analyzer is active; Compare
-  Scans never cancels a hidden scan
+- `Ctrl+F`: focus the search box in the Compare scans modal
+- `F5`: refresh the active Analyzer or Compare scans view from shared history
+- `Delete`: remove the selected completed, failed, or cancelled task when the
+  task list has focus, after confirmation
+- `Escape`: request cancellation of the active scan only while SBOM Analyzer is
+  active and focus is not in an edit or combo box; Compare scans never cancels
+  a hidden scan
 
 ### Headless command line
 
@@ -449,12 +489,13 @@ lazarus src/purpleray_sbom_analyzer.lpi
 
 Select the GTK2 widgetset for a Linux build. This is the supported Linux/WSL2
 target because it avoids the Lazarus GTK3 Wayland scaling and native-dialog
-failures seen under WSLg. The lightweight application shell,
-SBOM Analyzer workspace, Compare Scans workspace, and scan-settings dialog are
-stored as the human-readable `src/uMainForm.lfm`,
+failures seen under WSLg. The shell, Analyzer workspace, Compare scans frame,
+and scan-settings dialog use the human-readable `src/uMainForm.lfm`,
 `src/uSBOMAnalyzerFrame.lfm`, `src/uCompareScansFrame.lfm`, and
-`src/uScanSettingsDialog.lfm` resources. All four can be edited in the Lazarus
-form designer.
+`src/uScanSettingsDialog.lfm` resources. Dashboard and Knowledge Base are native
+frames with minimal LFM roots and layouts assembled in
+`src/uDashboardFrame.pas` and `src/uKnowledgeBaseFrame.pas`;
+`src/uCompareScansDialog.pas` hosts comparison as a modal action.
 
 ## Tests
 
@@ -467,9 +508,9 @@ bounded SPDX-expression validation, CycloneDX author/lifecycle/composition
 metadata,
 worker exception containment, bounded manifest parsing, case-preserving and
 glob-safe enumeration, special-file and permission handling,
-application-shell/frame ownership and Lazarus resource registration,
-shared-history ownership and safe task deletion, deterministic component
-identity reconciliation and directional scan comparison,
+three-feature shell/navigation contracts, embedded glossary and Dashboard statistics,
+Lazarus resource registration, shared-history ownership and safe task deletion,
+deterministic component identity reconciliation and modal directional scan comparison,
 deterministic/path-safe CycloneDX 1.6/1.7 generation, root-component promotion,
 observed dependency edges, honest version/scope fields, Package URL
 normalization, declared hashes and occurrence locations, bounded fake-transport
@@ -520,9 +561,9 @@ Files in that directory are user data:
 
 History and settings are written through a flushed temporary file, with one
 backup retained. A malformed active history is preserved and the backup is
-loaded when valid. Both compiled features use one shared in-memory history
-service, so completed scans and deletions become visible without maintaining
-divergent copies of the task database.
+loaded when valid. The Dashboard, Analyzer, and comparison modal use one shared
+in-memory history service, so completed scans and deletions become visible
+without maintaining divergent copies of the task database.
 
 Known-issue history contains no raw network payload, pagination token, rejected
 coordinate value, file path sent to OSV.dev, or remembered online-consent flag.
@@ -630,16 +671,19 @@ Neither scanner is packaged, invoked by, or required to run PurpleRay.
 ## Project layout
 
 ```text
-assets/                    application icon sources
+assets/                    application icon sources and public screenshots
 packaging/linux/           desktop, icon, AppStream, and Debian inputs
 packaging/scoop/           generated Scoop-manifest template
 packaging/winget/          generated WinGet multi-file templates
 packaging/macos/           experimental, unshipped bundle metadata template
-docs/                      user-facing glossary and application screenshot
+docs/                      user-facing glossary source
+schemas/                   closed JSON schemas for exported companion reports
 scripts/                   local build, test, version, and packaging helpers
 src/                       Lazarus project, UI, scanner, parsers, and persistence
 tests/                     deterministic non-UI test runner and fixtures
 .github/workflows/         native Windows/Linux CI and release automation
+VERSION                    operator-managed release version authority
+start-*                    verified release launchers for Linux, WSL2, and Windows
 ```
 
 The tracked root `VERSION` file is the sole operator-managed version authority.
@@ -787,7 +831,8 @@ the Foundation approves the project and supplies its project identifiers.
 
 This program will not transfer any information to other networked systems
 unless specifically requested by the user or the person installing or
-operating it. Inventory scanning and headless operation are local and offline.
+operating it. Inventory scanning, the Dashboard, the Knowledge Base, and
+headless operation are local and offline.
 The per-scan OSV.dev choice is unchecked every time. A completed-scan refresh
 also requires a new confirmation. Both send only eligible exact-version Package
 URLs after the managed SBOM is complete; the UI discloses this before each

@@ -537,6 +537,14 @@ begin
         'rebound root published an artifact');
       AssertEqual(0, Task.Components.Count,
         'rebound root published a component');
+      AssertEqual(1, Task.Errors.Count,
+        'rebound root did not produce one bounded task error');
+      AssertEqual('The scan failed because the selected folder''s identity ' +
+        'could not be verified safely.', Task.Errors[0],
+        'rebound root exposed a raw filesystem diagnostic');
+      AssertTrue((Pos(RootPath, Task.Errors[0]) = 0) and
+        (Pos(Engine.MovedPath, Task.Errors[0]) = 0),
+        'rebound-root error exposed an absolute path');
     end
     else
     begin

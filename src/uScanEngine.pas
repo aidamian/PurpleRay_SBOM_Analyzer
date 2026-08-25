@@ -125,6 +125,7 @@ type
     }
     procedure ReportProgress(AForce: Boolean = False);
     procedure AddWarning(const AMessage: string);
+    procedure VerifyScanRoot;
 
     {**
       Validates execution options and allocates reusable scanner state.
@@ -401,6 +402,8 @@ type
       ----------
       ADirectory
         Directory reached directly or through a symbolic link.
+      ARelativeDirectory
+        Root-relative spelling of that traversal path for task diagnostics.
 
       Returns
       -------
@@ -412,7 +415,8 @@ type
       None
         Boundary and loop failures become task warnings.
     }
-    function EnterDirectory(const ADirectory: string): Boolean;
+    function EnterDirectory(const ADirectory,
+      ARelativeDirectory: string): Boolean;
 
     {**
       Recursively scans one directory in deterministic filename order.
@@ -639,6 +643,9 @@ const
     avoids FPC's platform-symbol warning while requesting lstat-backed Unix
     enumeration and preserving the raw Windows reparse bit. }
   EnumeratedLinkAttribute = $00000400;
+  ScanRootVerificationFailure =
+    'The scan failed because the selected folder''s identity could not be ' +
+    'verified safely.';
 
 {**
   Returns a bounded OS/CPU token for cache-context isolation.
@@ -779,6 +786,7 @@ begin
 end;
 
 type
+  EScanRootVerificationError = class(Exception);
   EScanAnalysisCoordinatorError = class(Exception);
 
   {**
@@ -967,6 +975,16 @@ begin
     FTask.Warnings.Add(AMessage);
 end;
 
+procedure TScanEngine.VerifyScanRoot;
+begin
+  try
+    FRootPin.VerifyCurrentPath;
+  except
+    on E: Exception do
+      raise EScanRootVerificationError.Create(ScanRootVerificationFailure);
+  end;
+end;
+
 procedure TScanEngine.ReportCacheDiagnostic;
 begin
   if FCacheDiagnosticReported then
@@ -1144,7 +1162,7 @@ begin
         InputReason;
     end;
   end;
-  FRootPin.VerifyCurrentPath;
+  VerifyScanRoot;
 
   if AResult.FatalError <> '' then
   begin
@@ -1306,23 +1324,26 @@ begin
     'lock-file evidence over installed dependency trees when available.');
 end;
 
-function TScanEngine.EnterDirectory(const ADirectory: string): Boolean;
+function TScanEngine.EnterDirectory(const ADirectory,
+  ARelativeDirectory: string): Boolean;
 var
-  Canonical: string;
+  Canonical, WarningPath: string;
   Index: Integer;
+  IsInsideRoot: Boolean;
 begin
   Canonical := CanonicalPath(ADirectory);
-  if (not FTask.Settings.AllowOutsideRoot) and
-    not PathIsWithin(Canonical, FRootCanonical) then
+  IsInsideRoot := PathIsWithin(Canonical, FRootCanonical);
+  WarningPath := NormalizeRelativePath(ARelativeDirectory);
+  if (not FTask.Settings.AllowOutsideRoot) and not IsInsideRoot then
   begin
     AddWarning('Skipped symbolic-link target outside the selected root: ' +
-      ADirectory);
+      WarningPath);
     Exit(False);
   end;
   if FVisitedDirectories.Find(Canonical, Index) then
   begin
     AddWarning('Skipped an already visited directory (possible symbolic-link '+
-      'loop): ' + ADirectory);
+      'loop): ' + WarningPath);
     Exit(False);
   end;
   FVisitedDirectories.Add(Canonical);
@@ -1428,12 +1449,12 @@ begin
                   identity capture opens its short-lived native handle. }
                 if not EnsureAnalysisCapacity then
                   Exit;
-                FRootPin.VerifyCurrentPath;
+                VerifyScanRoot;
                 Entry.IdentityCaptured := TryCaptureVerifiedFileIdentity(
                   IdentityPath, CaptureRoot,
                   Entry.WasLink and FTask.Settings.FollowSymbolicLinks,
                   Entry.Identity, Entry.IdentityReason);
-                FRootPin.VerifyCurrentPath;
+                VerifyScanRoot;
               end;
             end;
             Entries.Add(Entry);
@@ -1449,6 +1470,8 @@ begin
         FindClose(SearchRecord);
       end;
     except
+      on E: EScanRootVerificationError do
+        raise;
       on E: EScanAnalysisCoordinatorError do
         raise;
       on E: Exception do
@@ -1510,7 +1533,7 @@ begin
 
       if EntryKind = fsekDirectory then
       begin
-        if EnterDirectory(AbsolutePath) then
+        if EnterDirectory(AbsolutePath, RelativePath) then
           if not ScanDirectory(AbsolutePath, RelativePath) then
             Exit;
       end
@@ -1561,7 +1584,7 @@ begin
   FCurrentRelativePath := NormalizeRelativePath(ARelativePath);
   BeforeVerifiedInputOpen(AFileName, FCurrentRelativePath,
     AExpectedIdentity);
-  FRootPin.VerifyCurrentPath;
+  VerifyScanRoot;
   if FTask.Settings.AllowOutsideRoot then
     VerificationRoot := ''
   else
@@ -1574,7 +1597,7 @@ begin
       FCurrentRelativePath + ' (' + InputReason + ')');
     Exit(True);
   end;
-  FRootPin.VerifyCurrentPath;
+  VerifyScanRoot;
 
   try
     Job := TScanAnalysisJob.Create(FNextAnalysisOrdinal, AFileName,
@@ -1651,31 +1674,27 @@ begin
       try
         FRootPin := PinExistingDirectory(FTask.TargetDirectory);
       except
-        on E: EInOutError do
-          AddWarning('Unable to enumerate directory .: ' + E.Message);
+        on E: Exception do
+          raise EScanRootVerificationError.Create(
+            ScanRootVerificationFailure);
       end;
-      if FRootPin = nil then
-        CompletedNormally := True
+      FRootCanonical := FRootPin.DirectoryName;
+      VerifyScanRoot;
+      FVisitedDirectories.Add(FRootCanonical);
+      InitializeRescanCache;
+      FAnalysisPool := TScanAnalysisPool.Create(ResolveWorkerCount);
+      CompletedNormally := ScanDirectory(FRootCanonical, '');
+      if CompletedNormally then
+        CompletedNormally := DrainAllAnalysisResults;
+      if CompletedNormally then
+        FAnalysisPool.StopAndJoin
       else
       begin
-        FRootCanonical := FRootPin.DirectoryName;
-        FRootPin.VerifyCurrentPath;
-        FVisitedDirectories.Add(FRootCanonical);
-        InitializeRescanCache;
-        FAnalysisPool := TScanAnalysisPool.Create(ResolveWorkerCount);
-        CompletedNormally := ScanDirectory(FRootCanonical, '');
-        if CompletedNormally then
-          CompletedNormally := DrainAllAnalysisResults;
-        if CompletedNormally then
-          FAnalysisPool.StopAndJoin
-        else
-        begin
-          FAnalysisPool.CancelAndJoin;
-          DrainCancelledPrefix;
-        end;
-        FCurrentRelativePath := '';
-        FRootPin.VerifyCurrentPath;
+        FAnalysisPool.CancelAndJoin;
+        DrainCancelledPrefix;
       end;
+      FCurrentRelativePath := '';
+      VerifyScanRoot;
       if CompletedNormally then
         AddIgnoredDirectorySummary;
       FinalizationAttempted := True;

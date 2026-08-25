@@ -1953,6 +1953,13 @@ begin
       'README bootstrap no longer preserves reusable launchers');
     AssertTrue(Pos('### First SBOM in 60 seconds', ReadmeText) > 0,
       'README lost the three-step first-SBOM walkthrough');
+    AssertTrue((Pos('actions/workflows/build-release.yml/badge.svg?branch=main',
+      ReadmeText) > 0) and
+      (Pos('img.shields.io/github/v/release/aidamian/' +
+      'PurpleRay_SBOM_Analyzer', ReadmeText) > 0) and
+      (Pos('img.shields.io/github/license/aidamian/' +
+      'PurpleRay_SBOM_Analyzer', ReadmeText) > 0),
+      'README release-status badges are missing or incomplete');
     AssertTrue((Pos('[glossary](docs/GLOSSARY.md)', ReadmeText) > 0) and
       (Pos('**Added component**', GlossaryText) > 0) and
       (Pos('**BSI TR-03183-2 v2.1.0**', GlossaryText) > 0) and
@@ -2007,9 +2014,24 @@ begin
     AssertTrue((Pos('WINGET_SUBMISSION_ENABLED', ReadmeText) > 0) and
       (Pos('WINGET_CREATE_GITHUB_TOKEN', ReadmeText) > 0),
       'README does not document the credential-gated WinGet setup');
-    AssertTrue(FileExists(IncludeTrailingPathDelimiter(ProjectRoot) + 'docs' +
-      DirectorySeparator + 'purpleray-sbom-analyzer.png'),
-      'privacy-safe main-window screenshot is missing');
+    AssertTrue(
+      FileExists(IncludeTrailingPathDelimiter(ProjectRoot) + 'assets' +
+      DirectorySeparator + 'images' + DirectorySeparator +
+      'application-overview.png') and
+      FileExists(IncludeTrailingPathDelimiter(ProjectRoot) + 'assets' +
+      DirectorySeparator + 'images' + DirectorySeparator +
+      'components-known-issues.png') and
+      FileExists(IncludeTrailingPathDelimiter(ProjectRoot) + 'assets' +
+      DirectorySeparator + 'images' + DirectorySeparator +
+      'scan-details.png') and
+      (Pos('(assets/images/application-overview.png)', ReadmeText) > 0) and
+      (Pos('(assets/images/components-known-issues.png)', ReadmeText) > 0) and
+      (Pos('(assets/images/scan-details.png)', ReadmeText) > 0) and
+      (Pos('synthetic illustrative data', ReadmeText) > 0) and
+      (Pos('no live advisory query was made', ReadmeText) > 0) and
+      (not FileExists(IncludeTrailingPathDelimiter(ProjectRoot) + 'docs' +
+      DirectorySeparator + 'purpleray-sbom-analyzer.png')),
+      'the sanitized public screenshot set is missing, stale, or mislabeled');
   finally
     Lines.Free;
   end;
@@ -6587,12 +6609,19 @@ begin
 
     Task.TargetDirectory := RestrictedName;
     Task.TargetRootName := 'restricted';
-    AssertTrue(Engine.Scan(Task),
-      'unreadable target root should complete with an explicit warning');
+    AssertTrue(not Engine.Scan(Task),
+      'unreadable target root should fail closed');
+    AssertTrue(Task.Status = tsFailed,
+      'unreadable target root did not fail the task');
     AssertEqual(0, Task.FilesInspected,
       'unreadable target root should not report inspected files');
-    AssertTrue(StringListContainsText(Task.Warnings, 'unable to enumerate'),
-      'unreadable target root was presented as a clean empty scan');
+    AssertEqual(1, Task.Errors.Count,
+      'unreadable target root did not produce one bounded task error');
+    AssertEqual('The scan failed because the selected folder''s identity ' +
+      'could not be verified safely.', Task.Errors[0],
+      'unreadable target root exposed a raw filesystem diagnostic');
+    AssertTrue(Pos(RestrictedName, Task.Errors[0]) = 0,
+      'unreadable-root error exposed an absolute path');
   finally
     fpChmod(PChar(RestrictedName), 448);
     Engine.Free;
@@ -6630,6 +6659,11 @@ begin
     AssertEqual(1, Task.FilesInspected,
       'symlink loop caused a file to be scanned repeatedly');
     AssertTrue(Task.Warnings.Count > 0, 'symlink loop should produce a warning');
+    AssertTrue(StringListContainsText(Task.Warnings,
+      'possible symbolic-link loop): a/loop'),
+      'symlink-loop warning omitted the root-relative link path');
+    AssertTrue(not StringListContainsText(Task.Warnings, RootName),
+      'symlink-loop warning exposed the absolute scan root');
   finally
     Engine.Free;
     Task.Free;
