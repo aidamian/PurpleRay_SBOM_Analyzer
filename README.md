@@ -2,7 +2,7 @@
 
 [![Build, test, and release](https://github.com/aidamian/PurpleRay_SBOM_Analyzer/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/aidamian/PurpleRay_SBOM_Analyzer/actions/workflows/build-release.yml) [![Latest release](https://img.shields.io/github/v/release/aidamian/PurpleRay_SBOM_Analyzer?display_name=tag&sort=semver)](https://github.com/aidamian/PurpleRay_SBOM_Analyzer/releases/latest) [![License: Apache-2.0](https://img.shields.io/github/license/aidamian/PurpleRay_SBOM_Analyzer)](LICENSE)
 
-This README describes the current published v1.2.1 feature set. The release badge above and the [latest-release page](https://github.com/aidamian/PurpleRay_SBOM_Analyzer/releases/latest) resolve dynamically when a newer version is published.
+This README describes the v1.2.2 feature set. The release badge above and the [latest-release page](https://github.com/aidamian/PurpleRay_SBOM_Analyzer/releases/latest) identify the newest release actually published on GitHub, independently of the version documented here.
 
 PurpleRay SBOM Analyzer is a small, native desktop application that inventories
 local software artifacts and produces deterministic CycloneDX 1.7 JSON. The
