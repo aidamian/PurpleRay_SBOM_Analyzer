@@ -119,6 +119,23 @@ object MainForm: TMainForm
       GroupIndex = 1
       OnClick = KnowledgeNavClicked
     end
+    object AboutButton: TSpeedButton
+      Left = 8
+      Height = 30
+      Top = 631
+      Width = 152
+      Align = alBottom
+      BorderSpacing.Left = 8
+      BorderSpacing.Right = 8
+      BorderSpacing.Bottom = 4
+      Caption = 'About'
+      Alignment = taLeftJustify
+      Margin = 10
+      Spacing = 8
+      Flat = True
+      ParentShowHint = False
+      OnClick = AboutClicked
+    end
     object RailToggleButton: TSpeedButton
       Left = 8
       Height = 26

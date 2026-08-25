@@ -37,7 +37,7 @@ uses
   uPEVersionInfo, uScanAnalysis, uScanPool, uScanCache, uSettingsStore,
   uOSVCore, uKnownIssues, uKnownIssueService, uBSIReadiness,
   uSecurityFindings, uGlossary, uGlossaryContent, uDashboardStats,
-  uScanDetailsReport;
+  uScanDetailsReport, uLicenseContent;
 
 type
   TTestMethod = procedure;
@@ -2301,8 +2301,8 @@ begin
       (Pos('Position =', CompareResource) = 0),
       'Compare Scans retained form-only resource properties');
 
-    AssertTrue(Pos('<Units Count="7">', ProjectText) > 0,
-      'the Lazarus project unit count does not include both feature frames and CLI units');
+    AssertTrue(Pos('<Units Count="8">', ProjectText) > 0,
+      'the Lazarus project unit count does not include the feature frames, CLI units, and About form');
     AssertTrue(Pos('<Filename Value="uSBOMAnalyzerFrame.pas"/>',
       ProjectText) > 0, 'the Lazarus project does not list the feature frame');
     AssertTrue(Pos('<ComponentName Value="SBOMAnalyzerFrame"/>',
@@ -6876,6 +6876,7 @@ end;
 {$I sprint10_regressions.inc}
 {$I sprint11_regressions.inc}
 {$I sprint12_regressions.inc}
+{$I sprint13_regressions.inc}
 
 begin
   ProjectRoot := ExpandFileName(ExtractFilePath(ParamStr(0)) + '..' +
@@ -6951,6 +6952,7 @@ begin
   RunSprint10RegressionTests;
   RunSprint11RegressionTests;
   RunSprint12RegressionTests;
+  RunSprint13RegressionTests;
   WriteLn(Format('%d tests: %d passed, %d failed, %d skipped',
     [TestCount, PassCount, FailureCount, SkipCount]));
   RemoveTemporaryTree(TemporaryRoot);

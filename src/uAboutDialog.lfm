@@ -1,0 +1,132 @@
+object AboutDialog: TAboutDialog
+  Left = 320
+  Height = 520
+  Top = 190
+  Width = 640
+  BorderIcons = [biSystemMenu]
+  BorderStyle = bsSizeable
+  Caption = 'About PurpleRay SBOM Analyzer'
+  ClientHeight = 520
+  ClientWidth = 640
+  Constraints.MinHeight = 360
+  Constraints.MinWidth = 480
+  Position = poOwnerFormCenter
+  ShowInTaskBar = stNever
+  LCLVersion = '4.8.0.4'
+  object HeaderPanel: TPanel
+    Left = 0
+    Height = 116
+    Top = 0
+    Width = 640
+    Align = alTop
+    BevelOuter = bvNone
+    ClientHeight = 116
+    ClientWidth = 640
+    TabOrder = 0
+    object ApplicationIcon: TImage
+      Left = 16
+      Height = 72
+      Top = 18
+      Width = 72
+      Center = True
+      Proportional = True
+      Stretch = True
+    end
+    object ProductLabel: TLabel
+      Left = 104
+      Height = 24
+      Top = 18
+      Width = 256
+      Caption = 'PurpleRay SBOM Analyzer'
+      Font.Height = -20
+      Font.Style = [fsBold]
+      ParentFont = False
+    end
+    object VersionLabel: TLabel
+      Left = 106
+      Height = 15
+      Top = 48
+      Width = 72
+      Caption = 'Version'
+    end
+    object CopyrightLabel: TLabel
+      Left = 106
+      Height = 15
+      Top = 70
+      Width = 245
+      Caption = 'Copyright (c) 2026 Andrei Ionut Damian'
+    end
+    object HomepageLabel: TLabel
+      Left = 106
+      Height = 15
+      Top = 91
+      Width = 361
+      Caption = 'https://github.com/aidamian/PurpleRay_SBOM_Analyzer'
+      Font.Color = clGrayText
+      ParentFont = False
+    end
+  end
+  object ButtonPanel: TPanel
+    Left = 0
+    Height = 48
+    Top = 472
+    Width = 640
+    Align = alBottom
+    BevelOuter = bvNone
+    ClientHeight = 48
+    ClientWidth = 640
+    TabOrder = 2
+    object CloseButton: TButton
+      Left = 585
+      Height = 29
+      Top = 8
+      Width = 43
+      Anchors = [akTop, akRight]
+      AutoSize = True
+      Cancel = True
+      Caption = 'Close'
+      Default = True
+      ModalResult = 11
+      TabOrder = 0
+    end
+  end
+  object ContentPanel: TPanel
+    Left = 0
+    Height = 356
+    Top = 116
+    Width = 640
+    Align = alClient
+    BevelOuter = bvNone
+    ClientHeight = 356
+    ClientWidth = 640
+    TabOrder = 1
+    object LicenseLabel: TLabel
+      Left = 12
+      Height = 28
+      Top = 0
+      Width = 616
+      Align = alTop
+      AutoSize = False
+      BorderSpacing.Left = 12
+      BorderSpacing.Right = 12
+      Caption = 'Apache License, Version 2.0'
+      Font.Style = [fsBold]
+      Layout = tlCenter
+      ParentFont = False
+    end
+    object LicenseMemo: TMemo
+      Left = 12
+      Height = 320
+      Top = 28
+      Width = 616
+      Align = alClient
+      BorderSpacing.Left = 12
+      BorderSpacing.Right = 12
+      BorderSpacing.Bottom = 8
+      ReadOnly = True
+      ScrollBars = ssAutoBoth
+      TabOrder = 0
+      WordWrap = False
+    end
+  end
+end

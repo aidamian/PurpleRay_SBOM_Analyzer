@@ -97,3 +97,4 @@ src/lib/
 tests/bin/
 src/sbom_analyzer.res
 src/purpleray_sbom_analyzer.res
+tests/about_dialog_ui_probe.res

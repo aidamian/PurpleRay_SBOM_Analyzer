@@ -197,7 +197,7 @@ jobs:
             timeout --signal=TERM --kill-after=10s 120s \
             apt-get install "${apt_options[@]}" \
               --yes --no-install-recommends libgtk2.0-dev \
-              appstream desktop-file-utils python3-jsonschema
+              appstream desktop-file-utils python3-jsonschema xvfb xauth
 
       - name: Cache pinned Linux toolchain installers
         if: runner.os == 'Linux'
@@ -382,6 +382,37 @@ jobs:
           lazbuild -B --build-mode=Release
           --widgetset=${{ matrix.config.widgetset }}
           --cpu=x86_64 src/purpleray_sbom_analyzer.lpi
+
+      - name: Build native About-dialog UI probe
+        run: >-
+          lazbuild -B --build-mode=Release
+          --widgetset=${{ matrix.config.widgetset }}
+          --cpu=x86_64 tests/about_dialog_ui_probe.lpi
+
+      - name: Verify native Linux About dialog
+        if: runner.os == 'Linux'
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          data_root="$RUNNER_TEMP/purpleray-about-dialog-data"
+          mkdir -p "$data_root"
+          timeout --signal=TERM --kill-after=5s 45s \
+            xvfb-run --auto-servernum \
+              --server-args='-screen 0 1280x800x24 -nolisten tcp -dpi 96' \
+              build/ui-probe/about-dialog-ui-probe "$data_root"
+
+      - name: Verify native Windows About dialog
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $probe = (Resolve-Path 'build/ui-probe/about-dialog-ui-probe.exe').Path
+          $dataRoot = Join-Path $env:RUNNER_TEMP 'purpleray-about-dialog-data'
+          New-Item -ItemType Directory -Force -Path $dataRoot | Out-Null
+          & $probe $dataRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "About-dialog UI probe failed with exit code $LASTEXITCODE"
+          }
 
       - name: Verify native Linux command line without a display
         if: runner.os == 'Linux'

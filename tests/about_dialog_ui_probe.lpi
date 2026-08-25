@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CONFIG>
+  <ProjectOptions>
+    <Version Value="12"/>
+    <General>
+      <SessionStorage Value="InIDEConfig"/>
+      <MainUnit Value="0"/>
+      <Title Value="PurpleRay SBOM Analyzer About Dialog UI Probe"/>
+      <Scaled Value="True"/>
+      <ResourceType Value="res"/>
+      <UseXPManifest Value="True"/>
+      <XPManifest>
+        <DpiAware Value="True/PM"/>
+        <LongPathAware Value="True"/>
+      </XPManifest>
+    </General>
+    <BuildModes Count="1">
+      <Item1 Name="Release" Default="True"/>
+    </BuildModes>
+    <RequiredPackages Count="1">
+      <Item1><PackageName Value="LCL"/></Item1>
+    </RequiredPackages>
+    <Units Count="1">
+      <Unit0>
+        <Filename Value="about_dialog_ui_probe.lpr"/>
+        <IsPartOfProject Value="True"/>
+      </Unit0>
+    </Units>
+  </ProjectOptions>
+  <CompilerOptions>
+    <Version Value="11"/>
+    <Target>
+      <Filename Value="../build/ui-probe/about-dialog-ui-probe"/>
+    </Target>
+    <SearchPaths>
+      <OtherUnitFiles Value="../src"/>
+      <UnitOutputDirectory Value="../build/ui-probe/units/$(TargetCPU)-$(TargetOS)"/>
+    </SearchPaths>
+    <CodeGeneration>
+      <SmartLinkUnit Value="True"/>
+      <Optimizations><OptimizationLevel Value="2"/></Optimizations>
+    </CodeGeneration>
+    <Linking><LinkSmart Value="True"/></Linking>
+  </CompilerOptions>
+</CONFIG>

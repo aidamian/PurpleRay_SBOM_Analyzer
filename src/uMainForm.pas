@@ -32,7 +32,7 @@ interface
 uses
   Classes, Forms, Controls, StdCtrls, ExtCtrls, Buttons, Graphics,
   uTaskHistory, uSBOMAnalyzerFrame, uCompareScansDialog, uDashboardFrame,
-  uKnowledgeBaseFrame, uSplashForm;
+  uKnowledgeBaseFrame, uSplashForm, uAboutDialog;
 
 const
   FeatureIndexDashboard = 0;
@@ -50,6 +50,7 @@ type
     DashboardNavButton: TSpeedButton;
     AnalyzerNavButton: TSpeedButton;
     KnowledgeNavButton: TSpeedButton;
+    AboutButton: TSpeedButton;
     RailToggleButton: TSpeedButton;
     VersionLabel: TLabel;
     WorkspaceNotebook: TNotebook;
@@ -194,6 +195,25 @@ type
       None
     }
     procedure KnowledgeNavClicked(Sender: TObject);
+
+    {**
+      Opens the modal product and license information dialog.
+
+      Parameters
+      ----------
+      Sender
+        LCL event source; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      EOutOfMemory
+        Propagated if the dialog cannot be allocated.
+    }
+    procedure AboutClicked(Sender: TObject);
 
     {**
       Collapses the rail to glyphs only, or expands it back.
@@ -804,12 +824,13 @@ end;
 
 procedure TMainForm.ApplyRailLayout;
 var
-  Buttons: array[0..2] of TSpeedButton;
+  Buttons: array[0..3] of TSpeedButton;
   I: Integer;
 begin
   Buttons[0] := DashboardNavButton;
   Buttons[1] := AnalyzerNavButton;
   Buttons[2] := KnowledgeNavButton;
+  Buttons[3] := AboutButton;
   NavigationRail.DisableAutoSizing;
   try
     if FRailCollapsed then
@@ -832,6 +853,7 @@ begin
       DashboardNavButton.Hint := 'Dashboard';
       AnalyzerNavButton.Hint := 'SBOM Analyzer';
       KnowledgeNavButton.Hint := 'Knowledge Base';
+      AboutButton.Hint := 'About ' + AppName + ' (F1)';
     end
     else
     begin
@@ -855,6 +877,7 @@ begin
       the toggle directly above it after visibility changes. }
     VersionLabel.Top := NavigationRail.ClientHeight;
     RailToggleButton.Top := VersionLabel.Top - RailToggleButton.Height - 1;
+    AboutButton.Top := RailToggleButton.Top - AboutButton.Height - 1;
   finally
     NavigationRail.EnableAutoSizing;
   end;
@@ -936,6 +959,21 @@ begin
     Glyph.Canvas.MoveTo(P(8), P(2));
     Glyph.Canvas.LineTo(P(8), P(14));
     KnowledgeNavButton.Glyph.Assign(Glyph);
+  finally
+    Glyph.Free;
+  end;
+  { About: circled information mark. }
+  Glyph := NewGlyph;
+  try
+    Glyph.Canvas.Brush.Style := bsClear;
+    Glyph.Canvas.Pen.Width := P(2);
+    Glyph.Canvas.Ellipse(P(1), P(1), P(15), P(15));
+    Glyph.Canvas.MoveTo(P(8), P(7));
+    Glyph.Canvas.LineTo(P(8), P(12));
+    Glyph.Canvas.Pen.Width := P(3);
+    Glyph.Canvas.MoveTo(P(8), P(4));
+    Glyph.Canvas.LineTo(P(8), P(5));
+    AboutButton.Glyph.Assign(Glyph);
   finally
     Glyph.Free;
   end;
@@ -1142,6 +1180,12 @@ end;
 procedure TMainForm.FormKeyPressed(Sender: TObject; var Key: Word;
   Shift: TShiftState);
 begin
+  if Key = VK_F1 then
+  begin
+    AboutClicked(nil);
+    Key := 0;
+    Exit;
+  end;
   if PrimaryShortcut(Shift) then
     case Key of
       VK_1:
@@ -1190,6 +1234,11 @@ end;
 procedure TMainForm.KnowledgeNavClicked(Sender: TObject);
 begin
   SelectFeature(FeatureIndexKnowledgeBase);
+end;
+
+procedure TMainForm.AboutClicked(Sender: TObject);
+begin
+  TAboutDialog.Execute(Self);
 end;
 
 procedure TMainForm.AnalyzerActivityChanged(Sender: TObject;
