@@ -147,10 +147,10 @@ object MainForm: TMainForm
     end
   end
   object WorkspaceNotebook: TNotebook
-    Left = 190
+    Left = 168
     Height = 720
     Top = 0
-    Width = 990
+    Width = 1012
     Align = alClient
     PageIndex = 0
     TabOrder = 1

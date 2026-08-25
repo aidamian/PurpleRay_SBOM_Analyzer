@@ -537,6 +537,9 @@ type
     FFlaggedPackageURLs: TStringList;
     FDetailsToolbar: TPanel;
     FCopyDetailsButton: TButton;
+    FCopiedResetTimer: TTimer;
+    FPendingScanTaskID: string;
+    FPendingScanChecksKnownIssues: Boolean;
 
     {**
       Draws components that have at least one known-issue match in red.
@@ -622,8 +625,6 @@ type
         Cell rectangle in canvas coordinates.
       AText
         Cell text.
-      ASelected
-        True when the row is selected, to keep the highlight background.
 
       Returns
       -------
@@ -634,7 +635,7 @@ type
       None
     }
     procedure PaintFlaggedCell(Sender: TCustomListView; const ARect: TRect;
-      const AText: string; ASelected: Boolean);
+      const AText: string);
 
     {**
       Copies the plain-text Details report to the clipboard.
@@ -653,6 +654,62 @@ type
       None
     }
     procedure CopyDetailsClicked(Sender: TObject);
+
+    {**
+      Restores the copy button caption after the confirmation interval.
+
+      Parameters
+      ----------
+      Sender
+        Timer; not otherwise used.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure CopiedResetTimerTick(Sender: TObject);
+
+    {**
+      Supplies a hint explaining a red (flagged) component row.
+
+      Parameters
+      ----------
+      Sender
+        Component list.
+      HintInfo
+        LCL hint record; HintStr and CursorRect are filled for flagged rows.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure ComponentListShowHint(Sender: TObject; HintInfo: PHintInfo);
+
+    {**
+      Opens the Details tab when a flagged component row is double-clicked.
+
+      Parameters
+      ----------
+      Sender
+        Component list.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure ComponentListDoubleClicked(Sender: TObject);
 
     {**
       Raises the shell-facing compare request for this feature.
@@ -1647,7 +1704,7 @@ uses
   Clipbrd, Graphics, LCLIntf, LCLType, Types, uVersionInfo, uTimeUtils, uPlatform,
   uAtomicFiles, uBSIReadiness, uJSONUtils, uScanSettingsDialog, uExportUtils,
   uKnownIssues, uKnownIssueService, uOSVCore, uPresentation, uSecurityFindings,
-  uSaveDialogCompat;
+  uSaveDialogCompat, uScanDetailsReport;
 
 {$R *.lfm}
 
@@ -1861,6 +1918,10 @@ begin
     the sub-item painter is wired only where it is needed. }
   FComponentList.OnCustomDrawSubItem := @ComponentListCustomDrawSubItem;
   {$ENDIF}
+  FComponentList.ShowHint := True;
+  FComponentList.ParentShowHint := False;
+  FComponentList.OnShowHint := @ComponentListShowHint;
+  FComponentList.OnDblClick := @ComponentListDoubleClicked;
   { Details tab: plain-text report toolbar with a clipboard action. }
   FDetailsToolbar := TPanel.Create(Self);
   FDetailsToolbar.Parent := MessagesPage;
@@ -1880,6 +1941,10 @@ begin
   FCopyDetailsButton.BorderSpacing.Top := 4;
   FCopyDetailsButton.BorderSpacing.Right := 8;
   FCopyDetailsButton.OnClick := @CopyDetailsClicked;
+  FCopiedResetTimer := TTimer.Create(Self);
+  FCopiedResetTimer.Enabled := False;
+  FCopiedResetTimer.Interval := 1500;
+  FCopiedResetTimer.OnTimer := @CopiedResetTimerTick;
   with TLabel.Create(Self) do
   begin
     Parent := FDetailsToolbar;
@@ -2079,6 +2144,11 @@ begin
   WasActive := GetScanActive;
   FActiveTaskID := AValue;
   IsActive := GetScanActive;
+  if not IsActive then
+  begin
+    FPendingScanTaskID := '';
+    FPendingScanChecksKnownIssues := False;
+  end;
   if (WasActive <> IsActive) and Assigned(FOnActivityChanged) then
     FOnActivityChanged(Self, IsActive);
 end;
@@ -2498,7 +2568,6 @@ begin
     IssueCounts.Duplicates := dupError;
     IssueCounts.CaseSensitive := True;
     IssueCounts.UseLocale := False;
-    FFlaggedPackageURLs.Clear;
     if ATask.KnownIssueCheck.Requested then
       for I := 0 to ATask.KnownIssueCheck.MatchCount - 1 do
       begin
@@ -2709,287 +2778,23 @@ begin
 end;
 
 procedure TSBOMAnalyzerFrame.PopulateMessages(ATask: TScanTask);
-const
-  MaximumDisplayedKnownIssueMatches = 500;
 var
-  ArtifactNoteCount, I, J, Shown, Omitted: Integer;
-  Artifact: TArtifact;
-  Component: uModels.TComponent;
-  FirstSection: Boolean;
-  Match: TKnownIssueMatch;
-  Affected: TStringList;
-  PackageURL, PackageLabel: string;
-
-  procedure AddLine(const AText: string);
-  begin
-    FMessagesMemo.Lines.Add(AText);
-  end;
-
-  procedure AddSection(const ACaption: string);
-  begin
-    if not FirstSection then
-      AddLine('');
-    AddLine(ACaption);
-    AddLine(StringOfChar('-', Length(ACaption)));
-    FirstSection := False;
-  end;
-
-  function StatusSentence: string;
-  begin
-    case ATask.Status of
-      tsCompleted:
-        if ATask.Warnings.Count + ATask.Errors.Count > 0 then
-          Result := 'The scan completed, but see the warnings and errors below.'
-        else
-          Result := 'The scan completed without warnings or errors.';
-      tsRunning: Result := 'The scan is still running.';
-      tsPending: Result := 'The scan has not started yet.';
-      tsCancelled: Result := 'The scan was cancelled before it finished; ' +
-        'results are partial.';
-      tsFailed: Result := 'The scan failed; see the errors below.';
-    else
-      Result := 'Status: ' + TaskStatusToString(ATask.Status) + '.';
-    end;
-  end;
-
-  function OutcomeSentence: string;
-  var
-    Code: string;
-  begin
-    Code := ATask.KnownIssueCheck.OutcomeCode;
-    if Code = '' then
-    begin
-      if ATask.Status in [tsPending, tsRunning] then
-        Result := 'The online check has not finished yet.'
-      else
-        Result := 'No outcome was recorded for the online check.';
-    end
-    else if Code = 'ok' then
-    begin
-      if ATask.KnownIssueCheck.MatchCount = 0 then
-        Result := 'The online check completed and OSV.dev reported no known ' +
-          'advisories for the packages it could look up.'
-      else
-        Result := Format('The online check completed. OSV.dev reported %d ' +
-          'advisor%s affecting %d package%s.', [
-          ATask.KnownIssueCheck.AdvisoryCount,
-          BoolToStr(ATask.KnownIssueCheck.AdvisoryCount = 1, 'y', 'ies'),
-          Affected.Count,
-          BoolToStr(Affected.Count = 1, '', 's')]);
-    end
-    else if Code = 'no-eligible-candidates' then
-      Result := 'Nothing was checked: no component had an exact, canonical ' +
-        'package URL that OSV.dev can look up (for example, version ranges ' +
-        'and native libraries without a registry identity are skipped).'
-    else if Code = 'cancelled' then
-      Result := 'The online check was cancelled before it finished; no ' +
-        'results were recorded.'
-    else if Code = 'transport-failed' then
-      Result := 'OSV.dev could not be reached (network or TLS problem). No ' +
-        'results were recorded; use "Refresh intelligence..." to try again.'
-    else if Code = 'http-status-failed' then
-      Result := Format('OSV.dev answered with HTTP status %d instead of a ' +
-        'result. No results were recorded; try again later.',
-        [ATask.KnownIssueCheck.HTTPStatus])
-    else if Code = 'malformed-response' then
-      Result := 'OSV.dev returned a response this version could not ' +
-        'understand. No results were recorded.'
-    else if Pos('limit-exceeded', Code) > 0 then
-      Result := 'The online check stopped early because a built-in safety ' +
-        'limit was reached (' + Code + '). The results below are partial.'
-    else
-      Result := 'Outcome code: ' + Code + '.';
-  end;
-
-  function ComponentLabelFor(const APackageURL: string): string;
-  var
-    K: Integer;
-    C: uModels.TComponent;
-  begin
-    for K := 0 to ATask.Components.Count - 1 do
-    begin
-      C := uModels.TComponent(ATask.Components[K]);
-      if C.PackageURL = APackageURL then
-      begin
-        Result := C.Name;
-        if C.Version <> '' then
-          Result := Result + ' ' + C.Version;
-        if C.Ecosystem <> '' then
-          Result := Result + ' (' + C.Ecosystem + ')';
-        Exit;
-      end;
-    end;
-    Result := APackageURL;
-  end;
-
+  OnlineCheckPending: Boolean;
 begin
   FMessagesMemo.Lines.BeginUpdate;
-  Affected := TStringList.Create;
   try
-    FMessagesMemo.Clear;
     if ATask = nil then
+    begin
+      FMessagesMemo.Clear;
       Exit;
-    FirstSection := True;
-    AddLine(AppName + ' ' + DisplayVersion + ' ' + #$E2#$80#$94 +
-      ' scan details');
-    AddLine('');
-
-    AddSection('Scan summary');
-    AddLine('Folder: ' + ATask.TargetDirectory);
-    AddLine('Started: ' + LocalTimestampText(ATask.StartedUTC) +
-      ' (local time)');
-    if ATask.CompletedUTC <> '' then
-      AddLine('Finished: ' + LocalTimestampText(ATask.CompletedUTC) +
-        ', after ' + FormatDuration(ATask.DurationMS));
-    AddLine('Result: ' + StatusSentence);
-    AddLine(Format('Inspected %d files; recognized %d artifacts ' +
-      '(%d parsed, %d partially parsed, %d unsupported, %d failed); ' +
-      'identified %d components.', [ATask.FilesInspected,
-      ATask.ArtifactsDetected, ATask.ArtifactsParsed,
-      ATask.ArtifactsPartiallyParsed, ATask.UnsupportedArtifacts,
-      ATask.FailedArtifacts, ATask.Components.Count]));
-    if ATask.GeneratedSBOMSHA256 <> '' then
-      AddLine('CycloneDX SBOM SHA-256: ' + ATask.GeneratedSBOMSHA256);
-
-    AddSection('What this scan can and cannot tell you');
-    AddLine('The inventory comes from reading manifests, lock files, and ' +
-      'binary headers on disk. Nothing was executed, and the inventory ' +
-      'itself was built without network access; the only network ' +
-      'activity, when you enable it, is the OSV.dev known-issues lookup ' +
-      'described below.');
-    AddLine('Direct, declared dependencies are identified. Dependencies ' +
-      'that are only loaded at run time, or that are not declared in the ' +
-      'scanned files, can be missed. Treat the result as best-effort ' +
-      'evidence, not as proof of completeness.');
-
-    Affected.Sorted := True;
-    Affected.Duplicates := dupIgnore;
-    Affected.CaseSensitive := True;
-    if ATask.KnownIssueCheck.Requested then
-      for I := 0 to ATask.KnownIssueCheck.MatchCount - 1 do
-        Affected.Add(ATask.KnownIssueCheck.Matches[I].PackageURL);
-
-    if ATask.KnownIssueCheck.Requested then
-    begin
-      AddSection('Known issues (OSV.dev online check)');
-      AddLine(OutcomeSentence);
-      if ATask.KnownIssueCheck.CheckedUTC <> '' then
-        AddLine('Checked: ' + LocalTimestampText(
-          ATask.KnownIssueCheck.CheckedUTC) + ' (local time). Advisory ' +
-          'data changes daily; use "Refresh intelligence..." to re-check ' +
-          'this inventory without rescanning.');
-      AddLine(Format('Packages eligible for lookup: %d; not eligible: %d.',
-        [ATask.KnownIssueCheck.EligibleCandidateCount,
-        ATask.KnownIssueCheck.RejectedCandidateCount]));
-      if ATask.KnownIssueCheck.Diagnostic <> '' then
-        AddLine('Technical detail: ' + ATask.KnownIssueCheck.Diagnostic);
-      if ATask.KnownIssueCheck.MatchCount > 0 then
-      begin
-        AddLine('A finding means an advisory names this exact package ' +
-          'version; it does not by itself mean the vulnerable code is ' +
-          'reachable in your application. Review each advisory link.');
-        Shown := 0;
-        for I := 0 to Affected.Count - 1 do
-        begin
-          if Shown >= MaximumDisplayedKnownIssueMatches then
-            Break;
-          PackageURL := Affected[I];
-          PackageLabel := ComponentLabelFor(PackageURL);
-          AddLine('');
-          AddLine('* ' + PackageLabel);
-          AddLine('  Package URL: ' + PackageURL);
-          for J := 0 to ATask.KnownIssueCheck.MatchCount - 1 do
-          begin
-            if Shown >= MaximumDisplayedKnownIssueMatches then
-              Break;
-            Match := ATask.KnownIssueCheck.Matches[J];
-            if Match.PackageURL <> PackageURL then
-              Continue;
-            AddLine('  - ' + Match.AdvisoryID + ' (advisory last updated ' +
-              Match.Modified + '): https://osv.dev/vulnerability/' +
-              Match.AdvisoryID);
-            Inc(Shown);
-          end;
-        end;
-        Omitted := ATask.KnownIssueCheck.MatchCount - Shown;
-        if Omitted > 0 then
-        begin
-          AddLine('');
-          if Omitted = 1 then
-            AddLine('1 additional match is kept in the task history but ' +
-              'not listed here.')
-          else
-            AddLine(Format('%d additional matches are kept in the task ' +
-              'history but not listed here.', [Omitted]));
-        end;
-      end;
-      AddLine('');
-      AddLine('No finding is not a clean bill of health: only packages ' +
-        'with an exact registry identity were checked, and only against ' +
-        'advisories published on OSV.dev at check time.');
-    end
-    else
-    begin
-      AddSection('Known issues (OSV.dev online check)');
-      AddLine('Not requested for this scan. The application never ' +
-        'contacts the network unless you ask: enable the online check ' +
-        'when starting a scan, or use "Refresh intelligence..." on this ' +
-        'completed scan to look up its exact package versions on OSV.dev.');
     end;
-
-    if ATask.Warnings.Count > 0 then
-    begin
-      AddSection(Format('Warnings (%d)', [ATask.Warnings.Count]));
-      AddLine('Warnings describe places where the scan could not see ' +
-        'everything. The inventory may be incomplete where they apply.');
-      for I := 0 to ATask.Warnings.Count - 1 do
-        AddLine('- ' + ATask.Warnings[I]);
-    end;
-    if ATask.Errors.Count > 0 then
-    begin
-      AddSection(Format('Errors (%d)', [ATask.Errors.Count]));
-      AddLine('Errors stopped part of the work. Fix the cause and rescan ' +
-        'to obtain complete results.');
-      for I := 0 to ATask.Errors.Count - 1 do
-        AddLine('- ' + ATask.Errors[I]);
-    end;
-
-    ArtifactNoteCount := 0;
-    for I := 0 to ATask.Artifacts.Count - 1 do
-      if Trim(TArtifact(ATask.Artifacts[I]).MessageText) <> '' then
-        Inc(ArtifactNoteCount);
-    if ArtifactNoteCount > 0 then
-    begin
-      AddSection(Format('Artifact notes (%d)', [ArtifactNoteCount]));
-      AddLine('Per-file observations recorded while reading manifests and ' +
-        'binaries, with the status each file ended up with.');
-      for I := 0 to ATask.Artifacts.Count - 1 do
-      begin
-        Artifact := TArtifact(ATask.Artifacts[I]);
-        if Trim(Artifact.MessageText) <> '' then
-          AddLine('- ' + Artifact.RelativePath + ' [' +
-            ArtifactStatusDisplayText(Artifact.Status) + ']: ' +
-            Artifact.MessageText);
-      end;
-    end;
-
-    AddSection('Scan settings');
-    AddLine(ATask.Settings.AsSummary);
-    if ATask.ScannerVersion <> '' then
-      AddLine('Scanner version: ' + ATask.ScannerVersion);
+    OnlineCheckPending := FPendingScanChecksKnownIssues and
+      (ATask.ID = FPendingScanTaskID) and
+      (ATask.Status in [tsPending, tsRunning]);
+    FMessagesMemo.Text := BuildScanDetailsReport(ATask, OnlineCheckPending);
   finally
-    Affected.Free;
     FMessagesMemo.Lines.EndUpdate;
   end;
-end;
-
-function FlaggedTextColor(ASelected: Boolean): TColor;
-begin
-  { Light red keeps the flag legible on the selection highlight. }
-  if ASelected then
-    Result := TColor($A0A0FF)
-  else
-    Result := clRed;
 end;
 
 function TSBOMAnalyzerFrame.IsFlaggedRow(Item: TListItem): Boolean;
@@ -3001,16 +2806,17 @@ begin
 end;
 
 procedure TSBOMAnalyzerFrame.PaintFlaggedCell(Sender: TCustomListView;
-  const ARect: TRect; const AText: string; ASelected: Boolean);
+  const ARect: TRect; const AText: string);
 var
   SavedBrushStyle: TBrushStyle;
   SavedFontColor: TColor;
   Style: TTextStyle;
   TextRect: TRect;
 begin
-  { GTK has already painted the row and selection background; only the
-    text renderer is replaced, so draw transparent text with the native
-    single-line, clipped, end-ellipsis semantics. }
+  { GTK has already painted the row background; only the text renderer is
+    replaced, so draw transparent text with the native single-line,
+    clipped semantics. Selected rows keep the native colours (see the
+    callers), so the flag colour never fights the selection highlight. }
   SavedBrushStyle := Sender.Canvas.Brush.Style;
   SavedFontColor := Sender.Canvas.Font.Color;
   try
@@ -3027,7 +2833,7 @@ begin
     Inc(TextRect.Left, Sender.Scale96ToForm(3));
     Dec(TextRect.Right, Sender.Scale96ToForm(3));
     Sender.Canvas.Brush.Style := bsClear;
-    Sender.Canvas.Font.Color := FlaggedTextColor(ASelected);
+    Sender.Canvas.Font.Color := clRed;
     Sender.Canvas.TextRect(TextRect, TextRect.Left, TextRect.Top, AText,
       Style);
   finally
@@ -3042,14 +2848,15 @@ procedure TSBOMAnalyzerFrame.ComponentListCustomDrawItem(
 begin
   DefaultDraw := True;
   try
-    if not IsFlaggedRow(Item) then
+    { A selected row keeps the native selection colours: no red tint is
+      legible on both the focused and the unfocused highlight. }
+    if not IsFlaggedRow(Item) or (cdsSelected in State) then
       Exit;
     {$IFDEF LCLGTK2}
-    PaintFlaggedCell(Sender, Item.DisplayRect(drLabel), Item.Caption,
-      cdsSelected in State);
+    PaintFlaggedCell(Sender, Item.DisplayRect(drLabel), Item.Caption);
     DefaultDraw := False;
     {$ELSE}
-    Sender.Canvas.Font.Color := FlaggedTextColor(cdsSelected in State);
+    Sender.Canvas.Font.Color := clRed;
     {$ENDIF}
   except
     { A paint callback must never unwind into the widget set; fall back
@@ -3064,23 +2871,78 @@ procedure TSBOMAnalyzerFrame.ComponentListCustomDrawSubItem(
 begin
   DefaultDraw := True;
   try
-    if not IsFlaggedRow(Item) or (SubItem < 1) or
+    if not IsFlaggedRow(Item) or (cdsSelected in State) or (SubItem < 1) or
       (SubItem > Item.SubItems.Count) then
       Exit;
     PaintFlaggedCell(Sender, Item.DisplayRectSubItem(SubItem, drBounds),
-      Item.SubItems[SubItem - 1], cdsSelected in State);
+      Item.SubItems[SubItem - 1]);
     DefaultDraw := False;
   except
     DefaultDraw := True;
   end;
 end;
 
+procedure TSBOMAnalyzerFrame.ComponentListShowHint(Sender: TObject;
+  HintInfo: PHintInfo);
+var
+  Item: TListItem;
+begin
+  try
+    Item := FComponentList.GetItemAt(HintInfo^.CursorPos.X,
+      HintInfo^.CursorPos.Y);
+    if IsFlaggedRow(Item) then
+    begin
+      HintInfo^.HintStr := 'Known issues were reported for this package ' +
+        'version. See the "Known issues" column and the Details tab; ' +
+        'double-click opens Details.';
+      HintInfo^.CursorRect := Item.DisplayRect(drBounds);
+      { GTK2 reports only the first column; keep the row's vertical bounds
+        and span the full width so the hint does not flicker per column. }
+      HintInfo^.CursorRect.Left := 0;
+      HintInfo^.CursorRect.Right := FComponentList.ClientWidth;
+    end
+    else
+      HintInfo^.HintStr := '';
+  except
+    HintInfo^.HintStr := '';
+  end;
+end;
+
+procedure TSBOMAnalyzerFrame.ComponentListDoubleClicked(Sender: TObject);
+var
+  Point: TPoint;
+  Item: TListItem;
+begin
+  Point := FComponentList.ScreenToClient(Mouse.CursorPos);
+  Item := FComponentList.GetItemAt(Point.X, Point.Y);
+  if IsFlaggedRow(Item) then
+    FPages.ActivePage := MessagesPage;
+end;
+
 procedure TSBOMAnalyzerFrame.CopyDetailsClicked(Sender: TObject);
 begin
-  if Trim(FMessagesMemo.Text) = '' then
+  if FClosing or (Trim(FMessagesMemo.Text) = '') then
     Exit;
-  Clipboard.AsText := FMessagesMemo.Text;
-  SetCompactFooter('Scan details copied to the clipboard.');
+  try
+    Clipboard.AsText := FMessagesMemo.Text;
+  except
+    on E: Exception do
+    begin
+      ShowError('The scan details could not be copied: ' + E.Message);
+      Exit;
+    end;
+  end;
+  { Confirm at the button; the footer belongs to the running task. }
+  FCopyDetailsButton.Caption := 'Copied';
+  FCopiedResetTimer.Enabled := False;
+  FCopiedResetTimer.Enabled := True;
+end;
+
+procedure TSBOMAnalyzerFrame.CopiedResetTimerTick(Sender: TObject);
+begin
+  FCopiedResetTimer.Enabled := False;
+  if not FClosing then
+    FCopyDetailsButton.Caption := 'Copy to clipboard';
 end;
 
 procedure TSBOMAnalyzerFrame.UpdateDetails;
@@ -3183,12 +3045,18 @@ begin
   Task.Status := tsPending;
   FTaskSearch.Clear;
   FHistoryService.AddTask(Task, 0);
+  { The Details report states the user's online-check intent while the
+    scan is pending or running; the worker records the result itself. }
+  FPendingScanTaskID := Task.ID;
+  FPendingScanChecksKnownIssues := ACheckKnownIssues;
   SelectTask(Task);
   SaveHistory;
   Task.Status := tsRunning;
   FCancelRequested := False;
   SetActiveTaskID(Task.ID);
   UpdateTaskRow(Task);
+  if SelectedTask = Task then
+    PopulateMessages(Task);
   SetActiveFooter;
   FProgressPath.Caption := 'Starting scan of ' + Task.TargetRootName + '...';
   FProgressStats.Caption := 'Preparing worker thread';

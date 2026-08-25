@@ -285,6 +285,25 @@ type
     procedure AssignNavigationGlyphs;
 
     {**
+      Draws the Analyzer rail glyph, adding a red activity dot while a
+      scan runs.
+
+      Parameters
+      ----------
+      AScanActive
+        True while the analyzer reports a running scan or refresh.
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure AssignAnalyzerGlyph(AScanActive: Boolean);
+
+    {**
       Picks the embedded icon frame that best fills the brand image box.
 
       Parameters
@@ -801,7 +820,7 @@ begin
       ApplicationSubtitleLabel.Visible := False;
       VersionLabel.Visible := False;
       RailToggleButton.Caption := #$C2#$BB;
-      RailToggleButton.Hint := 'Expand navigation';
+      RailToggleButton.Hint := 'Expand navigation (Ctrl+B)';
       for I := Low(Buttons) to High(Buttons) do
       begin
         Buttons[I].ShowCaption := False;
@@ -822,7 +841,7 @@ begin
       ApplicationSubtitleLabel.Visible := True;
       VersionLabel.Visible := True;
       RailToggleButton.Caption := #$C2#$AB + ' Collapse';
-      RailToggleButton.Hint := 'Collapse navigation';
+      RailToggleButton.Hint := 'Collapse navigation (Ctrl+B)';
       for I := Low(Buttons) to High(Buttons) do
       begin
         Buttons[I].ShowCaption := True;
@@ -907,18 +926,7 @@ begin
   finally
     Glyph.Free;
   end;
-  { Analyzer: magnifier. }
-  Glyph := NewGlyph;
-  try
-    Glyph.Canvas.Brush.Style := bsClear;
-    Glyph.Canvas.Pen.Width := P(2);
-    Glyph.Canvas.Ellipse(P(1), P(1), P(11), P(11));
-    Glyph.Canvas.MoveTo(P(10), P(10));
-    Glyph.Canvas.LineTo(P(15), P(15));
-    AnalyzerNavButton.Glyph.Assign(Glyph);
-  finally
-    Glyph.Free;
-  end;
+  AssignAnalyzerGlyph((FAnalyzerFrame <> nil) and FAnalyzerFrame.ScanActive);
   { Knowledge Base: open book. }
   Glyph := NewGlyph;
   try
@@ -928,6 +936,49 @@ begin
     Glyph.Canvas.MoveTo(P(8), P(2));
     Glyph.Canvas.LineTo(P(8), P(14));
     KnowledgeNavButton.Glyph.Assign(Glyph);
+  finally
+    Glyph.Free;
+  end;
+end;
+
+procedure TMainForm.AssignAnalyzerGlyph(AScanActive: Boolean);
+var
+  Size: Integer;
+  Glyph: TBitmap;
+
+  function P(AValue: Integer): Integer;
+  begin
+    Result := Round(AValue * Size / NavigationGlyphSize);
+  end;
+
+begin
+  Size := Scale96ToForm(NavigationGlyphSize);
+  if Size < NavigationGlyphSize then
+    Size := NavigationGlyphSize;
+  { Analyzer: magnifier, with a red activity dot while a scan runs so the
+    cue survives the collapsed (caption-less) rail. }
+  Glyph := TBitmap.Create;
+  try
+    Glyph.SetSize(Size, Size);
+    Glyph.Canvas.Brush.Color := clFuchsia;
+    Glyph.Canvas.FillRect(0, 0, Size, Size);
+    Glyph.TransparentColor := clFuchsia;
+    Glyph.Transparent := True;
+    Glyph.Canvas.Pen.Color := NavigationAccentColor;
+    Glyph.Canvas.Brush.Style := bsClear;
+    Glyph.Canvas.Pen.Width := P(2);
+    Glyph.Canvas.Ellipse(P(1), P(1), P(11), P(11));
+    Glyph.Canvas.MoveTo(P(10), P(10));
+    Glyph.Canvas.LineTo(P(15), P(15));
+    if AScanActive then
+    begin
+      Glyph.Canvas.Pen.Width := 1;
+      Glyph.Canvas.Pen.Color := clRed;
+      Glyph.Canvas.Brush.Style := bsSolid;
+      Glyph.Canvas.Brush.Color := clRed;
+      Glyph.Canvas.Ellipse(P(10), P(0), P(16), P(6));
+    end;
+    AnalyzerNavButton.Glyph.Assign(Glyph);
   finally
     Glyph.Free;
   end;
@@ -1111,6 +1162,12 @@ begin
           Key := 0;
           Exit;
         end;
+      VK_B:
+        begin
+          RailToggleClicked(nil);
+          Key := 0;
+          Exit;
+        end;
       VK_N:
         SelectFeature(FeatureIndexAnalyzer);
     end;
@@ -1140,6 +1197,7 @@ procedure TMainForm.AnalyzerActivityChanged(Sender: TObject;
 begin
   if Sender <> FAnalyzerFrame then
     Exit;
+  AssignAnalyzerGlyph(AScanActive);
   if AScanActive then
   begin
     AnalyzerNavButton.Font.Style := [fsBold];

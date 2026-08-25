@@ -68,18 +68,23 @@ begin
   Application.Initialize;
   Application.Title := AppName + ' ' + DisplayVersion;
   LoadApplicationIcon;
-  Splash := TSplashForm.CreateSplash(nil, DisplayVersion);
+  Splash := TSplashForm.CreateSplash(Application, DisplayVersion);
   try
     Splash.Show;
     Splash.SetStatus('Loading application...');
-    { One deliberate pump so the widget set maps and paints the splash
-      before the main window is constructed; later statuses only repaint. }
-    Application.ProcessMessages;
+    { A bounded pump so the widget set maps and paints the splash before
+      the main window is constructed; later statuses only repaint. }
+    Splash.WaitForFirstPaint;
     Application.CreateForm(TMainForm, MainForm);
     MainForm.WarmUpFeaturePages(Splash);
-    Splash.SetStatus('Ready');
-  finally
+  except
     Splash.Free;
+    raise;
   end;
+  { Release, not Free: the queued destruction runs from the message loop
+    after Application.Run has shown the main window, so the process never
+    has zero visible windows (which lets another window take the
+    foreground on Windows). }
+  Splash.Release;
   Application.Run;
 end.

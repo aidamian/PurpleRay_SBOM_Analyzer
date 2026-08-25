@@ -238,7 +238,29 @@ $ReleaseVersionWasPassed = $PSBoundParameters.ContainsKey('ReleaseVersion')
             Expand-Archive -LiteralPath $ArchivePath -DestinationPath $ExtractDirectory
             $ExtractedBinaryPath = Join-Path $ExtractDirectory 'purpleray-sbom-analyzer.exe'
             Copy-Item -LiteralPath $ExtractedBinaryPath -Destination $StagedBinaryPath -Force
-            Move-Item -LiteralPath $StagedBinaryPath -Destination $BinaryPath -Force
+            $InstalledMatches = $false
+            if (Test-Path -LiteralPath $BinaryPath -PathType Leaf) {
+                try {
+                    $StagedHash = (Get-FileHash -LiteralPath $StagedBinaryPath -Algorithm SHA256).Hash
+                    $InstalledHash = (Get-FileHash -LiteralPath $BinaryPath -Algorithm SHA256).Hash
+                    $InstalledMatches = ($StagedHash -eq $InstalledHash)
+                }
+                catch {
+                    $InstalledMatches = $false
+                }
+            }
+            if ($InstalledMatches) {
+                Write-Host 'The installed executable already matches the verified package.'
+            }
+            else {
+                try {
+                    Move-Item -LiteralPath $StagedBinaryPath -Destination $BinaryPath -Force
+                }
+                catch {
+                    Stop-WithError ("could not install the executable (is PurpleRay SBOM Analyzer " +
+                        "already running from $InstallDirectory? close it and run this launcher again)")
+                }
+            }
             if ($HasNotices) {
                 Copy-Item -LiteralPath (Join-Path $ExtractDirectory 'LICENSE') `
                     -Destination (Join-Path $InstallDirectory 'LICENSE') -Force

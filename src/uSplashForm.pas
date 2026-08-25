@@ -6,10 +6,14 @@
 
   Description
   -----------
-  Borderless, stay-on-top splash shown while the application shell is
-  constructed and its feature pages are realized. It is code-built (no LFM),
-  carries only the brand mark, product name, version, a status line, and a
-  marquee bar, and is freed before the main window appears.
+  Borderless (bsNone), taskbar-less (stNever) fsSplash window shown while
+  the application shell is constructed and its feature pages are realized.
+  It is code-built (no LFM), carries only the brand mark, product name,
+  version, a status line, and a stepped progress bar that advances with
+  every status. It is not stay-on-top. The program releases it (queued
+  free) before Application.Run, so it disappears on the first idle pass
+  after the main window is shown and the process always owns a visible,
+  activated window.
 
   Citation request
   ----------------
@@ -109,11 +113,31 @@ type
     constructor CreateSplash(TheOwner: TComponent; const AVersionText: string);
 
     {**
-      Updates the status line and repaints it synchronously.
+      Pumps the message queue for a bounded interval so the widget set can
+      map and paint the freshly shown splash before construction begins.
+
+      Parameters
+      ----------
+      None
+
+      Returns
+      -------
+      None
+
+      Raises
+      ------
+      None
+    }
+    procedure WaitForFirstPaint;
+
+    {**
+      Updates the status line, advances the progress bar one step, and
+      repaints both synchronously.
 
       This deliberately does not pump the message queue: the caller pumps
-      once after the splash is first shown, so later status changes never
-      dispatch unrelated input, timers, or shutdown messages mid-startup.
+      once (WaitForFirstPaint) after the splash is first shown, so later
+      status changes never dispatch unrelated input, timers, or shutdown
+      messages mid-startup.
 
       Parameters
       ----------
@@ -137,6 +161,10 @@ const
   SplashWidth = 440;
   SplashHeight = 236;
   SplashIconSize = 96;
+  { Statuses the program reports: application load plus three feature
+    pages; the bar reaches its end with the last one. }
+  SplashStepCount = 4;
+  FirstPaintPumpCount = 6;
 
 constructor TSplashForm.CreateSplash(TheOwner: TComponent;
   const AVersionText: string);
@@ -207,7 +235,11 @@ begin
   FProgressBar.Parent := Frame;
   FProgressBar.SetBounds(Scale96ToForm(28), Scale96ToForm(192),
     Scale96ToForm(SplashWidth - 56), Scale96ToForm(14));
-  FProgressBar.Style := pbstMarquee;
+  FProgressBar.Style := pbstNormal;
+  FProgressBar.Smooth := True;
+  FProgressBar.Min := 0;
+  FProgressBar.Max := SplashStepCount;
+  FProgressBar.Position := 0;
 end;
 
 procedure TSplashForm.SelectIconFrame;
@@ -244,10 +276,26 @@ begin
     SelectIconFrame;
 end;
 
+procedure TSplashForm.WaitForFirstPaint;
+var
+  I: Integer;
+begin
+  { The map is answered asynchronously by the window manager on X11; a
+    few short pumps give it time without ever blocking on it. }
+  for I := 1 to FirstPaintPumpCount do
+  begin
+    Application.ProcessMessages;
+    Sleep(5);
+  end;
+end;
+
 procedure TSplashForm.SetStatus(const AText: string);
 begin
   FStatusLabel.Caption := AText;
+  if FProgressBar.Position < FProgressBar.Max then
+    FProgressBar.Position := FProgressBar.Position + 1;
   FStatusLabel.Update;
+  FProgressBar.Update;
   Update;
 end;
 

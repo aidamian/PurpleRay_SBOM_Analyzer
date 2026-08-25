@@ -36,7 +36,8 @@ uses
   uVerifiedInput, uArchiveInspector, uBinaryIdentifiers, uBoundedBinaryReader,
   uPEVersionInfo, uScanAnalysis, uScanPool, uScanCache, uSettingsStore,
   uOSVCore, uKnownIssues, uKnownIssueService, uBSIReadiness,
-  uSecurityFindings, uGlossary, uGlossaryContent, uDashboardStats;
+  uSecurityFindings, uGlossary, uGlossaryContent, uDashboardStats,
+  uScanDetailsReport;
 
 type
   TTestMethod = procedure;
@@ -6840,6 +6841,7 @@ end;
 {$I sprint9_regressions.inc}
 {$I sprint10_regressions.inc}
 {$I sprint11_regressions.inc}
+{$I sprint12_regressions.inc}
 
 begin
   ProjectRoot := ExpandFileName(ExtractFilePath(ParamStr(0)) + '..' +
@@ -6914,6 +6916,7 @@ begin
   RunSprint9RegressionTests;
   RunSprint10RegressionTests;
   RunSprint11RegressionTests;
+  RunSprint12RegressionTests;
   WriteLn(Format('%d tests: %d passed, %d failed, %d skipped',
     [TestCount, PassCount, FailureCount, SkipCount]));
   RemoveTemporaryTree(TemporaryRoot);

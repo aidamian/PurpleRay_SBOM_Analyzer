@@ -93,13 +93,13 @@ set "TAG_NAME="
 if defined SELECTED_VERSION set "TAG_NAME=v!SELECTED_VERSION!"
 if defined TAG_NAME goto :tag_resolved
 echo Resolving the latest release of !PROJECT_REPOSITORY!
-"!CURL!" -q -fsSL -o NUL -w "%%{url_effective}" "!PROJECT_URL!/releases/latest" > "!RAW_PATH!" || (
+"!CURL!" -q -fsSL --retry 3 --connect-timeout 15 --max-time 60 --proto =https --proto-redir =https -o NUL -w "%%{url_effective}" "!PROJECT_URL!/releases/latest" > "!RAW_PATH!" || (
     call :fail "could not resolve the latest release; check network access"
     goto :cleanup
 )
 rem find re-emits every line with CRLF so findstr's $ anchor matches.
 "!FIND!" /V "" < "!RAW_PATH!" > "!PROBE_PATH!"
-"!FINDSTR!" /R /C:"^https://github\.com/aidamian/PurpleRay_SBOM_Analyzer/releases/tag/v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$" "!PROBE_PATH!" > "!FILTER_PATH!" || (
+"!FINDSTR!" /R /B /C:"https://github\.com/aidamian/PurpleRay_SBOM_Analyzer/releases/tag/v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$" "!PROBE_PATH!" > "!FILTER_PATH!" || (
     call :fail "GitHub returned an unexpected release URL"
     goto :cleanup
 )
@@ -145,7 +145,7 @@ if not exist "!DATA_DIRECTORY!\" (
 )
 
 rem --------------------------------------------------- published checksum
-"!CURL!" -q -fsSL --retry 3 -o "!RAW_PATH!" "!RELEASE_BASE_URL!/SHA256SUMS.txt" || (
+"!CURL!" -q -fsSL --retry 3 --connect-timeout 15 --max-time 60 --proto =https --proto-redir =https -o "!RAW_PATH!" "!RELEASE_BASE_URL!/SHA256SUMS.txt" || (
     call :fail "could not download SHA256SUMS.txt for !TAG_NAME!"
     goto :cleanup
 )
@@ -153,7 +153,7 @@ rem --------------------------------------------------- published checksum
 rem Only GNU-style lines "<hex>  <asset>" (text) or "<hex> *<asset>" (binary)
 rem survive the filter; it runs on the file, so untrusted text is never expanded.
 set "ASSET_REGEX=!ASSET_NAME:.=\.!"
-"!FINDSTR!" /R /C:"^[0-9a-fA-F][0-9a-fA-F]*  !ASSET_REGEX!$" /C:"^[0-9a-fA-F][0-9a-fA-F]* \*!ASSET_REGEX!$" "!CHECKSUM_PATH!" > "!FILTER_PATH!"
+"!FINDSTR!" /R /B /C:"[0-9a-fA-F][0-9a-fA-F]*  !ASSET_REGEX!$" /C:"[0-9a-fA-F][0-9a-fA-F]* \*!ASSET_REGEX!$" "!CHECKSUM_PATH!" > "!FILTER_PATH!"
 set "MATCH_COUNT=0"
 set "EXPECTED_CHECKSUM="
 for /f "usebackq tokens=1,2,* delims= " %%A in ("!FILTER_PATH!") do (
@@ -179,7 +179,7 @@ if /I "!FILE_SHA256!"=="!EXPECTED_CHECKSUM!" (
 echo WARNING: cached package failed checksum verification; downloading a fresh copy.
 :download_package
 echo Downloading !ASSET_NAME!
-"!CURL!" -q -fL --retry 3 --progress-bar -o "!DOWNLOAD_PATH!" "!RELEASE_BASE_URL!/!ASSET_NAME!" || (
+"!CURL!" -q -fL --retry 3 --connect-timeout 15 --speed-limit 1024 --speed-time 60 --proto =https --proto-redir =https --progress-bar -o "!DOWNLOAD_PATH!" "!RELEASE_BASE_URL!/!ASSET_NAME!" || (
     call :fail "release download failed for !ASSET_NAME!"
     goto :cleanup
 )
@@ -214,7 +214,7 @@ call :count_lines TYPES_PATH VERBOSE_COUNT
 call :count_exact LIST_PATH "purpleray-sbom-analyzer.exe" EXE_COUNT
 call :count_exact LIST_PATH "LICENSE" LICENSE_COUNT
 call :count_exact LIST_PATH "NOTICE" NOTICE_COUNT
-"!FINDSTR!" /R /V /C:"^-" "!TYPES_PATH!" > "!FILTER_PATH!"
+"!FINDSTR!" /R /V /B /C:"-" "!TYPES_PATH!" > "!FILTER_PATH!"
 call :count_lines FILTER_PATH IRREGULAR_COUNT
 rem A PAX hardlink is listed with a regular mode followed by " link to ".
 "!FINDSTR!" /C:" link to " "!TYPES_PATH!" > "!FILTER_PATH!"
@@ -281,11 +281,23 @@ if "!ENTRY_COUNT!"=="3" (
         goto :cleanup
     )
 )
+if exist "!BINARY_PATH!" (
+    rem Re-running the launcher while the app is open must not fail: an
+    rem installed executable identical to the verified package is kept.
+    set "STAGED_SHA256="
+    call :file_sha256 STAGED_PATH && set "STAGED_SHA256=!FILE_SHA256!"
+    call :file_sha256 BINARY_PATH
+    if defined STAGED_SHA256 if /I "!FILE_SHA256!"=="!STAGED_SHA256!" (
+        echo The installed executable already matches the verified package.
+        goto :launch
+    )
+)
 move /Y "!STAGED_PATH!" "!BINARY_PATH!" >nul || (
-    call :fail "could not install the executable"
+    call :fail "could not install the executable (is PurpleRay SBOM Analyzer already running? close it and run this launcher again)"
     goto :cleanup
 )
 
+:launch
 rem ------------------------------------------------------------- launch
 echo.
 echo NOTE: current Windows releases are not Authenticode-signed, so Smart App
@@ -304,15 +316,21 @@ goto :cleanup
 rem ------------------------------------------------------------ helpers
 rem Helpers receive VARIABLE NAMES, never values, and validate by writing
 rem the value to the probe file and running pinned findstr on that file.
+rem Start anchors use findstr /B, never a caret: with delayed expansion on,
+rem cmd.exe consumes a lone ^ on any token that also contains a ! reference.
 
 :check_version
 rem Canonical MAJOR.MINOR.PATCH, no v prefix, no leading zeros.
 (echo(!%~1!) > "!PROBE_PATH!"
-"!FINDSTR!" /R /C:"^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$" "!PROBE_PATH!" >nul || (
+"!FINDSTR!" /R /B /C:"[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$" "!PROBE_PATH!" >nul || (
     call :fail "release version must be canonical MAJOR.MINOR.PATCH without a v prefix"
     exit /b 1
 )
-"!FINDSTR!" /R /C:"^0[0-9]" /C:"\.0[0-9]" "!PROBE_PATH!" >nul && (
+"!FINDSTR!" /R /B /C:"0[0-9]" "!PROBE_PATH!" >nul && (
+    call :fail "release version must not contain leading zeros"
+    exit /b 1
+)
+"!FINDSTR!" /R /C:"\.0[0-9]" "!PROBE_PATH!" >nul && (
     call :fail "release version must not contain leading zeros"
     exit /b 1
 )
@@ -321,7 +339,7 @@ exit /b 0
 :check_hex64
 rem The named variable must hold exactly 64 hexadecimal digits.
 (echo(!%~1!) > "!PROBE_PATH!"
-"!FINDSTR!" /R /I /C:"^[0-9a-f][0-9a-f]*$" "!PROBE_PATH!" >nul || exit /b 1
+"!FINDSTR!" /R /I /B /C:"[0-9a-f][0-9a-f]*$" "!PROBE_PATH!" >nul || exit /b 1
 set "CHECK_VALUE=!%~1!"
 if not "!CHECK_VALUE:~64!"=="" exit /b 1
 if "!CHECK_VALUE:~63,1!"=="" exit /b 1
@@ -334,7 +352,7 @@ rem localized certutil header text never matters.
 set "FILE_SHA256="
 set "HASH_CANDIDATE="
 "!CERTUTIL!" -hashfile "!%~1!" SHA256 > "!PROBE_PATH!" 2>nul || exit /b 1
-"!FINDSTR!" /R /I /C:"^[0-9a-f][0-9a-f ]*$" "!PROBE_PATH!" > "!FILTER_PATH!" || exit /b 1
+"!FINDSTR!" /R /I /B /C:"[0-9a-f][0-9a-f ]*$" "!PROBE_PATH!" > "!FILTER_PATH!" || exit /b 1
 for /f "usebackq delims=" %%H in ("!FILTER_PATH!") do if not defined HASH_CANDIDATE set "HASH_CANDIDATE=%%H"
 if not defined HASH_CANDIDATE exit /b 1
 set "HASH_CANDIDATE=!HASH_CANDIDATE: =!"
